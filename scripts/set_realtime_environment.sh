@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[Milestone 0 scaffold] RT environment script placeholder."
-echo "Milestone 1+ will add guarded commands for:"
-echo "  - CPU governor: performance"
-echo "  - ulimit/limits.conf for rtprio and memlock"
-echo "  - optional cset/taskset helpers"
+echo "[Sonitude M2] Applying RT environment helpers"
+for cpu in /sys/devices/system/cpu/cpu[0-9]*; do
+  if [ -w "${cpu}/cpufreq/scaling_governor" ]; then
+    echo performance | sudo tee "${cpu}/cpufreq/scaling_governor" >/dev/null
+  fi
+done
+echo "ulimit -r: $(ulimit -r)"
+echo "ulimit -l: $(ulimit -l)"
+echo "If rtprio/memlock are low, update /etc/security/limits.conf for your user."
