@@ -1,0 +1,26 @@
+sample_rate_hz: 44100
+channels:
+  - id: M0_upper_inner_left
+    polarity: 1
+    gain_linear: 1.0
+    delay_samples: 0.0
+  - id: M1_upper_inner_right
+    polarity: 1
+    gain_linear: 1.0
+    delay_samples: 0.0
+  - id: M2_upper_outer_left
+    polarity: 1
+    gain_linear: 1.0
+    delay_samples: 0.0
+  - id: M3_upper_outer_right
+    polarity: 1
+    gain_linear: 1.0
+    delay_samples: 0.0
+  - id: M4_left_earcup
+    polarity: 1
+    gain_linear: 1.0
+    delay_samples: 0.0
+  - id: M5_right_earcup
+    polarity: 1
+    gain_linear: 1.0
+    delay_samples: 0.0

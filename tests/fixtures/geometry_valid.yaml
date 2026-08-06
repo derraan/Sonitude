@@ -1,0 +1,26 @@
+profile_name: "test_geometry"
+microphones:
+  - id: M0
+    x: 0.0
+    y: 0.0
+    z: 0.0
+  - id: M1
+    x: 0.01
+    y: 0.0
+    z: 0.0
+  - id: M2
+    x: 0.02
+    y: 0.0
+    z: 0.0
+  - id: M3
+    x: 0.03
+    y: 0.0
+    z: 0.0
+  - id: M4
+    x: 0.04
+    y: 0.0
+    z: 0.0
+  - id: M5
+    x: 0.05
+    y: 0.0
+    z: 0.0

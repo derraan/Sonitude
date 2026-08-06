@@ -1,0 +1,101 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace sonitude::app
+{
+struct ZoneConfig
+{
+  std::string name;
+  float azimuth_min_deg = 0.0F;
+  float azimuth_max_deg = 0.0F;
+};
+
+struct DeviceConfig
+{
+  std::string alsa_device;
+  std::uint32_t sample_rate_hz = 0;
+  std::uint32_t period_frames = 0;
+  std::uint32_t periods = 0;
+};
+
+struct AsrcConfig
+{
+  bool enabled = true;
+  bool allow_bypass_for_locked_bench = false;
+  double min_ratio = 0.995;
+  double max_ratio = 1.005;
+  std::uint32_t target_buffer_frames = 256;
+  double pi_kp = 0.0002;
+  double pi_ki = 0.00001;
+};
+
+struct GeometryMic
+{
+  std::string id;
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+};
+
+struct GeometryConfig
+{
+  std::string profile_name;
+  std::vector<GeometryMic> microphones;
+};
+
+struct SteeringConfig
+{
+  float speed_of_sound_mps = 343.0F;
+  std::size_t reference_mic_index = 0;
+  float steering_ramp_ms = 150.0F;
+  float ambient_floor_linear = 0.25F;
+};
+
+struct StateMachineConfig
+{
+  std::uint32_t activation_hold_ms = 400;
+  std::uint32_t confirmation_hold_ms = 250;
+  std::uint32_t release_hold_ms = 1500;
+  std::uint32_t hold_direction_ms = 1000;
+  float zone_direction_stability_deg = 15.0F;
+};
+
+struct OdasConfig
+{
+  bool enabled = false;
+  bool use_mock_provider = true;
+  std::string endpoint;
+};
+
+struct TelemetryConfig
+{
+  bool log_human_readable = true;
+  bool emit_csv = false;
+  bool emit_json = false;
+  std::uint32_t stats_period_ms = 1000;
+};
+
+struct RuntimeConfig
+{
+  DeviceConfig capture;
+  DeviceConfig playback;
+  std::vector<std::size_t> active_channel_map;
+  std::string geometry_path;
+  std::string calibration_path;
+  AsrcConfig asrc;
+  SteeringConfig steering;
+  StateMachineConfig state_machine;
+  OdasConfig odas;
+  TelemetryConfig telemetry;
+  std::vector<ZoneConfig> zones;
+};
+
+RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path);
+GeometryConfig LoadGeometryFromFile(const std::string& path);
+void ValidateRuntimeConfig(const RuntimeConfig& config);
+void ValidateGeometryConfig(const GeometryConfig& geometry);
+}  // namespace sonitude::app
