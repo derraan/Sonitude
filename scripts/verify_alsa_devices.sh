@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[Milestone 0 scaffold] ALSA probing script placeholder."
-echo "Milestone 1 will implement card/device probing and hw-params dumps."
+echo "[Sonitude M1] Enumerating ALSA playback/capture devices"
+aplay -l || true
+arecord -l || true
 echo
-echo "Useful commands:"
-echo "  aplay -l"
-echo "  arecord -l"
-echo "  arecord --dump-hw-params -D hw:<card>,<device> -f S16_LE -c 6 -r 44100 -d 1 /tmp/null.wav"
-echo "  aplay --dump-hw-params -D hw:<card>,<device> /usr/share/sounds/alsa/Front_Center.wav"
+echo "[Sonitude M1] Probe capture hw params"
+arecord --dump-hw-params -D "${1:-hw:PicoMic,0}" -f S16_LE -c 8 -r 44100 -d 1 /tmp/sonitude_probe_capture.wav || true
+echo
+echo "[Sonitude M1] Probe playback hw params"
+aplay --dump-hw-params -D "${2:-hw:Creative,0}" /usr/share/sounds/alsa/Front_Center.wav || true
+echo
+echo "[Sonitude M1] USB IDs (Pico mic expected cafe:401a)"
+lsusb | rg -i "cafe|creative" || true

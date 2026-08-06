@@ -1,0 +1,83 @@
+#include <cmath>
+#include <cstring>
+#include <cstdio>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "audio/channel_extractor.hpp"
+#include "audio/format_convert.hpp"
+#include "audio/wav_io.hpp"
+
+namespace
+{
+void Require(const bool condition, const std::string& message)
+{
+  if (!condition)
+  {
+    throw std::runtime_error(message);
+  }
+}
+
+void TestS16RoundTrip()
+{
+  const std::vector<float> input = {-1.0F, -0.5F, 0.0F, 0.5F, 1.0F};
+  const std::vector<std::uint8_t> bytes =
+      sonitude::audio::FloatToInterleaved(input, sonitude::audio::PcmFormat::S16_LE);
+  const std::vector<float> decoded =
+      sonitude::audio::InterleavedToFloat(bytes.data(), input.size(), 1, sonitude::audio::PcmFormat::S16_LE);
+  for (std::size_t i = 0; i < input.size(); ++i)
+  {
+    Require(std::fabs(decoded[i] - input[i]) < 0.001F, "S16 roundtrip error too large");
+  }
+}
+
+void TestChannelExtract()
+{
+  // 2 frames, 8-channel container, S16. Values are frame0 ch0..7, frame1 ch0..7.
+  const std::vector<std::int16_t> src = {100,  200,  300,  400,  500,  600,  700,  800,
+                                         1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000};
+  std::vector<std::uint8_t> bytes(src.size() * sizeof(std::int16_t), 0);
+  std::memcpy(bytes.data(), src.data(), bytes.size());
+  const std::vector<std::size_t> active = {0, 1, 2, 3, 4, 5};
+  const auto frames = sonitude::audio::ExtractActiveMicFrames(
+      bytes.data(), 2, 8, active, sonitude::audio::PcmFormat::S16_LE);
+  Require(frames.size() == 2, "Channel extract frame count mismatch");
+  Require(std::fabs(frames[0][0] - (100.0F / 32768.0F)) < 1e-6F, "channel 0 sample mismatch");
+  Require(std::fabs(frames[1][5] - (6000.0F / 32768.0F)) < 1e-6F, "channel 5 sample mismatch");
+}
+
+void TestWavRoundTrip()
+{
+  sonitude::audio::WavData input;
+  input.sample_rate_hz = 44100;
+  input.channels = 6;
+  input.format = sonitude::audio::PcmFormat::S16_LE;
+  input.interleaved.assign(6 * 16, 0.0F);
+  for (std::size_t i = 0; i < input.interleaved.size(); ++i)
+  {
+    const int centered = static_cast<int>(i % 31U) - 15;
+    input.interleaved[i] = static_cast<float>(centered) / 16.0F;
+  }
+
+  const std::string path = "unit_wav_roundtrip.wav";
+  sonitude::audio::WriteWavFile(path, input);
+  const auto output = sonitude::audio::ReadWavFile(path);
+  Require(output.sample_rate_hz == input.sample_rate_hz, "WAV sample rate mismatch");
+  Require(output.channels == input.channels, "WAV channel mismatch");
+  Require(output.interleaved.size() == input.interleaved.size(), "WAV sample length mismatch");
+  for (std::size_t i = 0; i < input.interleaved.size(); ++i)
+  {
+    Require(std::fabs(output.interleaved[i] - input.interleaved[i]) < 0.001F,
+            "WAV sample mismatch after roundtrip");
+  }
+  (void)std::remove(path.c_str());
+}
+}  // namespace
+
+void RunAudioSupportTests()
+{
+  TestS16RoundTrip();
+  TestChannelExtract();
+  TestWavRoundTrip();
+}

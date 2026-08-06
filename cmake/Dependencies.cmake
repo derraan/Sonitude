@@ -1,5 +1,9 @@
 include(FetchContent)
 
+if(SONITUDE_WITH_ALSA)
+  find_package(ALSA REQUIRED)
+endif()
+
 find_package(yaml-cpp QUIET)
 if(NOT yaml-cpp_FOUND)
   if(NOT SONITUDE_FETCH_DEPS)

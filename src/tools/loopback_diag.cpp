@@ -1,0 +1,84 @@
+#include <chrono>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "app/config.hpp"
+#include "audio/alsa/alsa_device.hpp"
+#include "audio/alsa/capture_worker.hpp"
+#include "audio/alsa/playback_worker.hpp"
+#include "dsp/asrc_controller.hpp"
+#include "dsp/resampler.hpp"
+#include "rt/telemetry.hpp"
+
+int main(int argc, char** argv)
+{
+  std::string config_path = "config/default.yaml";
+  if (argc > 2 && std::string(argv[1]) == "--config")
+  {
+    config_path = argv[2];
+  }
+
+#if !defined(__linux__)
+  std::cout << "loopback_diag is Linux-only (ALSA).\n";
+  return 0;
+#else
+  try
+  {
+    const auto config = sonitude::app::LoadRuntimeConfigFromFile(config_path);
+    std::cout << "DIAGNOSTIC ONLY: pre-ASRC loopback is not production-stable.\n";
+
+    sonitude::audio::alsa::AlsaPcmDevice cap;
+    sonitude::audio::alsa::AlsaPcmDevice pb;
+    cap.openCapture(config.capture);
+    pb.openPlayback(config.playback);
+
+    sonitude::rt::TelemetryCounters counters;
+    sonitude::audio::alsa::CaptureWorker cap_worker(&cap, &config, &counters);
+    auto resampler = sonitude::dsp::CreateSrcResampler();
+    sonitude::dsp::AsrcController ctl({
+        .min_ratio = config.asrc.min_ratio,
+        .max_ratio = config.asrc.max_ratio,
+        .kp = config.asrc.pi_kp,
+        .ki = config.asrc.pi_ki,
+        .target_buffer_frames = static_cast<double>(config.asrc.target_buffer_frames),
+        .max_ratio_step = 0.00005,
+    });
+    sonitude::audio::alsa::PlaybackWorker pb_worker(&pb, resampler.get(), &ctl, &counters);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    while (true)
+    {
+      const auto elapsed = std::chrono::steady_clock::now() - t0;
+      if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() >= 60)
+      {
+        break;
+      }
+      std::vector<sonitude::audio::MicFrame> mic_frames;
+      if (!cap_worker.readBlock(mic_frames))
+      {
+        continue;
+      }
+      std::vector<sonitude::dsp::StereoSample> stereo(mic_frames.size());
+      for (std::size_t i = 0; i < mic_frames.size(); ++i)
+      {
+        stereo[i].left = mic_frames[i][4];
+        stereo[i].right = mic_frames[i][5];
+      }
+      (void)pb_worker.writeStereo(stereo, mic_frames.size());
+    }
+
+    std::cout << "Loopback diagnostic complete: "
+              << "capture_xruns=" << counters.capture_xruns.load()
+              << " playback_xruns=" << counters.playback_xruns.load()
+              << " asrc_ppm=" << counters.asrc_ratio_ppm.load() << "\n";
+    return 0;
+  }
+  catch (const std::exception& ex)
+  {
+    std::cerr << "loopback_diag failed: " << ex.what() << '\n';
+    return 1;
+  }
+#endif
+}

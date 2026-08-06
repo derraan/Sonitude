@@ -6,6 +6,11 @@
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
 
+void RunAudioSupportTests();
+void RunRtPrimitiveTests();
+void RunAsrcSimulationTests();
+void RunCalibrationTests();
+
 namespace
 {
 std::string FixturePath(const char* rel)
@@ -83,6 +88,10 @@ int main()
     TestGeometryValid();
     TestGeometryInvalidCountFails();
     TestAudioTypeInvariants();
+    RunAudioSupportTests();
+    RunRtPrimitiveTests();
+    RunAsrcSimulationTests();
+    RunCalibrationTests();
     std::cout << "All unit tests passed.\n";
     return 0;
   }
