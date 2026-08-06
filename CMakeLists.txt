@@ -36,10 +36,18 @@ add_library(
   src/app/calibration_writer.cpp
   src/app/logging.cpp
   src/audio/wav_io.cpp
+  src/control/control_loop.cpp
+  src/control/conversation_state_machine.cpp
+  src/control/zones.cpp
+  src/dsp/beamformer.cpp
   src/dsp/calibration_applier.cpp
   src/dsp/resampler_cubic.cpp
   src/dsp/resampler_src.cpp
   src/rt/rt_thread.cpp
+  src/spatial/mock_doa_provider.cpp
+  src/spatial/odas_message_parser.cpp
+  src/spatial/odas_provider.cpp
+  src/spatial/source_tracker.cpp
 )
 
 target_include_directories(
@@ -200,6 +208,21 @@ add_executable(
   sonitude_wav_replay
   src/tools/wav_replay.cpp
 )
+target_link_libraries(
+  sonitude_wav_replay
+  PRIVATE
+    sonitude_core
+)
+
+add_executable(
+  sonitude_odas_config_gen
+  src/tools/odas_config_gen.cpp
+)
+target_link_libraries(
+  sonitude_odas_config_gen
+  PRIVATE
+    sonitude_core
+)
 
 if(SONITUDE_BUILD_TESTS)
   enable_testing()
@@ -211,12 +234,23 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/rt_tests.cpp
     tests/unit/asrc_sim_tests.cpp
     tests/unit/calibration_tests.cpp
+    tests/unit/beamformer_tests.cpp
+    tests/unit/snapshot_tests.cpp
+    tests/unit/odas_parser_tests.cpp
+    tests/unit/control_loop_tests.cpp
+    tests/unit/zone_tests.cpp
+    tests/unit/state_machine_tests.cpp
   )
 
   target_link_libraries(
     sonitude_unit_tests
     PRIVATE
       sonitude_core
+  )
+  target_include_directories(
+    sonitude_unit_tests
+    PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}"
   )
 
   target_compile_definitions(

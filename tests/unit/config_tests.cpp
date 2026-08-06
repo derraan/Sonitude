@@ -10,6 +10,12 @@ void RunAudioSupportTests();
 void RunRtPrimitiveTests();
 void RunAsrcSimulationTests();
 void RunCalibrationTests();
+void RunBeamformerTests();
+void RunSnapshotTests();
+void RunOdasParserTests();
+void RunControlLoopTests();
+void RunZoneTests();
+void RunStateMachineTests();
 
 namespace
 {
@@ -92,6 +98,12 @@ int main()
     RunRtPrimitiveTests();
     RunAsrcSimulationTests();
     RunCalibrationTests();
+    RunBeamformerTests();
+    RunSnapshotTests();
+    RunOdasParserTests();
+    RunControlLoopTests();
+    RunZoneTests();
+    RunStateMachineTests();
     std::cout << "All unit tests passed.\n";
     return 0;
   }
