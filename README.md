@@ -2,7 +2,7 @@
 
 Sonitude is a staged Raspberry Pi 5 real-time audio engineering proof-of-concept for a six-microphone head-worn array. The v1 objective is deterministic directional listening with ODAS-driven control and a custom low-latency time-domain beamforming audio path.
 
-This repository currently implements **Milestone 0 (scaffold only)**.
+
 
 ## Current status
 
