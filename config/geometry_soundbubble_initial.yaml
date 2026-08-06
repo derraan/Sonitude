@@ -1,0 +1,26 @@
+profile_name: "soundbubble_initial_planar_v1"
+microphones:
+  - id: M0_upper_inner_left
+    x: -0.0380
+    y: 0.1680
+    z: 0.0000
+  - id: M1_upper_inner_right
+    x: 0.0380
+    y: 0.1680
+    z: 0.0000
+  - id: M2_upper_outer_left
+    x: -0.1040
+    y: 0.1150
+    z: 0.0000
+  - id: M3_upper_outer_right
+    x: 0.1040
+    y: 0.1150
+    z: 0.0000
+  - id: M4_left_earcup
+    x: -0.1295
+    y: 0.0000
+    z: 0.0000
+  - id: M5_right_earcup
+    x: 0.1295
+    y: 0.0000
+    z: 0.0000

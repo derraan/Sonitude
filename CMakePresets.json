@@ -1,0 +1,48 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default-debug",
+      "displayName": "Default Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SONITUDE_BUILD_TESTS": "ON",
+        "SONITUDE_FETCH_DEPS": "ON"
+      }
+    },
+    {
+      "name": "default-release",
+      "displayName": "Default Release",
+      "inherits": "default-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-debug",
+      "configurePreset": "default-debug"
+    },
+    {
+      "name": "build-release",
+      "configurePreset": "default-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-debug",
+      "configurePreset": "default-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
