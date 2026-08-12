@@ -96,6 +96,7 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
 
   config.geometry_path = ResolvePath(path, RequireScalar<std::string>(root, "geometry_path"));
   config.calibration_path = ResolvePath(path, RequireScalar<std::string>(root, "calibration_path"));
+  config.calibration_dc_block_hz = RequireScalar<float>(root, "calibration_dc_block_hz");
 
   const YAML::Node asrc = root["asrc"];
   config.asrc.enabled = RequireScalar<bool>(asrc, "enabled");
@@ -180,6 +181,14 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error("capture sample_rate_hz is out of expected bounds");
   }
+  if (config.playback.sample_rate_hz < 16000 || config.playback.sample_rate_hz > 96000)
+  {
+    throw std::runtime_error("playback sample_rate_hz is out of expected bounds");
+  }
+  if (config.capture.sample_rate_hz != config.playback.sample_rate_hz)
+  {
+    throw std::runtime_error("capture and playback nominal sample rates must match");
+  }
 
   if (config.capture.period_frames == 0 || config.capture.periods < 2)
   {
@@ -218,6 +227,11 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   if (config.asrc.target_buffer_frames == 0)
   {
     throw std::runtime_error("ASRC target buffer must be non-zero");
+  }
+
+  if (config.calibration_dc_block_hz <= 0.0F || config.calibration_dc_block_hz > 500.0F)
+  {
+    throw std::runtime_error("calibration_dc_block_hz must be in (0, 500]");
   }
 
   if (config.steering.reference_mic_index >= config.active_channel_map.size())
@@ -278,6 +292,48 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     {
       throw std::runtime_error("zone azimuth bounds must be within [-180, 360]");
     }
+  }
+}
+
+void ValidateRuntimeAudioContract(const RuntimeConfig& config, const RuntimeAudioContract& contract)
+{
+  if (contract.capture_sample_rate_hz != config.capture.sample_rate_hz)
+  {
+    throw std::runtime_error("negotiated capture sample rate does not match the configured DSP rate");
+  }
+  if (contract.playback_sample_rate_hz != config.playback.sample_rate_hz)
+  {
+    throw std::runtime_error("negotiated playback sample rate does not match the configured DSP rate");
+  }
+  if (contract.capture_channels == 0)
+  {
+    throw std::runtime_error("negotiated capture channel count must be non-zero");
+  }
+  for (const std::size_t channel : config.active_channel_map)
+  {
+    if (channel >= contract.capture_channels)
+    {
+      throw std::runtime_error(
+          "active channel map index exceeds negotiated capture channel count");
+    }
+  }
+  if (!config.asrc.enabled)
+  {
+    return;
+  }
+
+  const std::size_t min_occupancy = contract.software_queue_frames;
+  const std::size_t max_occupancy =
+      contract.software_queue_frames + contract.playback_buffer_frames;
+  const std::size_t target = config.asrc.target_buffer_frames;
+  const std::size_t headroom = contract.minimum_asrc_headroom_frames;
+  if (contract.playback_buffer_frames == 0 || max_occupancy < min_occupancy || headroom == 0 ||
+      target < min_occupancy || target > max_occupancy ||
+      (target - min_occupancy) < headroom || (max_occupancy - target) < headroom)
+  {
+    throw std::runtime_error(
+        "ASRC target_buffer_frames must sit at least one negotiated block above the retained "
+        "software-queue floor and one block below negotiated playback capacity");
   }
 }
 

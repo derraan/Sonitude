@@ -1,5 +1,6 @@
 #include <chrono>
 #include <iostream>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,6 +34,16 @@ int main(int argc, char** argv)
     sonitude::audio::alsa::AlsaPcmDevice pb;
     cap.openCapture(config.capture);
     pb.openPlayback(config.playback);
+    const auto cap_params = cap.negotiated();
+    const auto pb_params = pb.negotiated();
+    sonitude::app::ValidateRuntimeAudioContract(
+        config,
+        {.capture_sample_rate_hz = cap_params.sample_rate_hz,
+         .playback_sample_rate_hz = pb_params.sample_rate_hz,
+         .capture_channels = cap_params.channels,
+         .playback_buffer_frames = pb_params.buffer_frames,
+         .software_queue_frames = 0,
+         .minimum_asrc_headroom_frames = cap_params.period_frames});
 
     sonitude::rt::TelemetryCounters counters;
     sonitude::audio::alsa::CaptureWorker cap_worker(&cap, &config, &counters);
@@ -45,7 +56,15 @@ int main(int argc, char** argv)
         .target_buffer_frames = static_cast<double>(config.asrc.target_buffer_frames),
         .max_ratio_step = 0.00005,
     });
-    sonitude::audio::alsa::PlaybackWorker pb_worker(&pb, resampler.get(), &ctl, &counters);
+    const bool asrc_enabled =
+        config.asrc.enabled && !config.asrc.allow_bypass_for_locked_bench;
+    sonitude::audio::alsa::PlaybackWorker pb_worker(
+        &pb, resampler.get(), &ctl, &counters, asrc_enabled);
+
+    const std::size_t period_frames = cap_worker.periodFrames();
+    std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
+    std::vector<sonitude::dsp::StereoSample> stereo(period_frames);
+    std::size_t playback_write_failures = 0;
 
     const auto t0 = std::chrono::steady_clock::now();
     while (true)
@@ -55,23 +74,28 @@ int main(int argc, char** argv)
       {
         break;
       }
-      std::vector<sonitude::audio::MicFrame> mic_frames;
-      if (!cap_worker.readBlock(mic_frames))
+      std::size_t frames_read = 0;
+      if (!cap_worker.readBlock(std::span<sonitude::audio::MicFrame>(mic_frames), &frames_read))
       {
         continue;
       }
-      std::vector<sonitude::dsp::StereoSample> stereo(mic_frames.size());
-      for (std::size_t i = 0; i < mic_frames.size(); ++i)
+      for (std::size_t i = 0; i < frames_read; ++i)
       {
         stereo[i].left = mic_frames[i][4];
         stereo[i].right = mic_frames[i][5];
       }
-      (void)pb_worker.writeStereo(stereo, mic_frames.size());
+      const std::size_t occupancy = pb.playbackQueuedFrames();
+      if (!pb_worker.writeStereo(
+              std::span<const sonitude::dsp::StereoSample>(stereo.data(), frames_read), occupancy))
+      {
+        ++playback_write_failures;
+      }
     }
 
     std::cout << "Loopback diagnostic complete: "
               << "capture_xruns=" << counters.capture_xruns.load()
               << " playback_xruns=" << counters.playback_xruns.load()
+              << " playback_write_failures=" << playback_write_failures
               << " asrc_ppm=" << counters.asrc_ratio_ppm.load() << "\n";
     return 0;
   }

@@ -90,7 +90,7 @@ Default v1 baseline rules. **Unchecked veto = guardrail active** — Cursor must
 | - [ ] | **SCOPE-4** | **No unmeasured end-to-end latency claims.** Period arithmetic and config defaults are not product latency.                                    | Only M8 impulse/loopback measurement may support latency statements.                                  |
 | - [ ] | **SCOPE-5** | **No distance-estimation or strong automatic nulling claims.** At most one selected suppressor in v1.                                          | Avoids unsupported product statements and scope creep into M7+ behavior without gates.                |
 | - [ ] | **SCOPE-6** | **No milestone marked complete without its observable gate** (evidence in `docs/milestones.md`).                                               | Staged delivery integrity; no “implemented” without tests/evidence.                                   |
-| - [ ] | **SCOPE-7** | **Pico firmware and neural/HRTF code remain out of tree** — contracts only, no vendoring into `Sonitude/`.                                     | Keeps host app repo focused; firmware stays in sibling repos.                                         |
+| - [x] | **SCOPE-7** | **Reference-only Pico firmware vendoring is permitted**; host build integration and host-side firmware edits remain out of scope.                 | Keeps host app repo focused while preserving a reproducible firmware contract snapshot.                 |
 
 
 
@@ -102,7 +102,7 @@ Fill when the user checks a veto above (newest first).
 
 | Date | ID  | Reason (user-approved override) |
 | ---- | --- | ------------------------------- |
-|      |     |                                 |
+| 2026-08-12 | SCOPE-7 | Keep vendored Pico firmware snapshot as read-only reference; no host CMake coupling or host-side firmware edits. |
 
 
 **Examples (do not check unless the user requests):**
@@ -116,11 +116,12 @@ Fill when the user checks a veto above (newest first).
 ### Repository boundary
 
 
-| In this repo (`Sonitude/`)                         | Out of tree (sibling repos)                                           |
-| -------------------------------------------------- | --------------------------------------------------------------------- |
-| Pi host app: ALSA, DSP, RT, control, tests, config | `mic-array-pico2w-usb6ch` (UAC firmware, vendored for reference only) |
-| ODAS adapter, mock provider, config generator      | Sound Bubble, HRTF tooling, SSL experiments                           |
-| Offline WAV replay / calibration tools             |                                                                       |
+| In this repo (`Sonitude/`)                         | Out of tree (sibling repos)                    |
+| -------------------------------------------------- | ---------------------------------------------- |
+| Pi host app: ALSA, DSP, RT, control, tests, config | Sound Bubble, HRTF tooling, SSL experiments    |
+| ODAS adapter, mock provider, config generator      |                                                |
+| Offline WAV replay / calibration tools             |                                                |
+| Reference-only firmware snapshot: `mic-array-pico2w-usb6ch/` |                                          |
 
 
 ---
@@ -146,16 +147,18 @@ flowchart LR
 
 
 
-- **Sample format:** internal DSP uses **float** (`MicFrame` = six floats per time step). ALSA I/O converts to/from device PCM (typically S16).
+- **Sample format:** internal DSP uses **float** (`MicFrame` = six floats per time step). ALSA I/O converts to/from negotiated device PCM (S16/S24_3LE/S32/FLOAT32 are mapped).
 - **Clocks:** Pico capture and DAC playback are **independent** (~tens of ppm apart). Sustained output requires **ASRC** ratio control; never drop/duplicate samples for drift correction.
 
 
 
 ### Stage 1 — Capture and channel extract (feeds DSP)
 
-`CaptureWorker` reads one ALSA period from the 8-channel USB container; `ExtractActiveMicFrames` pulls the six active mics via `active_channel_map`.
+`CaptureWorker` reads one ALSA period from the 8-channel USB container; `ExtractActiveMicFrames` pulls the six active mics via `active_channel_map`. Startup now rejects configs where negotiated capture channels cannot satisfy that map.
 
 Each instant is a `MicFrame` (`std::array<float, 6>`). At 44.1 kHz with 64-frame periods, each read yields a block of 64 `MicFrame`s.
+
+`AlsaPcmDevice` stores `negotiated_` from the applied ALSA hardware state (`snd_pcm_hw_params_get_*`) instead of assuming the requested values were accepted unchanged.
 
 ### Stage 2 — Calibration (`CalibrationApplier`)
 
@@ -166,7 +169,7 @@ Per mic, per sample:
 1. **Polarity** — multiply by +1 or −1
 2. **DC subtract** — remove measured offset
 3. **Gain** — multiply by `gain_linear`
-4. **DC blocker** — one-pole high-pass (~20 Hz), `hp_a = 0.995`
+4. **DC blocker** — one-pole high-pass with `calibration_dc_block_hz` (default 20 Hz)
 
 `delay_samples` from calibration YAML is **not** applied in `CalibrationApplier` today. The beamformer (M4) applies per-channel delay (calibration + steering) in one fractional delay line per channel.
 
@@ -193,7 +196,7 @@ Conservative **distractor suppression** after beamforming, with explicit user se
 ### Stage 5 — Mono → stereo
 
 - `--mode passthrough` **(today):** taps ear-cup mics 4 and 5 to L/R in `main.cpp` — no beamformer.
-- `--mode beamform` **(planned):** duplicate mono beam to both channels (no HRTF in v1).
+- `--mode beamform` **(implemented):** duplicate mono beam to both channels (no HRTF in v1).
 
 
 
@@ -204,10 +207,11 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 **PI controller** (`AsrcController`, `src/dsp/asrc_controller.hpp`):
 
 - Input: playback **buffer occupancy** (frames queued)
-- Error: `occupancy - target_buffer_frames`
+- Error: `target_buffer_frames - occupancy`
 - Output: resample **ratio** clamped to `[min_ratio, max_ratio]` with slew-limited steps
-- Too full → ratio > 1 (play faster); too empty → ratio < 1 (play slower)
-- Telemetry: `asrc_ratio_ppm`
+- Too full → ratio < 1 (generate fewer playback frames); too empty → ratio > 1 (generate more)
+- Startup validates the target against the occupancy range `[software_queue_frames, software_queue_frames + playback_buffer_frames]` and requires one block of headroom on both sides.
+- Telemetry: `asrc_ratio_ppm`, `playback_write_failures`
 
 **Stereo resampler** (`IStereoResampler`, `PlaybackWorker`):
 
@@ -215,7 +219,7 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 | Backend                            | When                                               | Method                                            |
 | ---------------------------------- | -------------------------------------------------- | ------------------------------------------------- |
 | libsamplerate (`SRC_SINC_FASTEST`) | Build with `SONITUDE_WITH_LIBSAMPLERATE_ENABLED=1` | Variable-ratio sinc                               |
-| Cubic linear (fallback)            | Default portable build                             | Linear interp; phase += `ratio` per output sample |
+| Linear (fallback)                  | Default portable build                             | Linear interp; phase += `1/ratio` per output sample |
 
 
 
@@ -311,7 +315,7 @@ Sonitude/
 | `src/audio/alsa/*`                                                         | Probe, device open, capture/playback workers                                   |
 | `src/dsp/calibration_applier.*`                                            | Polarity/gain/DC + HP (delay not applied yet)                                  |
 | `src/dsp/resampler.hpp`                                                    | `IStereoResampler`                                                             |
-| `src/dsp/resampler_cubic.*`                                                | Cubic fallback resampler                                                       |
+| `src/dsp/resampler_linear.*`                                               | Linear fallback resampler                                                      |
 | `src/dsp/resampler_src.cpp`                                                | libsamplerate or cubic fallback factory                                        |
 | `src/dsp/asrc_controller.hpp`                                              | Occupancy PI ratio controller                                                  |
 | `src/rt/spsc_ring.hpp`                                                     | Lock-free SPSC ring                                                            |
@@ -325,7 +329,7 @@ Sonitude/
 | `src/tools/calibration_capture.cpp`                                        | Synthetic 6ch WAV (portable)                                                   |
 | `src/tools/calibration_estimate.cpp`                                       | DC/RMS→YAML estimator                                                          |
 | `src/tools/latency_marker.cpp`                                             | M8 placeholder                                                                 |
-| `src/tools/wav_replay.cpp`                                                 | M4 placeholder                                                                 |
+| `src/tools/wav_replay.cpp`                                                 | M4 offline renderer                                                            |
 
 
 ---
@@ -477,7 +481,7 @@ class CalibrationApplier
 };
 ```
 
-`process()` applies polarity → gain → DC-subtract → 1-pole HP (`hp_a = 0.995`). `delay_samples` **is stored in YAML but not applied** (M4 fractional delay may own that).
+`process()` applies polarity → gain → DC-subtract → 1-pole HP from `calibration_dc_block_hz`. `delay_samples` is intentionally applied in the beamformer's fractional-delay stage, not in `CalibrationApplier`.
 
 Writer:
 
@@ -551,8 +555,8 @@ class AsrcController
 struct TelemetryCounters
 {
   std::atomic<std::uint64_t> capture_frames{0};
-  // ... playback_frames, capture/playback_xruns, ring_over/underruns,
-  // asrc_ratio_ppm, ring_occupancy_frames
+  // ... playback_frames, capture/playback_xruns, playback_write_failures,
+  // ring_over/underruns, asrc_ratio_ppm, ring_occupancy_frames
 };
 ```
 

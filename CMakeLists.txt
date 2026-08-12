@@ -42,6 +42,7 @@ add_library(
   src/dsp/beamformer.cpp
   src/dsp/calibration_applier.cpp
   src/dsp/limiter.cpp
+  src/dsp/resampler_linear.cpp
   src/dsp/resampler_cubic.cpp
   src/dsp/resampler_src.cpp
   src/dsp/suppressor.cpp
@@ -65,11 +66,30 @@ target_link_libraries(
     spdlog::spdlog
 )
 
-target_compile_definitions(
-  sonitude_core
-  PUBLIC
-    SONITUDE_WITH_LIBSAMPLERATE_ENABLED=0
-)
+if(SONITUDE_WITH_LIBSAMPLERATE AND SONITUDE_LIBSAMPLERATE_FOUND)
+  target_link_libraries(
+    sonitude_core
+    PUBLIC
+      ${SONITUDE_LIBSAMPLERATE_TARGET}
+  )
+  target_compile_definitions(
+    sonitude_core
+    PUBLIC
+      SONITUDE_WITH_LIBSAMPLERATE_ENABLED=1
+      SONITUDE_RESAMPLER_BACKEND="libsamplerate"
+  )
+  message(STATUS "libsamplerate backend enabled")
+else()
+  target_compile_definitions(
+    sonitude_core
+    PUBLIC
+      SONITUDE_WITH_LIBSAMPLERATE_ENABLED=0
+      SONITUDE_RESAMPLER_BACKEND="linear"
+  )
+  if(SONITUDE_WITH_LIBSAMPLERATE)
+    message(STATUS "libsamplerate not found; using linear fallback backend")
+  endif()
+endif()
 
 if(SONITUDE_WITH_ALSA)
   add_library(

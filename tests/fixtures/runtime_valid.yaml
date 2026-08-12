@@ -11,12 +11,13 @@ playback:
 active_channel_map: [0, 1, 2, 3, 4, 5]
 geometry_path: "geometry_valid.yaml"
 calibration_path: "../../config/calibration_example.yaml"
+calibration_dc_block_hz: 20.0
 asrc:
   enabled: true
   allow_bypass_for_locked_bench: false
   min_ratio: 0.995
   max_ratio: 1.005
-  target_buffer_frames: 256
+  target_buffer_frames: 128
   pi_kp: 0.0002
   pi_ki: 0.00001
 steering:

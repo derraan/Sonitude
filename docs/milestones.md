@@ -74,6 +74,7 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
 - Evidence/result:
   - RT primitives (SPSC ring, block pool, ASRC controller, resampler interfaces) and tests implemented.
   - M2 passthrough mode in `sonitude_realtime` implemented.
+  - Current runtime keeps blocking capture, DSP, and playback on one audio loop; separate RT capture/render/playback workers and per-thread scheduling remain pending M2 hardening gates.
   - Hardware soak evidence (30 min occupancy/XRUN log) pending Pi execution.
 
 ## Milestone 3 - Calibration and offline analysis
@@ -108,14 +109,14 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
 
 ## Milestone 5 - ODAS control integration
 
-- Status: `pending`
+- Status: `in_progress`
 - Gate:
   - mock provider and ODAS adapter operational
   - safe fallback on ODAS loss verified
 
 ## Milestone 6 - Conversation state machine
 
-- Status: `pending`
+- Status: `in_progress`
 - Gate:
   - deterministic hysteresis transitions validated by tests
   - telemetry visibility for state and confidence

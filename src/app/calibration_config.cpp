@@ -62,12 +62,17 @@ void ValidateCalibrationConfig(const CalibrationConfig& calibration,
     throw std::runtime_error("calibration must have six channels");
   }
 
-  std::unordered_set<std::string> id_set(geometry_ids.begin(), geometry_ids.end());
+  const std::unordered_set<std::string> geometry_id_set(geometry_ids.begin(), geometry_ids.end());
+  std::unordered_set<std::string> calibration_id_set;
   for (const auto& channel : calibration.channels)
   {
-    if (id_set.find(channel.id) == id_set.end())
+    if (geometry_id_set.find(channel.id) == geometry_id_set.end())
     {
       throw std::runtime_error("calibration channel id does not exist in geometry");
+    }
+    if (!calibration_id_set.insert(channel.id).second)
+    {
+      throw std::runtime_error("calibration channel ids must be unique");
     }
     if (!(channel.polarity == 1 || channel.polarity == -1))
     {
@@ -81,6 +86,10 @@ void ValidateCalibrationConfig(const CalibrationConfig& calibration,
     {
       throw std::runtime_error("calibration delay_samples out of range");
     }
+  }
+  if (calibration_id_set.size() != geometry_id_set.size())
+  {
+    throw std::runtime_error("calibration must contain exactly one channel for each geometry microphone");
   }
 }
 }  // namespace sonitude::app

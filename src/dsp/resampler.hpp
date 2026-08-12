@@ -23,6 +23,8 @@ class IStereoResampler
  public:
   virtual ~IStereoResampler() = default;
   virtual void reset() = 0;
+  // Ratio convention: output_samples / input_samples. Values above 1.0
+  // generate more playback frames for each input frame.
   virtual ResamplerResult process(const StereoSample* input,
                                   std::size_t input_samples,
                                   StereoSample* output,
@@ -30,6 +32,7 @@ class IStereoResampler
                                   double ratio) = 0;
 };
 
+std::unique_ptr<IStereoResampler> CreateLinearResampler();
 std::unique_ptr<IStereoResampler> CreateCubicResampler();
 std::unique_ptr<IStereoResampler> CreateSrcResampler();
 }  // namespace sonitude::dsp

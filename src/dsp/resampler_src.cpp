@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-#include "dsp/resampler_cubic.hpp"
+#include "dsp/resampler_linear.hpp"
 
 namespace sonitude::dsp
 {
@@ -80,7 +80,7 @@ std::unique_ptr<IStereoResampler> CreateSrcResampler()
 #if SONITUDE_HAS_LIBSAMPLERATE
   return std::make_unique<SrcResampler>();
 #else
-  return CreateCubicResampler();
+  return CreateLinearResampler();
 #endif
 }
 }  // namespace sonitude::dsp

@@ -12,6 +12,7 @@
 #include "audio/audio_types.hpp"
 #include "audio/wav_io.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/calibration_applier.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/suppressor.hpp"
 
@@ -158,6 +159,7 @@ int main(int argc, char** argv)
 
     const std::size_t frames = input_wav.interleaved.size() / input_wav.channels;
     std::vector<sonitude::audio::MicFrame> mic(frames);
+    std::vector<sonitude::audio::MicFrame> calibrated(frames);
     for (std::size_t i = 0; i < frames; ++i)
     {
       sonitude::audio::MicFrame frame{};
@@ -167,6 +169,11 @@ int main(int argc, char** argv)
       }
       mic[i] = frame;
     }
+    sonitude::dsp::CalibrationApplier calibration_applier(
+        calibration.channels, geometry_ids, runtime.capture.sample_rate_hz, runtime.calibration_dc_block_hz);
+    calibration_applier.processBlock(
+        std::span<const sonitude::audio::MicFrame>(mic.data(), mic.size()),
+        std::span<sonitude::audio::MicFrame>(calibrated.data(), calibrated.size()));
 
     const auto events = LoadSteeringScript(script_path, input_wav.sample_rate_hz);
     sonitude::dsp::DelaySumBeamformer beamformer;
@@ -194,7 +201,7 @@ int main(int argc, char** argv)
         ++event_index;
       }
       const std::size_t count = std::min(kBlock, frames - start);
-      beamformer.process(std::span<const sonitude::audio::MicFrame>(mic.data() + start, count),
+      beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
                          std::span<float>(mono.data() + start, count));
       if (enable_suppression)
       {
