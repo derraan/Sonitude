@@ -78,7 +78,10 @@ void TestAlignmentBeatsOffAxis()
 
   const double on_rms = sonitude::tests::support::ComputeRms(on, 512);
   const double off_rms = sonitude::tests::support::ComputeRms(off, 512);
+  const double source_rms = sonitude::tests::support::ComputeRms(source, 512);
   Require(on_rms > off_rms * 1.2, "on-axis beam energy must exceed off-axis case");
+  Require(std::fabs(on_rms - source_rms) < (source_rms * 0.15),
+          "on-axis coherent beam output should stay close to source RMS");
 }
 
 void TestClickFreeRetarget()

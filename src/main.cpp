@@ -18,7 +18,9 @@
 #include "control/zones.hpp"
 #include "dsp/beamformer.hpp"
 #include "dsp/asrc_controller.hpp"
+#include "dsp/limiter.hpp"
 #include "dsp/resampler.hpp"
+#include "dsp/suppressor.hpp"
 #include "rt/param_snapshot.hpp"
 #include "rt/telemetry.hpp"
 #include "spatial/mock_doa_provider.hpp"
@@ -165,6 +167,15 @@ int main(int argc, char** argv)
     sonitude::dsp::DelaySumBeamformer beamformer;
     beamformer.configure(
         geometry, runtime_config.steering, calibration, runtime_config.capture.sample_rate_hz, 4096);
+    sonitude::dsp::ConservativeSuppressor suppressor;
+    suppressor.configure(
+        {.ambient_floor_linear = runtime_config.steering.ambient_floor_linear,
+         .fade_ms = runtime_config.suppression.fade_ms,
+         .activity_threshold = runtime_config.suppression.activity_threshold,
+         .confidence_threshold = runtime_config.suppression.confidence_threshold},
+        runtime_config.capture.sample_rate_hz);
+    sonitude::dsp::PeakLimiter limiter;
+    limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, runtime_config.capture.sample_rate_hz);
 
     std::cout << "Running " << mode << " mode for 30 seconds...\n";
     sonitude::audio::BeamformerSteering last_target{};
@@ -200,6 +211,20 @@ int main(int argc, char** argv)
           }
           std::vector<float> mono(mic_frames.size(), 0.0F);
           beamformer.process(mic_frames, mono);
+          if (runtime_config.suppression.enabled)
+          {
+            const bool focus_active = !snapshot.failsafe;
+            const float confidence = focus_active ? 1.0F : 0.0F;
+            suppressor.setControl(focus_active, confidence);
+            suppressor.process(mono);
+          }
+          else
+          {
+            suppressor.setControl(false, 0.0F);
+          }
+          limiter.process(mono);
+          counters.suppressor_gain_milli.store(
+              static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)));
           for (std::size_t i = 0; i < mic_frames.size(); ++i)
           {
             stereo[i].left = mono[i];
@@ -213,6 +238,7 @@ int main(int argc, char** argv)
         std::cout << "telemetry: cap_xruns=" << counters.capture_xruns.load()
                   << " pb_xruns=" << counters.playback_xruns.load()
                   << " asrc_ppm=" << counters.asrc_ratio_ppm.load()
+                  << " sup_gain_milli=" << counters.suppressor_gain_milli.load()
                   << " state=" << static_cast<int>(conversation.state()) << '\n';
       }
       std::this_thread::sleep_for(std::chrono::seconds(1));

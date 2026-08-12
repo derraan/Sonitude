@@ -92,10 +92,19 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
 
 ## Milestone 4 - Beamformer
 
-- Status: `pending`
+- Status: `in_progress`
 - Gate:
   - deterministic fractional delay-and-sum implementation
   - scripted steering WAV harness passes synthetic alignment checks
+- Evidence command template:
+  - `ctest --test-dir build --output-on-failure`
+  - `./build/sonitude_wav_replay --input <six_channel_wav> --config config/default.yaml --script <steering_csv> --output <beamformed_mono_wav>`
+  - `./scripts/openmha_golden_render.sh --input6ch <six_channel_wav> --runtime config/default.yaml --steering <steering_csv> --sonitude-out <sonitude_m4.wav> --openmha-out <openmha_m4.wav> --metrics-out <m4_metrics.txt>`
+- Evidence/result:
+  - Beamformer unit coverage includes on-axis vs off-axis energy checks, click-free retarget checks, and calibration delay closure checks.
+  - Offline `sonitude_wav_replay` beamformed rendering is implemented for scripted steering inputs.
+  - openMHA golden-render comparison workflow template added at `tests/integration/openmha_m4_validation.md` with script scaffold `scripts/openmha_golden_render.sh`.
+  - Hardware and openMHA parity metrics are not yet recorded; milestone remains `in_progress`.
 
 ## Milestone 5 - ODAS control integration
 
@@ -113,10 +122,19 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
 
 ## Milestone 7 - Suppression v1
 
-- Status: `pending`
+- Status: `in_progress`
 - Gate:
   - one-distractor conservative suppression policy integrated
   - smooth fade in/out and safe fallback verified
+- Evidence command template:
+  - `ctest --test-dir build --output-on-failure`
+  - `./build/sonitude_wav_replay --input <six_channel_wav> --config config/default.yaml --script <steering_csv> --output <suppressed_mono_wav> --enable-suppression`
+  - `./build/sonitude_wav_replay --input <six_channel_wav> --config config/default.yaml --script <steering_csv> --output <unsuppressed_mono_wav>`
+- Evidence/result:
+  - Conservative suppressor (`ConservativeSuppressor`) added with ambient-floor clamp, confidence gating, and failsafe ramp-to-unity behavior.
+  - Peak limiter (`PeakLimiter`) added after suppression in the beamform path.
+  - Deterministic unit tests added for suppressor gain floor/fallback and limiter ceiling/release behavior.
+  - Runtime and offline wiring are implemented, but reference SNR logs and hardware transition checks are pending; milestone remains `in_progress`.
 
 ## Milestone 8 - Measurement and hardening
 

@@ -41,8 +41,10 @@ add_library(
   src/control/zones.cpp
   src/dsp/beamformer.cpp
   src/dsp/calibration_applier.cpp
+  src/dsp/limiter.cpp
   src/dsp/resampler_cubic.cpp
   src/dsp/resampler_src.cpp
+  src/dsp/suppressor.cpp
   src/rt/rt_thread.cpp
   src/spatial/mock_doa_provider.cpp
   src/spatial/odas_message_parser.cpp
@@ -235,7 +237,9 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/asrc_sim_tests.cpp
     tests/unit/calibration_tests.cpp
     tests/unit/beamformer_tests.cpp
+    tests/unit/limiter_tests.cpp
     tests/unit/snapshot_tests.cpp
+    tests/unit/suppressor_tests.cpp
     tests/unit/odas_parser_tests.cpp
     tests/unit/control_loop_tests.cpp
     tests/unit/zone_tests.cpp

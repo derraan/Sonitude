@@ -11,11 +11,13 @@ void RunRtPrimitiveTests();
 void RunAsrcSimulationTests();
 void RunCalibrationTests();
 void RunBeamformerTests();
+void RunLimiterTests();
 void RunSnapshotTests();
 void RunOdasParserTests();
 void RunControlLoopTests();
 void RunZoneTests();
 void RunStateMachineTests();
+void RunSuppressorTests();
 
 namespace
 {
@@ -38,6 +40,7 @@ void TestRuntimeConfigValid()
       sonitude::app::LoadRuntimeConfigFromFile(FixturePath("tests/fixtures/runtime_valid.yaml"));
   Require(config.active_channel_map.size() == sonitude::audio::kMicChannels,
           "valid runtime config did not load six channels");
+  Require(config.suppression.fade_ms > 0.0F, "suppression config should parse from runtime YAML");
 }
 
 void TestRuntimeConfigDuplicateChannelFails()
@@ -99,6 +102,8 @@ int main()
     RunAsrcSimulationTests();
     RunCalibrationTests();
     RunBeamformerTests();
+    RunSuppressorTests();
+    RunLimiterTests();
     RunSnapshotTests();
     RunOdasParserTests();
     RunControlLoopTests();

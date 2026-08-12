@@ -21,7 +21,7 @@ CalibrationApplier::CalibrationApplier(const std::vector<app::CalibrationChannel
 
 audio::MicFrame CalibrationApplier::process(const audio::MicFrame& in)
 {
-  // Lightweight RT-safe chain: polarity -> gain -> DC blocker (M3 baseline).
+  // Lightweight RT-safe chain: polarity -> DC subtract -> gain -> DC blocker (M3 baseline).
   audio::MicFrame out{};
   constexpr float hp_a = 0.995F;
   for (std::size_t i = 0; i < audio::kMicChannels; ++i)
