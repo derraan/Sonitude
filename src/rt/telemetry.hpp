@@ -15,5 +15,6 @@ struct TelemetryCounters
   std::atomic<std::uint64_t> ring_underruns{0};
   std::atomic<std::int64_t> asrc_ratio_ppm{0};
   std::atomic<std::int64_t> ring_occupancy_frames{0};
+  std::atomic<std::int64_t> suppressor_gain_milli{1000};
 };
 }  // namespace sonitude::rt

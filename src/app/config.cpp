@@ -114,6 +114,13 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
   config.steering.steering_ramp_ms = RequireScalar<float>(steering, "steering_ramp_ms");
   config.steering.ambient_floor_linear = RequireScalar<float>(steering, "ambient_floor_linear");
 
+  const YAML::Node suppression = root["suppression"];
+  config.suppression.enabled = RequireScalar<bool>(suppression, "enabled");
+  config.suppression.fade_ms = RequireScalar<float>(suppression, "fade_ms");
+  config.suppression.activity_threshold = RequireScalar<float>(suppression, "activity_threshold");
+  config.suppression.confidence_threshold =
+      RequireScalar<float>(suppression, "confidence_threshold");
+
   const YAML::Node sm = root["state_machine"];
   config.state_machine.activation_hold_ms = RequireScalar<std::uint32_t>(sm, "activation_hold_ms");
   config.state_machine.confirmation_hold_ms =
@@ -226,6 +233,22 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   if (config.steering.ambient_floor_linear < 0.0F || config.steering.ambient_floor_linear > 1.0F)
   {
     throw std::runtime_error("ambient_floor_linear must be in [0, 1]");
+  }
+
+  if (config.suppression.fade_ms < 1.0F || config.suppression.fade_ms > 1000.0F)
+  {
+    throw std::runtime_error("suppression.fade_ms must be in [1, 1000]");
+  }
+
+  if (config.suppression.activity_threshold < 0.0F || config.suppression.activity_threshold > 1.0F)
+  {
+    throw std::runtime_error("suppression.activity_threshold must be in [0, 1]");
+  }
+
+  if (config.suppression.confidence_threshold < 0.0F ||
+      config.suppression.confidence_threshold > 1.0F)
+  {
+    throw std::runtime_error("suppression.confidence_threshold must be in [0, 1]");
   }
 
   if (config.state_machine.activation_hold_ms == 0 || config.state_machine.confirmation_hold_ms == 0)

@@ -55,6 +55,14 @@ struct SteeringConfig
   float ambient_floor_linear = 0.25F;
 };
 
+struct SuppressionConfig
+{
+  bool enabled = false;
+  float fade_ms = 120.0F;
+  float activity_threshold = 0.03F;
+  float confidence_threshold = 0.6F;
+};
+
 struct StateMachineConfig
 {
   std::uint32_t activation_hold_ms = 400;
@@ -88,6 +96,7 @@ struct RuntimeConfig
   std::string calibration_path;
   AsrcConfig asrc;
   SteeringConfig steering;
+  SuppressionConfig suppression;
   StateMachineConfig state_machine;
   OdasConfig odas;
   TelemetryConfig telemetry;

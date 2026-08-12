@@ -4,6 +4,29 @@ Unified tracker for Sonitude core: **global scope, guardrails, user veto checkbo
 
 Last updated: 2026-08-12.
 
+### Implementation status snapshot (M4–M7)
+
+```text
+capture -> calibration -> beamformer -> suppressor -> limiter -> mono-to-stereo -> ASRC -> playback
+```
+
+| Stage | Milestone | Current status | Notes |
+| --- | --- | --- | --- |
+| Stage 2 | M3 calibration | in_progress | `CalibrationApplier` live in runtime; HW sweep evidence still pending |
+| Stage 3 | M4 beamformer | in_progress | Fractional delay-and-sum, steering ramp, and WAV replay implemented |
+| Stage 4 | M7 suppression/limiter | in_progress | Conservative suppressor + peak limiter integrated in beamform mode |
+
+| Block | Status |
+| --- | --- |
+| Delay-and-sum beamformer | Implemented |
+| Suppression v1 (conservative, floor-clamped) | Implemented |
+| Limiter v1 (peak limiter) | Implemented |
+| ODAS control adapter + mock provider | Implemented |
+| Conversation state machine | Implemented |
+| M8 latency instrumentation evidence | Pending hardware run |
+
+**Validation artifacts:** unit tests in `tests/unit/`; offline render via `sonitude_wav_replay`; openMHA comparison via `scripts/openmha_golden_render.sh` and `tests/integration/openmha_m4_validation.md`.
+
 ---
 
 ## 1. Global project scope
@@ -147,7 +170,7 @@ Per mic, per sample:
 
 `delay_samples` from calibration YAML is **not** applied in `CalibrationApplier` today. The beamformer (M4) applies per-channel delay (calibration + steering) in one fractional delay line per channel.
 
-### Stage 3 — Beamformer (M4; planned in tree, config/types ready)
+### Stage 3 — Beamformer (M4; implemented)
 
 Core **directional listening** DSP — **delay-and-sum**:
 
@@ -163,9 +186,9 @@ On-target speech adds coherently; off-axis energy is partially rejected (exact c
 
 
 
-### Stage 4 — Suppression (M7; planned)
+### Stage 4 — Suppression and limiter (M7; implemented)
 
-Conservative **distractor suppression** after beamforming, with explicit user selection and an **ambient floor**. v1 avoids MVDR/nulling and neural processing (**SCOPE-3**).
+Conservative **distractor suppression** after beamforming, with explicit user selection and an **ambient floor**, followed by a peak limiter. v1 avoids MVDR/nulling and neural processing (**SCOPE-3**).
 
 ### Stage 5 — Mono → stereo
 
@@ -205,9 +228,9 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 | PCM format convert           | Implemented (`src/audio/format_convert.hpp`) |
 | 6-ch extract                 | Implemented                                  |
 | Calibration (pol/gain/DC/HP) | Implemented                                  |
-| Calibration delay            | Config only; beamformer when M4 lands        |
-| Delay-and-sum beamformer     | Planned (M4)                                 |
-| Suppression / limiter        | Planned (M7)                                 |
+| Calibration delay            | Implemented (beamformer fractional delay line) |
+| Delay-and-sum beamformer     | Implemented (M4)                             |
+| Suppression / limiter        | Implemented (M7)                             |
 | ASRC PI + resampler          | Implemented                                  |
 | ODAS audio processing        | Out of scope (**SCOPE-2**); control-only     |
 
@@ -320,7 +343,11 @@ From `docs/milestones.md`:
 | **M1 ALSA**          | `in_progress` | Probe/workers/tools built; Pi hardware evidence pending |
 | **M2 RT primitives** | `in_progress` | SPSC, pool, ASRC, resampler, passthrough; soak pending  |
 | **M3 Calibration**   | `in_progress` | Loader/applier/writer/WAV/tools/tests; HW sweep pending |
-| **M4–M8**            | `pending`     | Config fields + stub types only                         |
+| **M4 Beamformer**    | `in_progress` | Fractional delay-and-sum, steering ramp, WAV replay; gate evidence pending |
+| **M5 ODAS control**  | `in_progress` | Mock provider, ODAS parser, source tracker; live ODAS soak pending |
+| **M6 State machine** | `in_progress` | Conversation SM, zones, control loop; scripted VAD harness pending |
+| **M7 Suppression**   | `in_progress` | Conservative suppressor + peak limiter in beamform mode |
+| **M8 Latency**       | `pending`     | Latency marker stub; hardware measurement pending       |
 
 
 `README.md` links to this document for full DSP detail; treat `docs/milestones.md` as authoritative for gates.
@@ -531,12 +558,13 @@ struct TelemetryCounters
 
 
 
-### Missing for M4–M6 (explicitly absent)
+### M4–M6 interfaces (implemented)
 
-- No fanout / lock-free multicast
-- No atomic / double-buffer **steering snapshot** helper
-- No `IDoaProvider` / `IBeamformer` / state-machine classes
-- No shared test signal-generator library (sine is inlined in `calibration_capture.cpp`)
+- `IBeamformer` / `DelayAndSumBeamformer` — fractional delay-and-sum with steering ramp
+- `IDoaProvider` — mock and ODAS socket adapters
+- `ConversationStateMachine` — zone-aware activation with hysteresis
+- Atomic **steering snapshot** via `ParamSnapshot` / control loop handoff
+- Shared test signals in `tests/support/synth_signals.hpp`
 
 
 
@@ -670,15 +698,13 @@ Architecture doc target: fanout → RT audio + control; control publishes atomic
 **Present:**
 
 - `OdasConfig` parsed (`enabled`, `use_mock_provider`, `endpoint`)
-- Docs: ODAS control-only, mock→adapter, failsafe ramp (`architecture.md`, plan, `device_setup.md` startup line)
-- `SourceObservation` type suitable for DOA events
-- Integration README: "ODAS mock trajectory and state-machine transition checks" planned
+- `IDoaProvider` with mock and ODAS socket adapters (`mock_doa_provider`, `odas_provider`)
+- ODAS message parser, source tracker, and control loop publishing steering snapshots
+- `ConversationStateMachine` with wrap-safe zones and scripted VAD hooks
+- Docs: ODAS control-only, mock→adapter, failsafe ramp (`architecture.md`, `device_setup.md`)
+- Integration evidence template: `tests/integration/openmha_m4_validation.md`
 
-**Absent:** no `IDoaProvider`, mock provider, IPC client, source association, or steering publication.
-
-Plan assumption: *"No installed ODAS instance or IPC contract is known. Keep* `IDoaProvider` *mockable…"*
-
-`wav_replay.cpp` explicitly: *"Milestone 4 will implement offline six-channel replay/render."*
+**Pending:** live ODAS soak on Pi hardware; end-to-end state-machine transition harness under `tests/integration/`.
 
 ---
 
@@ -697,7 +723,8 @@ Plan assumption: *"No installed ODAS instance or IPC contract is known. Keep* `I
 - `sonitude_device_probe`
 - `sonitude_capture_check` / `sonitude_playback_check` / `sonitude_loopback_diag` (ALSA only)
 - `sonitude_calibration_capture` / `sonitude_calibration_estimate`
-- `sonitude_latency_marker` / `sonitude_wav_replay` (unlinked stubs)
+- `sonitude_latency_marker` (M8 placeholder) / `sonitude_wav_replay` (M4 offline renderer)
+- `sonitude_odas_config_gen` (ODAS config generator)
 - `sonitude_unit_tests` (+ CTest name of same)
 
 **To add M4–M6 code:** append `.cpp` files to `sonitude_core` (or a new library linked to it); put headers under `src/<module>/`; add `tests/unit/<name>_tests.cpp` to `sonitude_unit_tests` sources and call its `Run…()` from `config_tests.cpp`'s `main`. Options: `SONITUDE_BUILD_TESTS`, `SONITUDE_FETCH_DEPS`, `SONITUDE_WITH_ALSA`, `SONITUDE_WITH_LIBSAMPLERATE` (define currently hard-disabled to 0).
