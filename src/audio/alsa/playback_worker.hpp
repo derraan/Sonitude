@@ -28,6 +28,8 @@ class PlaybackWorker
   dsp::AsrcController* controller_ = nullptr;
   rt::TelemetryCounters* counters_ = nullptr;
   bool asrc_enabled_ = true;
+  std::size_t pending_count_ = 0;
+  std::vector<dsp::StereoSample> pending_;
   std::vector<dsp::StereoSample> resampled_;
   std::vector<float> interleaved_float_;
   std::vector<std::uint8_t> interleaved_bytes_;

@@ -2,27 +2,42 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace sonitude::dsp
 {
 CalibrationApplier::CalibrationApplier(const std::vector<app::CalibrationChannel>& channels,
+                                       const std::vector<std::string>& input_channel_ids,
                                        const std::uint32_t sample_rate_hz,
                                        const float dc_block_hz)
 {
-  if (channels.size() != audio::kMicChannels)
+  if (channels.size() != audio::kMicChannels || input_channel_ids.size() != audio::kMicChannels)
   {
-    throw std::runtime_error("CalibrationApplier expects six channels");
+    throw std::runtime_error("CalibrationApplier expects six calibration and input channel IDs");
   }
   if (sample_rate_hz == 0 || dc_block_hz <= 0.0F)
   {
     throw std::runtime_error("CalibrationApplier requires a non-zero sample rate and positive dc_block_hz");
   }
 
+  std::unordered_map<std::string, const app::CalibrationChannel*> channels_by_id;
+  for (const auto& channel : channels)
+  {
+    if (!channels_by_id.emplace(channel.id, &channel).second)
+    {
+      throw std::runtime_error("CalibrationApplier received a duplicate calibration channel ID");
+    }
+  }
   for (std::size_t i = 0; i < audio::kMicChannels; ++i)
   {
-    polarity_[i] = channels[i].polarity;
-    gain_[i] = channels[i].gain_linear;
-    dc_offset_[i] = channels[i].dc_offset;
+    const auto channel = channels_by_id.find(input_channel_ids[i]);
+    if (channel == channels_by_id.end())
+    {
+      throw std::runtime_error("CalibrationApplier has no calibration for input channel ID");
+    }
+    polarity_[i] = channel->second->polarity;
+    gain_[i] = channel->second->gain_linear;
+    dc_offset_[i] = channel->second->dc_offset;
   }
   const double alpha = std::exp((-2.0 * 3.14159265358979323846 * static_cast<double>(dc_block_hz)) /
                                 static_cast<double>(sample_rate_hz));

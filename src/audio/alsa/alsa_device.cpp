@@ -122,8 +122,15 @@ void AlsaPcmDevice::configure(const app::DeviceConfig& config, const bool is_cap
   snd_pcm_hw_params_set_format(pcm, hw, SND_PCM_FORMAT_S16_LE);
   unsigned int rate = config.sample_rate_hz;
   snd_pcm_hw_params_set_rate_near(pcm, hw, &rate, nullptr);
-  unsigned int channels = 8;
-  snd_pcm_hw_params_set_channels_near(pcm, hw, &channels);
+  unsigned int channels = is_capture ? 8U : 2U;
+  const int channel_result = is_capture ? snd_pcm_hw_params_set_channels_near(pcm, hw, &channels)
+                                        : snd_pcm_hw_params_set_channels(pcm, hw, channels);
+  if (channel_result < 0 || (!is_capture && channels != 2U))
+  {
+    snd_pcm_close(pcm);
+    throw std::runtime_error(is_capture ? "Capture device channel negotiation failed"
+                                        : "Playback device does not support required stereo output");
+  }
   snd_pcm_uframes_t period = config.period_frames;
   snd_pcm_hw_params_set_period_size_near(pcm, hw, &period, nullptr);
   snd_pcm_uframes_t buffer = static_cast<snd_pcm_uframes_t>(config.period_frames * config.periods);

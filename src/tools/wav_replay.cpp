@@ -170,7 +170,7 @@ int main(int argc, char** argv)
       mic[i] = frame;
     }
     sonitude::dsp::CalibrationApplier calibration_applier(
-        calibration.channels, runtime.capture.sample_rate_hz, runtime.calibration_dc_block_hz);
+        calibration.channels, geometry_ids, runtime.capture.sample_rate_hz, runtime.calibration_dc_block_hz);
     calibration_applier.processBlock(
         std::span<const sonitude::audio::MicFrame>(mic.data(), mic.size()),
         std::span<sonitude::audio::MicFrame>(calibrated.data(), calibrated.size()));

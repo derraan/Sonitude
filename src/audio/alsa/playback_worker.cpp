@@ -1,6 +1,8 @@
 #include "audio/alsa/playback_worker.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace sonitude::audio::alsa
 {
@@ -18,9 +20,15 @@ PlaybackWorker::PlaybackWorker(AlsaPcmDevice* device,
   const auto negotiated = device_->negotiated();
   const std::size_t period = negotiated.period_frames;
   const std::size_t bytes_per_sample = audio::BytesPerSample(negotiated.format);
+  pending_.assign(period * 2U, {});
   resampled_.assign(period * 2U, {});
-  interleaved_float_.assign(period * 2U, 0.0F);
-  interleaved_bytes_.assign(period * 2U * bytes_per_sample, 0U);
+  interleaved_float_.assign(resampled_.size() * 2U, 0.0F);
+  interleaved_bytes_.assign(resampled_.size() * 2U * bytes_per_sample, 0U);
+  if (!asrc_enabled_)
+  {
+    controller_->reset();
+    resampler_->reset();
+  }
 }
 
 bool PlaybackWorker::writeStereo(std::span<const dsp::StereoSample> input, const std::size_t occupancy_frames)
@@ -29,55 +37,84 @@ bool PlaybackWorker::writeStereo(std::span<const dsp::StereoSample> input, const
   {
     return true;
   }
+
   double ratio = 1.0;
+  const dsp::StereoSample* output_samples = input.data();
+  std::size_t output_count = input.size();
   if (asrc_enabled_)
   {
     ratio = controller_->update(static_cast<double>(occupancy_frames));
+    if (pending_count_ + input.size() > pending_.size())
+    {
+      return false;
+    }
+    std::copy(input.begin(), input.end(), pending_.begin() + static_cast<std::ptrdiff_t>(pending_count_));
+    pending_count_ += input.size();
+    const auto rr =
+        resampler_->process(pending_.data(), pending_count_, resampled_.data(), resampled_.size(), ratio);
+    if (rr.consumed > pending_count_)
+    {
+      return false;
+    }
+    pending_count_ -= rr.consumed;
+    if (pending_count_ > 0U)
+    {
+      std::memmove(pending_.data(),
+                   pending_.data() + rr.consumed,
+                   pending_count_ * sizeof(dsp::StereoSample));
+    }
+    output_samples = resampled_.data();
+    output_count = rr.produced;
   }
-  else
-  {
-    controller_->reset();
-    resampler_->reset();
-  }
+
   counters_->asrc_ratio_ppm.store(static_cast<std::int64_t>(std::llround((ratio - 1.0) * 1'000'000.0)),
                                   std::memory_order_relaxed);
   counters_->ring_occupancy_frames.store(static_cast<std::int64_t>(occupancy_frames),
                                          std::memory_order_relaxed);
 
-  if (resampled_.size() < input.size() * 2U)
+  if (output_count > resampled_.size())
   {
-    resampled_.resize(input.size() * 2U);
-    interleaved_float_.resize(input.size() * 2U);
-    const auto negotiated = device_->negotiated();
-    const std::size_t bytes_per_sample = audio::BytesPerSample(negotiated.format);
-    interleaved_bytes_.resize(input.size() * 2U * bytes_per_sample);
+    return false;
   }
-  const auto rr =
-      resampler_->process(input.data(), input.size(), resampled_.data(), resampled_.size(), ratio);
 
-  for (std::size_t i = 0; i < rr.produced; ++i)
+  for (std::size_t i = 0; i < output_count; ++i)
   {
-    interleaved_float_[2U * i] = resampled_[i].left;
-    interleaved_float_[2U * i + 1U] = resampled_[i].right;
+    interleaved_float_[2U * i] = output_samples[i].left;
+    interleaved_float_[2U * i + 1U] = output_samples[i].right;
   }
   const auto negotiated = device_->negotiated();
   const std::size_t bps = audio::BytesPerSample(negotiated.format);
-  for (std::size_t i = 0; i < rr.produced * 2U; ++i)
+  for (std::size_t i = 0; i < output_count * 2U; ++i)
   {
     audio::EncodeOneSample(interleaved_float_[i], negotiated.format, interleaved_bytes_.data() + (i * bps));
   }
 
-  const std::int64_t written =
-      device_->writeInterleaved(interleaved_bytes_.data(), static_cast<std::uint32_t>(rr.produced));
-  if (written < 0)
+  std::size_t total_written = 0;
+  const std::size_t frame_bytes = 2U * bps;
+  while (total_written < output_count)
   {
-    (void)device_->recoverXrun(static_cast<int>(written));
-    controller_->reset();
-    resampler_->reset();
-    counters_->playback_xruns.fetch_add(1, std::memory_order_relaxed);
-    return false;
+    const std::int64_t written = device_->writeInterleaved(
+        interleaved_bytes_.data() + (total_written * frame_bytes),
+        static_cast<std::uint32_t>(output_count - total_written));
+    if (written < 0)
+    {
+      counters_->playback_xruns.fetch_add(1, std::memory_order_relaxed);
+      if (device_->recoverXrun(static_cast<int>(written)) < 0)
+      {
+        controller_->reset();
+        resampler_->reset();
+        pending_count_ = 0;
+        return false;
+      }
+      continue;
+    }
+    if (written == 0)
+    {
+      return false;
+    }
+    total_written += static_cast<std::size_t>(written);
   }
-  counters_->playback_frames.fetch_add(static_cast<std::uint64_t>(written), std::memory_order_relaxed);
+  counters_->playback_frames.fetch_add(static_cast<std::uint64_t>(total_written), std::memory_order_relaxed);
   return true;
 }
 

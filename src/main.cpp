@@ -7,6 +7,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "app/calibration_config.hpp"
@@ -36,6 +37,12 @@ namespace
 std::atomic<bool> g_running{true};
 
 void SignalStop(const int) { g_running.store(false, std::memory_order_relaxed); }
+
+struct PlaybackBlockRef
+{
+  std::size_t slot = 0;
+  std::size_t frames = 0;
+};
 #endif
 
 void PrintUsage()
@@ -151,8 +158,10 @@ int main(int argc, char** argv)
     const auto calibration = sonitude::app::LoadCalibrationFromFile(runtime_config.calibration_path);
     sonitude::app::ValidateCalibrationConfig(
         calibration, geometry_ids, runtime_config.capture.sample_rate_hz);
-    sonitude::dsp::CalibrationApplier calibration_applier(
-        calibration.channels, runtime_config.capture.sample_rate_hz, runtime_config.calibration_dc_block_hz);
+    sonitude::dsp::CalibrationApplier calibration_applier(calibration.channels,
+                                                          geometry_ids,
+                                                          runtime_config.capture.sample_rate_hz,
+                                                          runtime_config.calibration_dc_block_hz);
 
     std::unique_ptr<sonitude::spatial::IDoaProvider> provider;
     std::vector<sonitude::spatial::MockDoaEvent> mock_events;
@@ -204,8 +213,9 @@ int main(int argc, char** argv)
     std::vector<sonitude::dsp::StereoSample> stereo(period_frames);
     std::vector<std::vector<sonitude::dsp::StereoSample>> playback_blocks(
         kPlaybackRingSlots, std::vector<sonitude::dsp::StereoSample>(period_frames));
-    sonitude::rt::SpscRing<std::size_t> playback_ring(32);
+    sonitude::rt::SpscRing<PlaybackBlockRef> playback_ring(32);
     std::size_t write_slot = 0;
+    std::size_t software_queued_frames = 0;
     bool playback_started = false;
     constexpr std::size_t kPrefillBlocks = 2;
 
@@ -213,7 +223,53 @@ int main(int argc, char** argv)
     sonitude::audio::BeamformerSteering last_target{};
     bool have_target = false;
     const auto start_tp = std::chrono::steady_clock::now();
-    auto last_stats_tp = start_tp;
+    std::jthread control_thread;
+    if (mode == "beamform")
+    {
+      control_thread = std::jthread([&]
+      {
+        try
+        {
+          while (g_running.load(std::memory_order_relaxed))
+          {
+            const auto now_ns = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - start_tp)
+                    .count());
+            control_loop.tick(now_ns);
+            counters.control_state.store(static_cast<std::uint8_t>(conversation.state()),
+                                         std::memory_order_relaxed);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          }
+        }
+        catch (const std::exception& ex)
+        {
+          std::cerr << "Control thread failed: " << ex.what() << '\n';
+          g_running.store(false, std::memory_order_relaxed);
+        }
+      });
+    }
+    std::jthread telemetry_thread([&]
+    {
+      const auto period = std::chrono::milliseconds(runtime_config.telemetry.stats_period_ms);
+      while (g_running.load(std::memory_order_relaxed))
+      {
+        std::this_thread::sleep_for(period);
+        if (!g_running.load(std::memory_order_relaxed))
+        {
+          break;
+        }
+        std::cout << "telemetry: cap_xruns=" << counters.capture_xruns.load(std::memory_order_relaxed)
+                  << " pb_xruns=" << counters.playback_xruns.load(std::memory_order_relaxed)
+                  << " ring_overruns=" << counters.ring_overruns.load(std::memory_order_relaxed)
+                  << " ring_underruns=" << counters.ring_underruns.load(std::memory_order_relaxed)
+                  << " asrc_ppm=" << counters.asrc_ratio_ppm.load(std::memory_order_relaxed)
+                  << " occupancy=" << counters.ring_occupancy_frames.load(std::memory_order_relaxed)
+                  << " sup_gain_milli=" << counters.suppressor_gain_milli.load(std::memory_order_relaxed)
+                  << " state=" << static_cast<int>(counters.control_state.load(std::memory_order_relaxed))
+                  << '\n';
+      }
+    });
     while (g_running.load(std::memory_order_relaxed))
     {
       std::size_t frame_count = 0;
@@ -237,10 +293,6 @@ int main(int argc, char** argv)
       }
       else
       {
-        const auto now_tp = std::chrono::steady_clock::now();
-        const auto now_ns = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(now_tp - start_tp).count());
-        control_loop.tick(now_ns);
         const auto snapshot = steering_reader.acquire();
         if (!have_target || std::fabs(snapshot.target.azimuth_deg - last_target.azimuth_deg) > 0.01F ||
             std::fabs(snapshot.target.elevation_deg - last_target.elevation_deg) > 0.01F)
@@ -279,9 +331,13 @@ int main(int argc, char** argv)
                 playback_blocks[write_slot].begin());
       const std::size_t written_slot = write_slot;
       write_slot = (write_slot + 1U) % playback_blocks.size();
-      if (!playback_ring.push(written_slot))
+      if (!playback_ring.push({written_slot, frame_count}))
       {
         counters.ring_overruns.fetch_add(1, std::memory_order_relaxed);
+      }
+      else
+      {
+        software_queued_frames += frame_count;
       }
 
       if (!playback_started && playback_ring.size() >= kPrefillBlocks)
@@ -291,14 +347,14 @@ int main(int argc, char** argv)
 
       if (playback_started)
       {
-        std::size_t slot = 0;
-        if (playback_ring.pop(slot))
+        PlaybackBlockRef block;
+        if (playback_ring.pop(block))
         {
-          const std::size_t software_queued = playback_ring.size() * frame_count;
+          software_queued_frames -= block.frames;
           const std::size_t device_queued = pb.playbackQueuedFrames();
-          const std::size_t occupancy = software_queued + device_queued;
+          const std::size_t occupancy = software_queued_frames + device_queued;
           (void)pb_worker.writeStereo(
-              std::span<const sonitude::dsp::StereoSample>(playback_blocks[slot].data(), frame_count),
+              std::span<const sonitude::dsp::StereoSample>(playback_blocks[block.slot].data(), block.frames),
               occupancy);
         }
         else
@@ -307,20 +363,6 @@ int main(int argc, char** argv)
         }
       }
 
-      const auto now = std::chrono::steady_clock::now();
-      if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stats_tp).count() >=
-          runtime_config.telemetry.stats_period_ms)
-      {
-        std::cout << "telemetry: cap_xruns=" << counters.capture_xruns.load(std::memory_order_relaxed)
-                  << " pb_xruns=" << counters.playback_xruns.load(std::memory_order_relaxed)
-                  << " ring_overruns=" << counters.ring_overruns.load(std::memory_order_relaxed)
-                  << " ring_underruns=" << counters.ring_underruns.load(std::memory_order_relaxed)
-                  << " asrc_ppm=" << counters.asrc_ratio_ppm.load(std::memory_order_relaxed)
-                  << " occupancy=" << counters.ring_occupancy_frames.load(std::memory_order_relaxed)
-                  << " sup_gain_milli=" << counters.suppressor_gain_milli.load(std::memory_order_relaxed)
-                  << " state=" << static_cast<int>(conversation.state()) << '\n';
-        last_stats_tp = now;
-      }
     }
     return 0;
 #else

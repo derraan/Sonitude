@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "app/calibration_config.hpp"
@@ -15,6 +16,7 @@ class CalibrationApplier
 {
  public:
   CalibrationApplier(const std::vector<app::CalibrationChannel>& channels,
+                     const std::vector<std::string>& input_channel_ids,
                      std::uint32_t sample_rate_hz,
                      float dc_block_hz);
   audio::MicFrame process(const audio::MicFrame& in);

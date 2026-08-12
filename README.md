@@ -134,9 +134,9 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 **PI controller** (`AsrcController`, `src/dsp/asrc_controller.hpp`):
 
 - Input: playback **buffer occupancy** (frames queued)
-- Error: `occupancy - target_buffer_frames`
+- Error: `target_buffer_frames - occupancy`
 - Output: resample **ratio** clamped to `[min_ratio, max_ratio]` with slew-limited steps
-- Too full → ratio > 1 (play faster); too empty → ratio < 1 (play slower)
+- Too full → ratio < 1 (generate fewer playback frames); too empty → ratio > 1 (generate more)
 - Telemetry: `asrc_ratio_ppm`
 
 **Stereo resampler** (`IStereoResampler`, `PlaybackWorker`):
@@ -236,7 +236,7 @@ Example install (Debian/Raspberry Pi OS):
 
 ```bash
 sudo apt update
-sudo apt install -y cmake ninja-build g++ libyaml-cpp-dev libspdlog-dev
+sudo apt install -y cmake ninja-build g++ libasound2-dev libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
 ```
 
 

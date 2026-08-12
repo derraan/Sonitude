@@ -21,7 +21,9 @@ class AsrcController
 
   double update(const double occupancy_frames)
   {
-    const double error = occupancy_frames - cfg_.target_buffer_frames;
+    // Ratio is output/input: a full playback queue must produce fewer output
+    // frames, while an empty queue must produce more.
+    const double error = cfg_.target_buffer_frames - occupancy_frames;
     const double candidate_integral = integral_ + error;
     const double unclamped_ratio = 1.0 + (cfg_.kp * error) + (cfg_.ki * candidate_integral);
     const double saturated_ratio = std::clamp(unclamped_ratio, cfg_.min_ratio, cfg_.max_ratio);
