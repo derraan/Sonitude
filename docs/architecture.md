@@ -2,7 +2,7 @@
 
 This document defines the target architecture, real-time latency budget, ODAS integration posture, and ownership constraints. `docs/milestones.md` remains authoritative for gate evidence; `docs/CodebaseState.md` for scope vetoes and interface snapshots.
 
-Last updated: 2026-08-12.
+Last updated: 2026-08-13.
 
 ---
 
@@ -496,13 +496,14 @@ This satisfies reproducibility goals of the openMHA platform [1] while keeping o
 ## Current implementation status
 
 
-| Area                                     | Status                                                     |
-| ---------------------------------------- | ---------------------------------------------------------- |
-| ALSA capture/playback, passthrough, ASRC | Implemented (M1–M2, gates pending Pi soak)                 |
-| Calibration load/apply/tools             | Implemented (M3, HW sweep pending)                         |
-| Beamformer, ODAS adapter, state machine  | Planned (M4–M6); code on integration branch, not on `main` |
-| Suppression, latency instrumentation     | Planned (M7–M8)                                            |
-| ODAS latency / alternative survey        | Documented here; **not measured on project hardware**      |
+| Area                                     | Status                                                                |
+| ---------------------------------------- | --------------------------------------------------------------------- |
+| ALSA capture/playback, passthrough, ASRC | Implemented (M1–M2, gates pending Pi soak)                           |
+| Calibration load/apply/tools             | Implemented (M3, HW sweep pending)                                   |
+| Beamformer, ODAS adapter, state machine  | Implemented in code; milestone-gate evidence still pending (M4–M6)   |
+| Suppression, limiter                     | Implemented in beamform path; milestone-gate evidence pending (M7)   |
+| Latency instrumentation                  | Pending hardware measurement and reporting (M8)                       |
+| ODAS latency / alternative survey        | Documented here; **not measured on project hardware**                 |
 | openMHA adaptation (reference + offline) | Documented here ([§Sonitude adaptation](#sonitude-adaptation-of-openmha-design)); not integrated in runtime |
 
 

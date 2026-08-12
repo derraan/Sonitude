@@ -2,7 +2,7 @@
 
 Unified tracker for Sonitude core: **global scope, guardrails, user veto checkboxes**, **DSP signal path**, directory layout, milestone reality, key interfaces, config schema, tests, conventions, ODAS posture, and CMake wiring. Treat this document as the living snapshot; `docs/milestones.md` **remains authoritative for milestone gates**. Unchecked scope vetoes are binding on Cursor; checked vetoes explicitly authorize otherwise-prohibited work.
 
-Last updated: 2026-08-12.
+Last updated: 2026-08-13.
 
 ### Implementation status snapshot (M4–M7)
 
@@ -313,10 +313,10 @@ Sonitude/
 | `src/audio/channel_extractor.hpp`                                          | Container→6-mic extract                                                        |
 | `src/audio/wav_io.hpp/.cpp`                                                | Multichannel WAV read/write                                                    |
 | `src/audio/alsa/*`                                                         | Probe, device open, capture/playback workers                                   |
-| `src/dsp/calibration_applier.*`                                            | Polarity/gain/DC + HP (delay not applied yet)                                  |
+| `src/dsp/calibration_applier.*`                                            | Polarity/gain/DC + HP (delay applied in beamformer stage)                      |
 | `src/dsp/resampler.hpp`                                                    | `IStereoResampler`                                                             |
 | `src/dsp/resampler_linear.*`                                               | Linear fallback resampler                                                      |
-| `src/dsp/resampler_src.cpp`                                                | libsamplerate or cubic fallback factory                                        |
+| `src/dsp/resampler_src.cpp`                                                | libsamplerate or linear fallback factory                                       |
 | `src/dsp/asrc_controller.hpp`                                              | Occupancy PI ratio controller                                                  |
 | `src/rt/spsc_ring.hpp`                                                     | Lock-free SPSC ring                                                            |
 | `src/rt/block_pool.hpp`                                                    | Preallocated block pool on SPSC free-list                                      |
@@ -394,7 +394,7 @@ struct StereoFrame
 }  // namespace sonitude::audio
 ```
 
-No audio **block** type beyond `std::vector<MicFrame>` used by workers. `BeamformerSteering` exists; no beamformer class.
+No custom audio **block** class beyond `std::vector<MicFrame>` in workers; beamformer runtime is implemented in `src/dsp/beamformer.*`.
 
 ### Config structs — `src/app/config.hpp`
 
@@ -451,7 +451,7 @@ void ValidateRuntimeConfig(const RuntimeConfig& config);
 void ValidateGeometryConfig(const GeometryConfig& geometry);
 ```
 
-Steering / zones / SM / ODAS fields are **fully parsed and validated**; no runtime consumers yet.
+Steering / zones / state-machine / ODAS fields are fully parsed and validated and are consumed by runtime control components (`ControlLoop`, `ConversationStateMachine`, and `IDoaProvider` adapters).
 
 ### Calibration — config + apply
 
@@ -524,7 +524,7 @@ class AsrcController
 };
 ```
 
-`SONITUDE_WITH_LIBSAMPLERATE_ENABLED` is forced to `0` in CMake; `CreateSrcResampler()` falls back to cubic.
+`SONITUDE_WITH_LIBSAMPLERATE_ENABLED` is set by CMake based on detected libsamplerate support; `CreateSrcResampler()` uses libsamplerate when enabled, otherwise falls back to linear interpolation.
 
 ### SPSC / pool / telemetry
 
@@ -589,7 +589,7 @@ WavData ReadWavFile(const std::string& path);
 
 Supports multichannel; tests round-trip 6ch S16.
 
-### Spatial / VAD stubs (M5/M6 hooks)
+### Spatial / VAD interfaces
 
 ```7:14:src/spatial/spatial_types.hpp
 struct SourceObservation
@@ -670,7 +670,7 @@ Validation bounds of note: `steering_ramp_ms` ∈ [10, 500], `ambient_floor_line
 
 **Registration:** single `add_test(NAME sonitude_unit_tests COMMAND sonitude_unit_tests)` — no Catch2/GTest; local `Require()` + exceptions.
 
-**Helpers:** no shared signal-generator library. Synthetic sine lives in `calibration_capture.cpp` (500+100·ch Hz). Plan says M4 WAV harness / M5 mock trajectories go under `tests/integration/` (README only).
+**Helpers:** shared deterministic signal helpers live in `tests/support/synth_signals.hpp`; calibration capture still includes a dedicated synthetic sine generator for tool output.
 
 ---
 
@@ -688,10 +688,11 @@ Validation bounds of note: `steering_ramp_ms` ∈ [10, 500], `ambient_floor_line
 - `src/audio/` — PCM/WAV; `alsa/` gated by `SONITUDE_WITH_ALSA`
 - `src/dsp/` — calibration + resampler/ASRC
 - `src/rt/` — lock-free + scheduling + counters
-- `src/spatial/`, `src/vad/` — header-only stubs
-- **No** `src/beamformer/`, `src/control/`, `src/odas/`, `src/calibration/` (calibration split across `app/` + `dsp/`)
+- `src/spatial/`, `src/vad/` — interfaces plus concrete ODAS/mock/tracker components
+- `src/control/` — conversation state machine, zone logic, control loop
+- Beamforming remains under `src/dsp/`; calibration remains split across `src/app/` + `src/dsp/`
 
-Architecture doc target: fanout → RT audio + control; control publishes atomic steering snapshots — **not coded yet**.
+Architecture target includes a future three-RT-thread split; current runtime still uses a single blocking capture/DSP/playback loop, with control and telemetry isolated to separate threads.
 
 ---
 
@@ -737,9 +738,9 @@ Architecture doc target: fanout → RT audio + control; control publishes atomic
 
 
 
-## 12. Planning takeaways for M4–M6
+## 12. Near-term hardening focus
 
-1. **M4** can hang off existing `GeometryConfig`, `SteeringConfig`, `BeamformerSteering`, WAV I/O, and `sonitude_wav_replay` stub; implement fractional delay-and-sum + `steering_ramp_ms` smoothing; fill `delay_samples` gap if calibration delay stays in M3.
-2. **M5** config/mock flags and `SourceObservation` are ready; need `IDoaProvider` + atomic snapshot handoff (architecture requires it; no helper yet).
-3. **M6** timings/zones/`IVad` are ready; need state machine + wrap-safe zone logic (rear zone crosses ±180) + hysteresis tests under `tests/unit` or `tests/integration`.
+1. Run Pi hardware gates for M1–M3 evidence (ALSA negotiation logs, soak/XRUN telemetry, calibration sweep validation).
+2. Complete M4/M5/M6 gate artifacts (`sonitude_wav_replay` comparisons, ODAS live soak, state-machine transition evidence).
+3. Complete M7 and M8 evidence (suppression behaviour validation, measured end-to-end latency and soak reporting).
 
