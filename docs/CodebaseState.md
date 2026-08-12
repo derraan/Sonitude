@@ -147,16 +147,18 @@ flowchart LR
 
 
 
-- **Sample format:** internal DSP uses **float** (`MicFrame` = six floats per time step). ALSA I/O converts to/from device PCM (typically S16).
+- **Sample format:** internal DSP uses **float** (`MicFrame` = six floats per time step). ALSA I/O converts to/from negotiated device PCM (S16/S24_3LE/S32/FLOAT32 are mapped).
 - **Clocks:** Pico capture and DAC playback are **independent** (~tens of ppm apart). Sustained output requires **ASRC** ratio control; never drop/duplicate samples for drift correction.
 
 
 
 ### Stage 1 — Capture and channel extract (feeds DSP)
 
-`CaptureWorker` reads one ALSA period from the 8-channel USB container; `ExtractActiveMicFrames` pulls the six active mics via `active_channel_map`.
+`CaptureWorker` reads one ALSA period from the 8-channel USB container; `ExtractActiveMicFrames` pulls the six active mics via `active_channel_map`. Startup now rejects configs where negotiated capture channels cannot satisfy that map.
 
 Each instant is a `MicFrame` (`std::array<float, 6>`). At 44.1 kHz with 64-frame periods, each read yields a block of 64 `MicFrame`s.
+
+`AlsaPcmDevice` stores `negotiated_` from the applied ALSA hardware state (`snd_pcm_hw_params_get_*`) instead of assuming the requested values were accepted unchanged.
 
 ### Stage 2 — Calibration (`CalibrationApplier`)
 
@@ -208,8 +210,8 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 - Error: `target_buffer_frames - occupancy`
 - Output: resample **ratio** clamped to `[min_ratio, max_ratio]` with slew-limited steps
 - Too full → ratio < 1 (generate fewer playback frames); too empty → ratio > 1 (generate more)
-- Startup validates the target against negotiated playback capacity and requires one block of headroom on both sides.
-- Telemetry: `asrc_ratio_ppm`
+- Startup validates the target against the occupancy range `[software_queue_frames, software_queue_frames + playback_buffer_frames]` and requires one block of headroom on both sides.
+- Telemetry: `asrc_ratio_ppm`, `playback_write_failures`
 
 **Stereo resampler** (`IStereoResampler`, `PlaybackWorker`):
 
@@ -553,8 +555,8 @@ class AsrcController
 struct TelemetryCounters
 {
   std::atomic<std::uint64_t> capture_frames{0};
-  // ... playback_frames, capture/playback_xruns, ring_over/underruns,
-  // asrc_ratio_ppm, ring_occupancy_frames
+  // ... playback_frames, capture/playback_xruns, playback_write_failures,
+  // ring_over/underruns, asrc_ratio_ppm, ring_occupancy_frames
 };
 ```
 

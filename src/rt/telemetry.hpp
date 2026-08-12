@@ -11,6 +11,7 @@ struct TelemetryCounters
   std::atomic<std::uint64_t> playback_frames{0};
   std::atomic<std::uint64_t> capture_xruns{0};
   std::atomic<std::uint64_t> playback_xruns{0};
+  std::atomic<std::uint64_t> playback_write_failures{0};
   std::atomic<std::uint64_t> ring_overruns{0};
   std::atomic<std::uint64_t> ring_underruns{0};
   std::atomic<std::int64_t> asrc_ratio_ppm{0};

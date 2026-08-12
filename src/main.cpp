@@ -128,6 +128,7 @@ int main(int argc, char** argv)
     std::signal(SIGINT, SignalStop);
     std::signal(SIGTERM, SignalStop);
     constexpr std::size_t kPrefillBlocks = 2;
+    constexpr std::size_t kMaxConsecutivePlaybackFailures = 16;
 
     sonitude::audio::alsa::AlsaPcmDevice cap;
     sonitude::audio::alsa::AlsaPcmDevice pb;
@@ -141,6 +142,7 @@ int main(int argc, char** argv)
         runtime_config,
         {.capture_sample_rate_hz = cap_params.sample_rate_hz,
          .playback_sample_rate_hz = pb_params.sample_rate_hz,
+         .capture_channels = cap_params.channels,
          .playback_buffer_frames = pb_params.buffer_frames,
          .software_queue_frames = desired_software_queue_frames,
          .minimum_asrc_headroom_frames = cap_params.period_frames});
@@ -231,6 +233,7 @@ int main(int argc, char** argv)
     std::size_t write_slot = 0;
     std::size_t software_queued_frames = 0;
     bool playback_started = false;
+    std::size_t consecutive_playback_write_failures = 0;
 
     std::cout << "Running " << mode << " mode. Press Ctrl+C to stop.\n";
     sonitude::audio::BeamformerSteering last_target{};
@@ -274,6 +277,7 @@ int main(int argc, char** argv)
         }
         std::cout << "telemetry: cap_xruns=" << counters.capture_xruns.load(std::memory_order_relaxed)
                   << " pb_xruns=" << counters.playback_xruns.load(std::memory_order_relaxed)
+                  << " pb_write_fail=" << counters.playback_write_failures.load(std::memory_order_relaxed)
                   << " ring_overruns=" << counters.ring_overruns.load(std::memory_order_relaxed)
                   << " ring_underruns=" << counters.ring_underruns.load(std::memory_order_relaxed)
                   << " asrc_ppm=" << counters.asrc_ratio_ppm.load(std::memory_order_relaxed)
@@ -366,9 +370,22 @@ int main(int argc, char** argv)
           software_queued_frames -= block.frames;
           const std::size_t device_queued = pb.playbackQueuedFrames();
           const std::size_t occupancy = software_queued_frames + device_queued;
-          (void)pb_worker.writeStereo(
+          if (!pb_worker.writeStereo(
               std::span<const sonitude::dsp::StereoSample>(playback_blocks[block.slot].data(), block.frames),
-              occupancy);
+              occupancy))
+          {
+            counters.playback_write_failures.fetch_add(1, std::memory_order_relaxed);
+            ++consecutive_playback_write_failures;
+            if (consecutive_playback_write_failures >= kMaxConsecutivePlaybackFailures)
+            {
+              std::cerr << "Playback write failed repeatedly; stopping audio loop.\n";
+              g_running.store(false, std::memory_order_relaxed);
+            }
+          }
+          else
+          {
+            consecutive_playback_write_failures = 0;
+          }
         }
         else
         {

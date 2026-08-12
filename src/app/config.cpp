@@ -305,20 +305,35 @@ void ValidateRuntimeAudioContract(const RuntimeConfig& config, const RuntimeAudi
   {
     throw std::runtime_error("negotiated playback sample rate does not match the configured DSP rate");
   }
+  if (contract.capture_channels == 0)
+  {
+    throw std::runtime_error("negotiated capture channel count must be non-zero");
+  }
+  for (const std::size_t channel : config.active_channel_map)
+  {
+    if (channel >= contract.capture_channels)
+    {
+      throw std::runtime_error(
+          "active channel map index exceeds negotiated capture channel count");
+    }
+  }
   if (!config.asrc.enabled)
   {
     return;
   }
 
-  const std::size_t usable_capacity =
-      contract.playback_buffer_frames + contract.software_queue_frames;
+  const std::size_t min_occupancy = contract.software_queue_frames;
+  const std::size_t max_occupancy =
+      contract.software_queue_frames + contract.playback_buffer_frames;
   const std::size_t target = config.asrc.target_buffer_frames;
   const std::size_t headroom = contract.minimum_asrc_headroom_frames;
-  if (usable_capacity == 0 || headroom == 0 || target < headroom ||
-      target >= usable_capacity || (usable_capacity - target) < headroom)
+  if (contract.playback_buffer_frames == 0 || max_occupancy < min_occupancy || headroom == 0 ||
+      target < min_occupancy || target > max_occupancy ||
+      (target - min_occupancy) < headroom || (max_occupancy - target) < headroom)
   {
     throw std::runtime_error(
-        "ASRC target_buffer_frames lacks headroom within negotiated playback capacity");
+        "ASRC target_buffer_frames must sit at least one negotiated block above the retained "
+        "software-queue floor and one block below negotiated playback capacity");
   }
 }
 

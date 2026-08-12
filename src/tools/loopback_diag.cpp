@@ -40,6 +40,7 @@ int main(int argc, char** argv)
         config,
         {.capture_sample_rate_hz = cap_params.sample_rate_hz,
          .playback_sample_rate_hz = pb_params.sample_rate_hz,
+         .capture_channels = cap_params.channels,
          .playback_buffer_frames = pb_params.buffer_frames,
          .software_queue_frames = 0,
          .minimum_asrc_headroom_frames = cap_params.period_frames});
@@ -63,6 +64,7 @@ int main(int argc, char** argv)
     const std::size_t period_frames = cap_worker.periodFrames();
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
     std::vector<sonitude::dsp::StereoSample> stereo(period_frames);
+    std::size_t playback_write_failures = 0;
 
     const auto t0 = std::chrono::steady_clock::now();
     while (true)
@@ -83,13 +85,17 @@ int main(int argc, char** argv)
         stereo[i].right = mic_frames[i][5];
       }
       const std::size_t occupancy = pb.playbackQueuedFrames();
-      (void)pb_worker.writeStereo(
-          std::span<const sonitude::dsp::StereoSample>(stereo.data(), frames_read), occupancy);
+      if (!pb_worker.writeStereo(
+              std::span<const sonitude::dsp::StereoSample>(stereo.data(), frames_read), occupancy))
+      {
+        ++playback_write_failures;
+      }
     }
 
     std::cout << "Loopback diagnostic complete: "
               << "capture_xruns=" << counters.capture_xruns.load()
               << " playback_xruns=" << counters.playback_xruns.load()
+              << " playback_write_failures=" << playback_write_failures
               << " asrc_ppm=" << counters.asrc_ratio_ppm.load() << "\n";
     return 0;
   }

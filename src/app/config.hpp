@@ -108,6 +108,7 @@ struct RuntimeAudioContract
 {
   std::uint32_t capture_sample_rate_hz = 0;
   std::uint32_t playback_sample_rate_hz = 0;
+  std::size_t capture_channels = 0;
   std::size_t playback_buffer_frames = 0;
   std::size_t software_queue_frames = 0;
   std::size_t minimum_asrc_headroom_frames = 0;
