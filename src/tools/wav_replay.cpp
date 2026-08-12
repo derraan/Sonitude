@@ -12,6 +12,8 @@
 #include "audio/audio_types.hpp"
 #include "audio/wav_io.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/limiter.hpp"
+#include "dsp/suppressor.hpp"
 
 namespace
 {
@@ -25,7 +27,8 @@ void PrintUsage()
 {
   std::cout << "Usage:\n"
             << "  sonitude_wav_replay --input <six_channel_wav> --config <runtime_yaml>\n"
-            << "                      --script <steering_csv> --output <mono_wav>\n";
+            << "                      --script <steering_csv> --output <mono_wav>\n"
+            << "                      [--enable-suppression] [--disable-limiter]\n";
 }
 
 std::vector<SteeringEvent> LoadSteeringScript(const std::string& path, const std::uint32_t sample_rate_hz)
@@ -81,6 +84,8 @@ int main(int argc, char** argv)
   std::string config_path = "config/default.yaml";
   std::string script_path;
   std::string output_path;
+  bool enable_suppression = false;
+  bool disable_limiter = false;
 
   for (int i = 1; i < argc; ++i)
   {
@@ -105,6 +110,14 @@ int main(int argc, char** argv)
     {
       PrintUsage();
       return 0;
+    }
+    else if (arg == "--enable-suppression")
+    {
+      enable_suppression = true;
+    }
+    else if (arg == "--disable-limiter")
+    {
+      disable_limiter = true;
     }
     else
     {
@@ -160,6 +173,15 @@ int main(int argc, char** argv)
     beamformer.configure(
         geometry, runtime.steering, calibration, input_wav.sample_rate_hz, runtime.capture.period_frames);
     beamformer.setTarget(events.front().target);
+    sonitude::dsp::ConservativeSuppressor suppressor;
+    suppressor.configure(
+        {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
+         .fade_ms = runtime.suppression.fade_ms,
+         .activity_threshold = runtime.suppression.activity_threshold,
+         .confidence_threshold = runtime.suppression.confidence_threshold},
+        input_wav.sample_rate_hz);
+    sonitude::dsp::PeakLimiter limiter;
+    limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
 
     std::vector<float> mono(frames, 0.0F);
     std::size_t event_index = 1;
@@ -174,6 +196,15 @@ int main(int argc, char** argv)
       const std::size_t count = std::min(kBlock, frames - start);
       beamformer.process(std::span<const sonitude::audio::MicFrame>(mic.data() + start, count),
                          std::span<float>(mono.data() + start, count));
+      if (enable_suppression)
+      {
+        suppressor.setControl(true, 1.0F);
+        suppressor.process(std::span<float>(mono.data() + start, count));
+      }
+      if (!disable_limiter)
+      {
+        limiter.process(std::span<float>(mono.data() + start, count));
+      }
     }
 
     sonitude::audio::WavData out;

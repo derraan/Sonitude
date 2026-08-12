@@ -24,6 +24,11 @@ steering:
   reference_mic_index: 0
   steering_ramp_ms: 150.0
   ambient_floor_linear: 0.2
+suppression:
+  enabled: false
+  fade_ms: 120.0
+  activity_threshold: 0.03
+  confidence_threshold: 0.6
 state_machine:
   activation_hold_ms: 400
   confirmation_hold_ms: 250
