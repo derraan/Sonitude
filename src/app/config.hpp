@@ -94,6 +94,7 @@ struct RuntimeConfig
   std::vector<std::size_t> active_channel_map;
   std::string geometry_path;
   std::string calibration_path;
+  float calibration_dc_block_hz = 20.0F;
   AsrcConfig asrc;
   SteeringConfig steering;
   SuppressionConfig suppression;

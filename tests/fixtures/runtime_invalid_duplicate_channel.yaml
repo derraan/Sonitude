@@ -11,6 +11,7 @@ playback:
 active_channel_map: [0, 1, 2, 2, 4, 5]
 geometry_path: "geometry_valid.yaml"
 calibration_path: "../../config/calibration_example.yaml"
+calibration_dc_block_hz: 20.0
 asrc:
   enabled: true
   allow_bypass_for_locked_bench: false

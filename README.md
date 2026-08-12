@@ -22,8 +22,8 @@ flowchart TB
     subgraph audio [Audio path — RT]
         Passthrough["Passthrough tap\nmics 4 and 5 → L/R"]
         BF["Delay-and-sum beamformer\nfractional delays + crossfade"]
-        Suppress["Suppression v1\nM7 planned"]
-        Limiter["Limiter\nplanned"]
+        Suppress["Suppression v1\nM7 implemented"]
+        Limiter["Limiter\nimplemented"]
         MonoStereo["Mono → duplicate stereo"]
         Asrc["ASRC: PI controller +\nIStereoResampler"]
         AlsaPb["ALSA playback worker"]
@@ -96,11 +96,11 @@ Per mic, per sample:
 1. **Polarity** — multiply by +1 or −1
 2. **DC subtract** — remove measured offset
 3. **Gain** — multiply by `gain_linear`
-4. **DC blocker** — one-pole high-pass (~20 Hz), `hp_a = 0.995`
+4. **DC blocker** — one-pole high-pass with `calibration_dc_block_hz` (default 20 Hz)
 
 `delay_samples` from calibration YAML is **not** applied in `CalibrationApplier` today. The beamformer (M4) applies per-channel delay (calibration + steering) in one fractional delay line per channel.
 
-### Stage 3 — Beamformer (M4; planned in tree, config/types ready)
+### Stage 3 — Beamformer (M4; implemented, validation in progress)
 
 Core **directional listening** DSP — **delay-and-sum**:
 
@@ -116,14 +116,14 @@ On-target speech adds coherently; off-axis energy is partially rejected (exact c
 
 
 
-### Stage 4 — Suppression (M7; planned)
+### Stage 4 — Suppression (M7; implemented, validation in progress)
 
 Conservative **distractor suppression** after beamforming, with explicit user selection and an **ambient floor**. v1 avoids MVDR/nulling and neural processing (**SCOPE-3**).
 
 ### Stage 5 — Mono → stereo
 
 - `--mode passthrough` **(today):** taps ear-cup mics 4 and 5 to L/R in `main.cpp` — no beamformer.
-- `--mode beamform` **(planned):** duplicate mono beam to both channels (no HRTF in v1).
+- `--mode beamform` **(implemented):** duplicate mono beam to both channels (no HRTF in v1).
 
 
 
@@ -145,7 +145,7 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 | Backend                            | When                                               | Method                                            |
 | ---------------------------------- | -------------------------------------------------- | ------------------------------------------------- |
 | libsamplerate (`SRC_SINC_FASTEST`) | Build with `SONITUDE_WITH_LIBSAMPLERATE_ENABLED=1` | Variable-ratio sinc                               |
-| Cubic linear (fallback)            | Default portable build                             | Linear interp; phase += `ratio` per output sample |
+| Linear (fallback)                  | Default portable build                             | Linear interp; phase += `1/ratio` per output sample |
 
 
 
@@ -161,10 +161,10 @@ Authoritative gate evidence: `[docs/milestones.md](docs/milestones.md)`.
 | **M1** | ALSA discovery and raw loopback  | `in_progress` | Device probe with negotiated params; raw capture-to-output; channel order validated |
 | **M2** | Real-time primitives             | `in_progress` | Lock-free/preallocated path; XRUN telemetry; ASRC interface; passthrough mode       |
 | **M3** | Calibration and offline analysis | `in_progress` | Calibration apply path; offline estimator; YAML report with backup-safe writes      |
-| **M4** | Beamformer                       | `pending`     | Fractional delay-and-sum; scripted steering WAV harness passes synthetic checks     |
+| **M4** | Beamformer                       | `in_progress` | Fractional delay-and-sum implemented; scripted steering WAV harness passes synthetic checks |
 | **M5** | ODAS control integration         | `pending`     | Mock provider + ODAS adapter; safe fallback on ODAS loss                            |
 | **M6** | Conversation state machine       | `pending`     | Deterministic hysteresis transitions; telemetry for state and confidence            |
-| **M7** | Suppression v1                   | `pending`     | One-distractor conservative policy; smooth fade in/out; safe fallback               |
+| **M7** | Suppression v1                   | `in_progress` | One-distractor conservative policy implemented; smooth fade in/out; safe fallback checks pending |
 | **M8** | Measurement and hardening        | `pending`     | Latency marker tooling; soak logs; measured latency percentiles reported            |
 
 
@@ -190,7 +190,7 @@ Default v1 baseline rules. Unchecked = guardrail active; checked in `[docs/Codeb
 | **SCOPE-4** | No unmeasured end-to-end latency claims                                                     | Only M8 impulse/loopback measurement may support latency statements |
 | **SCOPE-5** | No distance-estimation or strong automatic nulling claims; at most one suppressor in v1     | Avoids unsupported product statements and M7+ scope creep           |
 | **SCOPE-6** | No milestone marked complete without its observable gate (evidence in `docs/milestones.md`) | Staged delivery integrity                                           |
-| **SCOPE-7** | Pico firmware and neural/HRTF code remain out of tree — contracts only                      | Keeps host app repo focused; firmware stays in sibling repos        |
+| **SCOPE-7** | Pico firmware snapshot may be vendored for reference only; no host build coupling or host-side firmware edits | Keeps host app repo focused while preserving reproducible hardware contracts |
 
 
 Veto checkboxes and override log: `docs/CodebaseState.md` [§1](docs/CodebaseState.md#1-global-project-scope).
@@ -200,7 +200,7 @@ Veto checkboxes and override log: `docs/CodebaseState.md` [§1](docs/CodebaseSta
 See the [Milestones](#milestones) table above. Quick summary:
 
 - **Implemented:** scaffold, typed config, ALSA probe/workers, RT primitives (SPSC, block pool), ASRC + resampler, calibration load/apply/WAV tools, passthrough mode, unit tests.
-- **In progress / pending gates:** Pi hardware soak (M1–M3), M4 beamformer, M5 ODAS control, M6 state machine, M7 suppression, M8 latency measurement.
+- **In progress / pending gates:** Pi hardware soak (M1–M3), M4/M7 hardware evidence, M5 ODAS control gate, M6 state machine gate, M8 latency measurement.
 
 
 

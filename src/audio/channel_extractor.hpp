@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -10,11 +11,12 @@
 
 namespace sonitude::audio
 {
-inline std::vector<MicFrame> ExtractActiveMicFrames(const std::uint8_t* interleaved,
-                                                    const std::size_t frame_count,
-                                                    const std::size_t container_channels,
-                                                    const std::vector<std::size_t>& active_map,
-                                                    const PcmFormat format)
+inline void ExtractActiveMicFrames(const std::uint8_t* interleaved,
+                                   const std::size_t frame_count,
+                                   const std::size_t container_channels,
+                                   const std::vector<std::size_t>& active_map,
+                                   const PcmFormat format,
+                                   std::span<MicFrame> out_frames)
 {
   if (active_map.size() != kMicChannels)
   {
@@ -27,8 +29,11 @@ inline std::vector<MicFrame> ExtractActiveMicFrames(const std::uint8_t* interlea
       throw std::runtime_error("active map index exceeds container channel count");
     }
   }
+  if (out_frames.size() < frame_count)
+  {
+    throw std::runtime_error("output frame span is smaller than requested frame_count");
+  }
 
-  std::vector<MicFrame> out(frame_count);
   const std::size_t bps = BytesPerSample(format);
   const std::size_t frame_stride = container_channels * bps;
   for (std::size_t frame_idx = 0; frame_idx < frame_count; ++frame_idx)
@@ -40,8 +45,19 @@ inline std::vector<MicFrame> ExtractActiveMicFrames(const std::uint8_t* interlea
       const std::size_t src_channel = active_map[mic];
       frame[mic] = DecodeOneSample(frame_ptr + (src_channel * bps), format);
     }
-    out[frame_idx] = frame;
+    out_frames[frame_idx] = frame;
   }
+}
+
+inline std::vector<MicFrame> ExtractActiveMicFrames(const std::uint8_t* interleaved,
+                                                    const std::size_t frame_count,
+                                                    const std::size_t container_channels,
+                                                    const std::vector<std::size_t>& active_map,
+                                                    const PcmFormat format)
+{
+  std::vector<MicFrame> out(frame_count);
+  ExtractActiveMicFrames(
+      interleaved, frame_count, container_channels, active_map, format, std::span<MicFrame>(out));
   return out;
 }
 }  // namespace sonitude::audio

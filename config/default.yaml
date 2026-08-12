@@ -13,6 +13,7 @@ playback:
 active_channel_map: [0, 1, 2, 3, 4, 5]
 geometry_path: "geometry_soundbubble_initial.yaml"
 calibration_path: "calibration_example.yaml"
+calibration_dc_block_hz: 20.0
 
 asrc:
   enabled: true

@@ -22,7 +22,16 @@ class AsrcController
   double update(const double occupancy_frames)
   {
     const double error = occupancy_frames - cfg_.target_buffer_frames;
-    integral_ += error;
+    const double candidate_integral = integral_ + error;
+    const double unclamped_ratio = 1.0 + (cfg_.kp * error) + (cfg_.ki * candidate_integral);
+    const double saturated_ratio = std::clamp(unclamped_ratio, cfg_.min_ratio, cfg_.max_ratio);
+    // Integral anti-windup: only integrate when not saturating, or when error drives back to center.
+    if ((saturated_ratio == unclamped_ratio) ||
+        ((saturated_ratio == cfg_.max_ratio) && error < 0.0) ||
+        ((saturated_ratio == cfg_.min_ratio) && error > 0.0))
+    {
+      integral_ = candidate_integral;
+    }
     double ratio = 1.0 + (cfg_.kp * error) + (cfg_.ki * integral_);
     ratio = std::clamp(ratio, cfg_.min_ratio, cfg_.max_ratio);
     const double min_step = last_ratio_ - cfg_.max_ratio_step;

@@ -1,5 +1,6 @@
 #include <chrono>
 #include <iostream>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -45,7 +46,14 @@ int main(int argc, char** argv)
         .target_buffer_frames = static_cast<double>(config.asrc.target_buffer_frames),
         .max_ratio_step = 0.00005,
     });
-    sonitude::audio::alsa::PlaybackWorker pb_worker(&pb, resampler.get(), &ctl, &counters);
+    const bool asrc_enabled =
+        config.asrc.enabled && !config.asrc.allow_bypass_for_locked_bench;
+    sonitude::audio::alsa::PlaybackWorker pb_worker(
+        &pb, resampler.get(), &ctl, &counters, asrc_enabled);
+
+    const std::size_t period_frames = cap_worker.periodFrames();
+    std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
+    std::vector<sonitude::dsp::StereoSample> stereo(period_frames);
 
     const auto t0 = std::chrono::steady_clock::now();
     while (true)
@@ -55,18 +63,19 @@ int main(int argc, char** argv)
       {
         break;
       }
-      std::vector<sonitude::audio::MicFrame> mic_frames;
-      if (!cap_worker.readBlock(mic_frames))
+      std::size_t frames_read = 0;
+      if (!cap_worker.readBlock(std::span<sonitude::audio::MicFrame>(mic_frames), &frames_read))
       {
         continue;
       }
-      std::vector<sonitude::dsp::StereoSample> stereo(mic_frames.size());
-      for (std::size_t i = 0; i < mic_frames.size(); ++i)
+      for (std::size_t i = 0; i < frames_read; ++i)
       {
         stereo[i].left = mic_frames[i][4];
         stereo[i].right = mic_frames[i][5];
       }
-      (void)pb_worker.writeStereo(stereo, mic_frames.size());
+      const std::size_t occupancy = pb.playbackQueuedFrames();
+      (void)pb_worker.writeStereo(
+          std::span<const sonitude::dsp::StereoSample>(stereo.data(), frames_read), occupancy);
     }
 
     std::cout << "Loopback diagnostic complete: "

@@ -41,6 +41,7 @@ void TestRuntimeConfigValid()
   Require(config.active_channel_map.size() == sonitude::audio::kMicChannels,
           "valid runtime config did not load six channels");
   Require(config.suppression.fade_ms > 0.0F, "suppression config should parse from runtime YAML");
+  Require(config.calibration_dc_block_hz > 0.0F, "calibration_dc_block_hz should parse from runtime YAML");
 }
 
 void TestRuntimeConfigDuplicateChannelFails()

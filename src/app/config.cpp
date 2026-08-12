@@ -96,6 +96,7 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
 
   config.geometry_path = ResolvePath(path, RequireScalar<std::string>(root, "geometry_path"));
   config.calibration_path = ResolvePath(path, RequireScalar<std::string>(root, "calibration_path"));
+  config.calibration_dc_block_hz = RequireScalar<float>(root, "calibration_dc_block_hz");
 
   const YAML::Node asrc = root["asrc"];
   config.asrc.enabled = RequireScalar<bool>(asrc, "enabled");
@@ -218,6 +219,11 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   if (config.asrc.target_buffer_frames == 0)
   {
     throw std::runtime_error("ASRC target buffer must be non-zero");
+  }
+
+  if (config.calibration_dc_block_hz <= 0.0F || config.calibration_dc_block_hz > 500.0F)
+  {
+    throw std::runtime_error("calibration_dc_block_hz must be in (0, 500]");
   }
 
   if (config.steering.reference_mic_index >= config.active_channel_map.size())

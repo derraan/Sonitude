@@ -338,7 +338,7 @@ openMHA ships reference implementations (with reproducible `.cfg` chains in `ref
 
 ## Sonitude adaptation of openMHA (design)
 
-Sonitude does **not** embed the openMHA runtime. **SCOPE-1** forbids JACK (openMHA's default live IO path), **SCOPE-7** forbids vendoring openMHA into `Sonitude/`, and **SCOPE-3** limits v1 to delay-and-sum plus one conservative suppressor. The adaptation is therefore a **documented port of algorithms, RT patterns, and validation methodology** — not a plugin-host integration.
+Sonitude does **not** embed the openMHA runtime. **SCOPE-1** forbids JACK (openMHA's default live IO path), and **SCOPE-3** limits v1 to delay-and-sum plus one conservative suppressor. The adaptation is therefore a **documented port of algorithms, RT patterns, and validation methodology** — not a plugin-host integration.
 
 ```mermaid
 flowchart TB
@@ -445,7 +445,7 @@ Out-of-tree procedure for milestone evidence — not part of the Pi runtime imag
 4. Compare openMHA `MHAIOFile` output against `sonitude_wav_replay` / unit tests (RMS, max sample delta, optional STFT diff).
 5. Record openMHA version, `.cfg` paths, and diff metrics in milestone gate evidence.
 
-This satisfies reproducibility goals of the openMHA platform [1] without violating **SCOPE-7**.
+This satisfies reproducibility goals of the openMHA platform [1] while keeping openMHA out of the Sonitude build graph.
 
 ---
 
@@ -459,7 +459,7 @@ This satisfies reproducibility goals of the openMHA platform [1] without violati
 | **SCOPE-1** (no JACK) | Blocks hosting `mha` with `MHAIOJack` in the live path; offline `MHAIOFile` only |
 | **SCOPE-2** (ODAS control-only) | No openMHA+ODAS hybrid audio chain |
 | **SCOPE-3** (no MVDR/neural) | DS + conservative suppressor only; MVDR/ADM/DNN openMHA configs are reference-only |
-| **SCOPE-7** (no vendoring) | Algorithm port + external golden renders; no `libopenmha` link |
+| **SCOPE-7** (reference-only firmware vendoring) | openMHA remains out-of-tree and out of the Sonitude build graph (`libopenmha` not linked) |
 
 **If SCOPE-1 is vetoed:** a sidecar `mha` on JACK could process a tap — still incompatible with direct `hw:` latency claims unless remeasured (M8).
 

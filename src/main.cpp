@@ -1,10 +1,12 @@
-#include <exception>
+#include <atomic>
 #include <chrono>
+#include <csignal>
+#include <exception>
 #include <cmath>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "app/calibration_config.hpp"
@@ -19,15 +21,23 @@
 #include "dsp/beamformer.hpp"
 #include "dsp/asrc_controller.hpp"
 #include "dsp/limiter.hpp"
+#include "dsp/calibration_applier.hpp"
 #include "dsp/resampler.hpp"
 #include "dsp/suppressor.hpp"
 #include "rt/param_snapshot.hpp"
+#include "rt/spsc_ring.hpp"
 #include "rt/telemetry.hpp"
 #include "spatial/mock_doa_provider.hpp"
 #include "spatial/odas_provider.hpp"
 
 namespace
 {
+#if defined(__linux__)
+std::atomic<bool> g_running{true};
+
+void SignalStop(const int) { g_running.store(false, std::memory_order_relaxed); }
+#endif
+
 void PrintUsage()
 {
   std::cout
@@ -108,6 +118,9 @@ int main(int argc, char** argv)
     }
 
 #if defined(__linux__)
+    std::signal(SIGINT, SignalStop);
+    std::signal(SIGTERM, SignalStop);
+
     sonitude::audio::alsa::AlsaPcmDevice cap;
     sonitude::audio::alsa::AlsaPcmDevice pb;
     cap.openCapture(runtime_config.capture);
@@ -121,9 +134,13 @@ int main(int argc, char** argv)
         .kp = runtime_config.asrc.pi_kp,
         .ki = runtime_config.asrc.pi_ki,
         .target_buffer_frames = static_cast<double>(runtime_config.asrc.target_buffer_frames),
-        .max_ratio_step = 0.00005,
+        .max_ratio_step = 0.0001,
     });
-    sonitude::audio::alsa::PlaybackWorker pb_worker(&pb, resampler.get(), &ctl, &counters);
+    const bool asrc_enabled =
+        runtime_config.asrc.enabled &&
+        !(runtime_config.asrc.allow_bypass_for_locked_bench && mode == "passthrough");
+    sonitude::audio::alsa::PlaybackWorker pb_worker(
+        &pb, resampler.get(), &ctl, &counters, asrc_enabled);
 
     std::vector<std::string> geometry_ids;
     geometry_ids.reserve(geometry.microphones.size());
@@ -134,6 +151,8 @@ int main(int argc, char** argv)
     const auto calibration = sonitude::app::LoadCalibrationFromFile(runtime_config.calibration_path);
     sonitude::app::ValidateCalibrationConfig(
         calibration, geometry_ids, runtime_config.capture.sample_rate_hz);
+    sonitude::dsp::CalibrationApplier calibration_applier(
+        calibration.channels, runtime_config.capture.sample_rate_hz, runtime_config.calibration_dc_block_hz);
 
     std::unique_ptr<sonitude::spatial::IDoaProvider> provider;
     std::vector<sonitude::spatial::MockDoaEvent> mock_events;
@@ -177,71 +196,131 @@ int main(int argc, char** argv)
     sonitude::dsp::PeakLimiter limiter;
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, runtime_config.capture.sample_rate_hz);
 
-    std::cout << "Running " << mode << " mode for 30 seconds...\n";
+    constexpr std::size_t kPlaybackRingSlots = 16;
+    const std::size_t period_frames = cap_worker.periodFrames();
+    std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
+    std::vector<sonitude::audio::MicFrame> calibrated_frames(period_frames);
+    std::vector<float> mono(period_frames, 0.0F);
+    std::vector<sonitude::dsp::StereoSample> stereo(period_frames);
+    std::vector<std::vector<sonitude::dsp::StereoSample>> playback_blocks(
+        kPlaybackRingSlots, std::vector<sonitude::dsp::StereoSample>(period_frames));
+    sonitude::rt::SpscRing<std::size_t> playback_ring(32);
+    std::size_t write_slot = 0;
+    bool playback_started = false;
+    constexpr std::size_t kPrefillBlocks = 2;
+
+    std::cout << "Running " << mode << " mode. Press Ctrl+C to stop.\n";
     sonitude::audio::BeamformerSteering last_target{};
     bool have_target = false;
     const auto start_tp = std::chrono::steady_clock::now();
-    for (int sec = 0; sec < 30; ++sec)
+    auto last_stats_tp = start_tp;
+    while (g_running.load(std::memory_order_relaxed))
     {
-      std::vector<sonitude::audio::MicFrame> mic_frames;
-      if (cap_worker.readBlock(mic_frames))
+      std::size_t frame_count = 0;
+      if (!cap_worker.readBlock(std::span<sonitude::audio::MicFrame>(mic_frames), &frame_count))
       {
-        std::vector<sonitude::dsp::StereoSample> stereo(mic_frames.size());
-        if (mode == "passthrough")
+        continue;
+      }
+
+      for (std::size_t i = 0; i < frame_count; ++i)
+      {
+        calibrated_frames[i] = calibration_applier.process(mic_frames[i]);
+      }
+
+      if (mode == "passthrough")
+      {
+        for (std::size_t i = 0; i < frame_count; ++i)
         {
-          for (std::size_t i = 0; i < mic_frames.size(); ++i)
-          {
-            stereo[i].left = mic_frames[i][4];
-            stereo[i].right = mic_frames[i][5];
-          }
+          stereo[i].left = calibrated_frames[i][4];
+          stereo[i].right = calibrated_frames[i][5];
+        }
+      }
+      else
+      {
+        const auto now_tp = std::chrono::steady_clock::now();
+        const auto now_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now_tp - start_tp).count());
+        control_loop.tick(now_ns);
+        const auto snapshot = steering_reader.acquire();
+        if (!have_target || std::fabs(snapshot.target.azimuth_deg - last_target.azimuth_deg) > 0.01F ||
+            std::fabs(snapshot.target.elevation_deg - last_target.elevation_deg) > 0.01F)
+        {
+          beamformer.setTarget(snapshot.target);
+          last_target = snapshot.target;
+          have_target = true;
+        }
+        std::fill(mono.begin(), mono.begin() + static_cast<std::ptrdiff_t>(frame_count), 0.0F);
+        beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+                           std::span<float>(mono.data(), frame_count));
+        if (runtime_config.suppression.enabled)
+        {
+          const bool focus_active = !snapshot.failsafe;
+          const float confidence = focus_active ? 1.0F : 0.0F;
+          suppressor.setControl(focus_active, confidence);
+          suppressor.process(std::span<float>(mono.data(), frame_count));
         }
         else
         {
-          const auto now_tp = std::chrono::steady_clock::now();
-          const auto now_ns = static_cast<std::uint64_t>(
-              std::chrono::duration_cast<std::chrono::nanoseconds>(now_tp - start_tp).count());
-          control_loop.tick(now_ns);
-          const auto snapshot = steering_reader.acquire();
-          if (!have_target || std::fabs(snapshot.target.azimuth_deg - last_target.azimuth_deg) > 0.01F ||
-              std::fabs(snapshot.target.elevation_deg - last_target.elevation_deg) > 0.01F)
-          {
-            beamformer.setTarget(snapshot.target);
-            last_target = snapshot.target;
-            have_target = true;
-          }
-          std::vector<float> mono(mic_frames.size(), 0.0F);
-          beamformer.process(mic_frames, mono);
-          if (runtime_config.suppression.enabled)
-          {
-            const bool focus_active = !snapshot.failsafe;
-            const float confidence = focus_active ? 1.0F : 0.0F;
-            suppressor.setControl(focus_active, confidence);
-            suppressor.process(mono);
-          }
-          else
-          {
-            suppressor.setControl(false, 0.0F);
-          }
-          limiter.process(mono);
-          counters.suppressor_gain_milli.store(
-              static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)));
-          for (std::size_t i = 0; i < mic_frames.size(); ++i)
-          {
-            stereo[i].left = mono[i];
-            stereo[i].right = mono[i];
-          }
+          suppressor.setControl(false, 0.0F);
         }
-        (void)pb_worker.writeStereo(stereo, mic_frames.size());
+        limiter.process(std::span<float>(mono.data(), frame_count));
+        counters.suppressor_gain_milli.store(
+            static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),
+            std::memory_order_relaxed);
+        for (std::size_t i = 0; i < frame_count; ++i)
+        {
+          stereo[i].left = mono[i];
+          stereo[i].right = mono[i];
+        }
       }
-      if ((sec % 5) == 0)
+
+      std::copy(stereo.begin(),
+                stereo.begin() + static_cast<std::ptrdiff_t>(frame_count),
+                playback_blocks[write_slot].begin());
+      const std::size_t written_slot = write_slot;
+      write_slot = (write_slot + 1U) % playback_blocks.size();
+      if (!playback_ring.push(written_slot))
       {
-        std::cout << "telemetry: cap_xruns=" << counters.capture_xruns.load()
-                  << " pb_xruns=" << counters.playback_xruns.load()
-                  << " asrc_ppm=" << counters.asrc_ratio_ppm.load()
-                  << " sup_gain_milli=" << counters.suppressor_gain_milli.load()
-                  << " state=" << static_cast<int>(conversation.state()) << '\n';
+        counters.ring_overruns.fetch_add(1, std::memory_order_relaxed);
       }
-      std::this_thread::sleep_for(std::chrono::seconds(1));
+
+      if (!playback_started && playback_ring.size() >= kPrefillBlocks)
+      {
+        playback_started = true;
+      }
+
+      if (playback_started)
+      {
+        std::size_t slot = 0;
+        if (playback_ring.pop(slot))
+        {
+          const std::size_t software_queued = playback_ring.size() * frame_count;
+          const std::size_t device_queued = pb.playbackQueuedFrames();
+          const std::size_t occupancy = software_queued + device_queued;
+          (void)pb_worker.writeStereo(
+              std::span<const sonitude::dsp::StereoSample>(playback_blocks[slot].data(), frame_count),
+              occupancy);
+        }
+        else
+        {
+          counters.ring_underruns.fetch_add(1, std::memory_order_relaxed);
+        }
+      }
+
+      const auto now = std::chrono::steady_clock::now();
+      if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stats_tp).count() >=
+          runtime_config.telemetry.stats_period_ms)
+      {
+        std::cout << "telemetry: cap_xruns=" << counters.capture_xruns.load(std::memory_order_relaxed)
+                  << " pb_xruns=" << counters.playback_xruns.load(std::memory_order_relaxed)
+                  << " ring_overruns=" << counters.ring_overruns.load(std::memory_order_relaxed)
+                  << " ring_underruns=" << counters.ring_underruns.load(std::memory_order_relaxed)
+                  << " asrc_ppm=" << counters.asrc_ratio_ppm.load(std::memory_order_relaxed)
+                  << " occupancy=" << counters.ring_occupancy_frames.load(std::memory_order_relaxed)
+                  << " sup_gain_milli=" << counters.suppressor_gain_milli.load(std::memory_order_relaxed)
+                  << " state=" << static_cast<int>(conversation.state()) << '\n';
+        last_stats_tp = now;
+      }
     }
     return 0;
 #else

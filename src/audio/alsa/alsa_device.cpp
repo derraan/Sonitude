@@ -77,6 +77,34 @@ std::int64_t AlsaPcmDevice::writeInterleaved(const std::uint8_t* src, const std:
 #endif
 }
 
+std::int64_t AlsaPcmDevice::availFrames() const
+{
+#if defined(__linux__)
+  if (pcm_ == nullptr)
+  {
+    return -1;
+  }
+  return snd_pcm_avail(static_cast<snd_pcm_t*>(pcm_));
+#else
+  return -1;
+#endif
+}
+
+std::size_t AlsaPcmDevice::playbackQueuedFrames() const
+{
+  const std::int64_t avail = availFrames();
+  if (avail < 0)
+  {
+    return 0;
+  }
+  const std::int64_t queued = static_cast<std::int64_t>(negotiated_.buffer_frames) - avail;
+  if (queued <= 0)
+  {
+    return 0;
+  }
+  return static_cast<std::size_t>(queued);
+}
+
 void AlsaPcmDevice::configure(const app::DeviceConfig& config, const bool is_capture)
 {
 #if defined(__linux__)
