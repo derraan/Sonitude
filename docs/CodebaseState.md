@@ -1,12 +1,198 @@
 # CodebaseState
 
-Unified tracker for Sonitude core: directory layout, milestone reality, key interfaces, config schema, tests, conventions, ODAS posture, and CMake wiring. Treat this document as the living snapshot; **`docs/milestones.md` remains authoritative for milestone gates**.
+Unified tracker for Sonitude core: **global scope, guardrails, user veto checkboxes**, **DSP signal path**, directory layout, milestone reality, key interfaces, config schema, tests, conventions, ODAS posture, and CMake wiring. Treat this document as the living snapshot; **`docs/milestones.md` remains authoritative for milestone gates**. Unchecked scope vetoes are binding on Cursor; checked vetoes explicitly authorize otherwise-prohibited work.
 
-Last updated: 2026-08-06.
+Last updated: 2026-08-12.
 
 ---
 
-## 1. Directory tree (Sonitude core)
+## 1. Global project scope
+
+Sonitude is a **staged Raspberry Pi 5 real-time audio proof-of-concept** for a six-microphone head-worn array. The v1 objective is **deterministic directional listening**: a custom low-latency **time-domain delay-and-sum beamformer** on the audio path, with **ODAS-driven (or mock) control** for steering, zones, and conversation state. Work lives in this repository only; sibling projects (Pico firmware, Sound Bubble neural code, HRTF tooling, source-localization experiments) stay in their own repos — reuse documented contracts and algorithmic ideas, do not vendor or modify them.
+
+### Target runtime path
+
+```text
+Pico UAC capture (6 active / 8 container)  --direct ALSA-->
+  calibration -> beamformer -> (optional suppression) -> limiter -> mono-to-stereo
+  -> ASRC drift control -> Creative USB DAC playback
+```
+
+```text
+ODAS (or mock) DOA  --non-blocking IPC-->  control thread
+  -> source tracking -> conversation state machine -> atomic steering snapshot
+  -> audio thread reads snapshot only (no blocking, no sockets on RT path)
+```
+
+- **Capture and playback:** direct ALSA on Raspberry Pi OS 64-bit (`hw:` devices). Windows is a portable build/test host for unit tests and offline tools; ALSA runtime is Linux-gated.
+- **Clocks:** capture and playback are independent; sustained output requires bounded ASRC ratio control, not sample drop/duplicate.
+- **Control vs audio:** ODAS and the state machine run on non-RT threads; the audio thread consumes only wait-free steering snapshots.
+
+### In scope (M0–M8 baseline milestones)
+
+| Area | v1 intent |
+|------|-----------|
+| M0–M1 | Scaffold, typed config, direct ALSA probe and raw I/O |
+| M2 | RT primitives (SPSC, block pool), ASRC, passthrough |
+| M3 | Per-channel calibration (polarity, gain, delay, DC), offline estimation |
+| M4 | `IBeamformer`, fractional delay-and-sum, steering ramp, offline WAV renderer |
+| M5 | Mock-first ODAS control, source association, failsafe steering publication |
+| M6 | Conversation state machine, wrap-safe zones, scripted VAD |
+| M7 | One conservative suppression policy, explicit user selection, ambient floor |
+| M8 | Measured latency markers, soak/hardening runbook — **claims only after measurement** |
+
+Milestone gates and evidence fields: **`docs/milestones.md`** (authoritative).
+
+### Scope guardrails (hard prohibitions)
+
+Default v1 baseline rules. **Unchecked veto = guardrail active** — Cursor must not implement the prohibited item. **Checked veto = user override** — Cursor may proceed with that scope change (e.g. route audio through ODAS, add PipeWire, ship MVDR).
+
+#### Scope veto protocol (for Cursor and reviewers)
+
+1. **Do not self-veto.** Only the user checks a veto box. Agents must not mark `[x]` unless the user explicitly asked to veto that ID in the current task or a prior committed edit to this file.
+2. **One ID at a time.** Vetoing SCOPE-2 (ODAS audio) does not imply SCOPE-1 or SCOPE-3 are waived.
+3. **Record the override.** When the user checks a veto, add a row to the [Veto log](#scope-veto-log) (date, ID, brief reason). Implementation work should reference the veto ID in commit/PR text.
+4. **Revert by unchecking.** Unchecking restores the guardrail; new code that depended on the veto should be removed or gated behind explicit config, not left as silent default behavior.
+
+| Veto | ID | Rule | Rationale |
+|:----:|----|------|-----------|
+| - [ ] | **SCOPE-1** | **No desktop audio servers in the critical path** (PipeWire, PulseAudio, JACK). | Adds buffering, routing, and latency variance; breaks the direct-ALSA RT contract. |
+| - [ ] | **SCOPE-2** | **No ODAS audio processing in the critical path** — ODAS is **control-only** (DOA/tracking → steering). All PCM beamforming stays in Sonitude. | Keeps audio latency and ownership on the RT path; ODAS loss must not stop audio. |
+| - [ ] | **SCOPE-3** | **No MVDR / LCMV / GSS / neural DSP** in v1 baseline milestones. | v1 is delay-and-sum plus one conservative suppressor; advanced algorithms are out of staged delivery. |
+| - [ ] | **SCOPE-4** | **No unmeasured end-to-end latency claims.** Period arithmetic and config defaults are not product latency. | Only M8 impulse/loopback measurement may support latency statements. |
+| - [ ] | **SCOPE-5** | **No distance-estimation or strong automatic nulling claims.** At most one selected suppressor in v1. | Avoids unsupported product statements and scope creep into M7+ behavior without gates. |
+| - [ ] | **SCOPE-6** | **No milestone marked complete without its observable gate** (evidence in `docs/milestones.md`). | Staged delivery integrity; no “implemented” without tests/evidence. |
+| - [ ] | **SCOPE-7** | **Pico firmware and neural/HRTF code remain out of tree** — contracts only, no vendoring into `Sonitude/`. | Keeps host app repo focused; firmware stays in sibling repos. |
+
+#### Scope veto log
+
+Fill when the user checks a veto above (newest first).
+
+| Date | ID | Reason (user-approved override) |
+|------|-----|--------------------------------|
+| | | |
+
+**Examples (do not check unless the user requests):**
+
+- Veto **SCOPE-2** → allow ODAS to process audio (beamform/null in ODAS; Sonitude becomes capture/playback shell).
+- Veto **SCOPE-1** → allow PipeWire/PulseAudio/JACK in the capture or playback path.
+- Veto **SCOPE-3** → allow MVDR/GSS/neural beamformer in the RT path.
+
+### Repository boundary
+
+| In this repo (`Sonitude/`) | Out of tree (sibling repos) |
+|----------------------------|-----------------------------|
+| Pi host app: ALSA, DSP, RT, control, tests, config | `mic-array-pico2w-usb6ch` (UAC firmware, vendored for reference only) |
+| ODAS adapter, mock provider, config generator | Sound Bubble, HRTF tooling, SSL experiments |
+| Offline WAV replay / calibration tools | |
+
+---
+
+## 2. How the DSP works
+
+Sonitude splits processing into a **real-time audio path** (PCM in → processed mono/stereo out) and a **control path** (DOA/state → steering angles). In v1, ODAS does **not** process audio; it only tells the beamformer where to point (unless **SCOPE-2** is vetoed).
+
+### Big picture
+
+```mermaid
+flowchart LR
+    Pico["Pico 6-mic UAC"] -->|"interleaved PCM"| Extract["Channel extract"]
+    Extract -->|"MicFrame x6"| Cal["CalibrationApplier"]
+    Cal --> BF["Delay-and-sum beamformer"]
+    Control["ODAS / state machine"] -.->|"steering snapshot"| BF
+    BF -->|"mono"| Dup["Duplicate L/R"]
+    Dup --> ASRC["Resampler + PI controller"]
+    ASRC --> DAC["USB DAC playback"]
+```
+
+- **Sample format:** internal DSP uses **float** (`MicFrame` = six floats per time step). ALSA I/O converts to/from device PCM (typically S16).
+- **Clocks:** Pico capture and DAC playback are **independent** (~tens of ppm apart). Sustained output requires **ASRC** ratio control; never drop/duplicate samples for drift correction.
+
+### Stage 1 — Capture and channel extract (feeds DSP)
+
+`CaptureWorker` reads one ALSA period from the 8-channel USB container; `ExtractActiveMicFrames` pulls the six active mics via `active_channel_map`.
+
+Each instant is a `MicFrame` (`std::array<float, 6>`). At 44.1 kHz with 64-frame periods, each read yields a block of 64 `MicFrame`s.
+
+### Stage 2 — Calibration (`CalibrationApplier`)
+
+**File:** `src/dsp/calibration_applier.cpp`
+
+Per mic, per sample:
+
+1. **Polarity** — multiply by +1 or −1
+2. **DC subtract** — remove measured offset
+3. **Gain** — multiply by `gain_linear`
+4. **DC blocker** — one-pole high-pass (~20 Hz), `hp_a = 0.995`
+
+`delay_samples` from calibration YAML is **not** applied in `CalibrationApplier` today. The beamformer (M4) applies per-channel delay (calibration + steering) in one fractional delay line per channel.
+
+### Stage 3 — Beamformer (M4; planned in tree, config/types ready)
+
+Core **directional listening** DSP — **delay-and-sum**:
+
+1. From mic geometry (metres) and speed of sound, compute **far-field delays** for steering direction **u** (azimuth + elevation).
+2. Delay each channel so all mics **align in phase** for sources from **u**.
+3. **Sum** with equal weights **1/6** → one **mono** sample.
+
+On-target speech adds coherently; off-axis energy is partially rejected (exact contrast depends on array aperture and frequency).
+
+- **Fractional delays:** 8-tap windowed-sinc FIR per channel; base delay keeps all effective delays positive across steering range.
+- **Click-free steering:** dual-beam **crossfade** over `steering_ramp_ms` (default 150 ms) when target changes — old and new delay sets rendered in parallel and blended.
+- **Control handoff:** non-RT thread publishes a **steering snapshot**; audio thread reads it only (no sockets/JSON on RT path).
+
+### Stage 4 — Suppression (M7; planned)
+
+Conservative **distractor suppression** after beamforming, with explicit user selection and an **ambient floor**. v1 avoids MVDR/nulling and neural processing (**SCOPE-3**).
+
+### Stage 5 — Mono → stereo
+
+- **`--mode passthrough` (today):** taps ear-cup mics 4 and 5 to L/R in `main.cpp` — no beamformer.
+- **`--mode beamform` (planned):** duplicate mono beam to both channels (no HRTF in v1).
+
+### Stage 6 — ASRC: resampler + PI controller (implemented)
+
+Capture and playback clocks drift even at the same nominal rate. Sonitude adjusts **playback speed** within bounds (default ±0.5%) instead of dropping/duplicating samples.
+
+**PI controller** (`AsrcController`, `src/dsp/asrc_controller.hpp`):
+
+- Input: playback **buffer occupancy** (frames queued)
+- Error: `occupancy - target_buffer_frames`
+- Output: resample **ratio** clamped to `[min_ratio, max_ratio]` with slew-limited steps
+- Too full → ratio > 1 (play faster); too empty → ratio < 1 (play slower)
+- Telemetry: `asrc_ratio_ppm`
+
+**Stereo resampler** (`IStereoResampler`, `PlaybackWorker`):
+
+| Backend | When | Method |
+|---------|------|--------|
+| libsamplerate (`SRC_SINC_FASTEST`) | Build with `SONITUDE_WITH_LIBSAMPLERATE_ENABLED=1` | Variable-ratio sinc |
+| Cubic linear (fallback) | Default portable build | Linear interp; phase += `ratio` per output sample |
+
+### Implemented vs planned (DSP blocks)
+
+| Block | Status |
+|-------|--------|
+| PCM format convert | Implemented (`src/audio/format_convert.hpp`) |
+| 6-ch extract | Implemented |
+| Calibration (pol/gain/DC/HP) | Implemented |
+| Calibration delay | Config only; beamformer when M4 lands |
+| Delay-and-sum beamformer | Planned (M4) |
+| Suppression / limiter | Planned (M7) |
+| ASRC PI + resampler | Implemented |
+| ODAS audio processing | Out of scope (**SCOPE-2**); control-only |
+
+### Offline vs real-time
+
+- **Real-time:** capture → calibration → beamformer → … → ASRC → ALSA playback on Pi.
+- **Offline:** `sonitude_wav_replay` (M4) renders beamformed WAV from 6-ch file + steering script without ALSA.
+- **Tests:** `asrc_sim_tests.cpp` simulates ppm mismatch without wall clock to verify PI stability.
+
+**One-line summary:** align six mics toward the talker (beamformer), clean per-mic errors (calibration), play at a slightly variable rate (ASRC) so independent USB clocks do not XRUN, while a separate control loop sets steering without touching PCM.
+
+---
+
+## 3. Directory tree (Sonitude core)
 
 Excluding `.git`, `build/`, and the vendored `mic-array-pico2w-usb6ch/` Pico firmware tree.
 
@@ -16,7 +202,7 @@ Sonitude/
 ├── CMakePresets.json           # default-debug / default-release presets
 ├── .clang-format
 ├── .gitignore / .gitattributes
-├── README.md                   # Scaffold overview (status text is stale vs milestones.md)
+├── README.md                   # Overview, DSP summary, build/run; links here for detail
 ├── cmake/
 │   └── Dependencies.cmake      # ALSA find; FetchContent yaml-cpp/spdlog
 ├── config/
@@ -83,7 +269,7 @@ Sonitude/
 
 ---
 
-## 2. Milestone status (M0–M3)
+## 4. Milestone status (M0–M8)
 
 From `docs/milestones.md`:
 
@@ -95,11 +281,11 @@ From `docs/milestones.md`:
 | **M3 Calibration** | `in_progress` | Loader/applier/writer/WAV/tools/tests; HW sweep pending |
 | **M4–M8** | `pending` | Config fields + stub types only |
 
-`README.md` still says "Milestone 0 only" — treat `docs/milestones.md` as authoritative.
+`README.md` links to this document for full DSP detail; treat `docs/milestones.md` as authoritative for gates.
 
 ---
 
-## 3. Key interfaces and types (verbatim)
+## 5. Key interfaces and types (verbatim)
 
 ### Audio types — `src/audio/audio_types.hpp`
 
@@ -343,7 +529,7 @@ public:
 
 ---
 
-## 4. Geometry format
+## 6. Geometry format
 
 `config/geometry_soundbubble_initial.yaml`:
 
@@ -365,7 +551,7 @@ microphones:
 
 ---
 
-## 5. Relevant `config/default.yaml` fields
+## 7. Relevant `config/default.yaml` fields
 
 | Section | Key values |
 |---------|------------|
@@ -379,7 +565,7 @@ Validation bounds of note: `steering_ramp_ms` ∈ [10, 500], `ambient_floor_line
 
 ---
 
-## 6. Tests
+## 8. Tests
 
 **Structure:** one executable `sonitude_unit_tests`; `config_tests.cpp` owns `main()` and calls:
 
@@ -396,7 +582,7 @@ Validation bounds of note: `steering_ramp_ms` ∈ [10, 500], `ambient_floor_line
 
 ---
 
-## 7. Conventions and layout
+## 9. Conventions and layout
 
 **Namespaces:** `sonitude::{app,audio,audio::alsa,dsp,rt,spatial,vad}`
 
@@ -415,7 +601,7 @@ Architecture doc target: fanout → RT audio + control; control publishes atomic
 
 ---
 
-## 8. ODAS integration present today
+## 10. ODAS integration present today
 
 **Present:**
 
@@ -432,7 +618,7 @@ Plan assumption: *"No installed ODAS instance or IPC contract is known. Keep `ID
 
 ---
 
-## 9. CMake targets — adding sources/tests
+## 11. CMake targets — adding sources/tests
 
 **Libraries**
 
@@ -452,7 +638,7 @@ Plan assumption: *"No installed ODAS instance or IPC contract is known. Keep `ID
 
 ---
 
-## 10. Planning takeaways for M4–M6
+## 12. Planning takeaways for M4–M6
 
 1. **M4** can hang off existing `GeometryConfig`, `SteeringConfig`, `BeamformerSteering`, WAV I/O, and `sonitude_wav_replay` stub; implement fractional delay-and-sum + `steering_ramp_ms` smoothing; fill `delay_samples` gap if calibration delay stays in M3.
 2. **M5** config/mock flags and `SourceObservation` are ready; need `IDoaProvider` + atomic snapshot handoff (architecture requires it; no helper yet).
