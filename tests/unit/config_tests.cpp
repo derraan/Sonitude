@@ -59,6 +59,59 @@ void TestRuntimeConfigDuplicateChannelFails()
   Require(threw, "duplicate channel map should throw");
 }
 
+void TestRuntimeAudioContract()
+{
+  auto config =
+      sonitude::app::LoadRuntimeConfigFromFile(FixturePath("tests/fixtures/runtime_valid.yaml"));
+  config.asrc.target_buffer_frames = 128;
+  const sonitude::app::RuntimeAudioContract valid{
+      .capture_sample_rate_hz = config.capture.sample_rate_hz,
+      .playback_sample_rate_hz = config.playback.sample_rate_hz,
+      .playback_buffer_frames = 192,
+      .software_queue_frames = 64,
+      .minimum_asrc_headroom_frames = 64,
+  };
+  sonitude::app::ValidateRuntimeAudioContract(config, valid);
+
+  bool rate_rejected = false;
+  try
+  {
+    auto mismatch = valid;
+    mismatch.playback_sample_rate_hz = 48000;
+    sonitude::app::ValidateRuntimeAudioContract(config, mismatch);
+  }
+  catch (const std::exception&)
+  {
+    rate_rejected = true;
+  }
+  Require(rate_rejected, "material negotiated playback-rate mismatch should throw");
+
+  bool capture_rate_rejected = false;
+  try
+  {
+    auto mismatch = valid;
+    mismatch.capture_sample_rate_hz = 48000;
+    sonitude::app::ValidateRuntimeAudioContract(config, mismatch);
+  }
+  catch (const std::exception&)
+  {
+    capture_rate_rejected = true;
+  }
+  Require(capture_rate_rejected, "material negotiated capture-rate mismatch should throw");
+
+  bool target_rejected = false;
+  try
+  {
+    config.asrc.target_buffer_frames = 256;
+    sonitude::app::ValidateRuntimeAudioContract(config, valid);
+  }
+  catch (const std::exception&)
+  {
+    target_rejected = true;
+  }
+  Require(target_rejected, "ASRC target at usable capacity should throw");
+}
+
 void TestGeometryValid()
 {
   const auto geometry =
@@ -95,6 +148,7 @@ int main()
   {
     TestRuntimeConfigValid();
     TestRuntimeConfigDuplicateChannelFails();
+    TestRuntimeAudioContract();
     TestGeometryValid();
     TestGeometryInvalidCountFails();
     TestAudioTypeInvariants();

@@ -28,7 +28,7 @@ struct AsrcConfig
   bool allow_bypass_for_locked_bench = false;
   double min_ratio = 0.995;
   double max_ratio = 1.005;
-  std::uint32_t target_buffer_frames = 256;
+  std::uint32_t target_buffer_frames = 128;
   double pi_kp = 0.0002;
   double pi_ki = 0.00001;
 };
@@ -104,8 +104,18 @@ struct RuntimeConfig
   std::vector<ZoneConfig> zones;
 };
 
+struct RuntimeAudioContract
+{
+  std::uint32_t capture_sample_rate_hz = 0;
+  std::uint32_t playback_sample_rate_hz = 0;
+  std::size_t playback_buffer_frames = 0;
+  std::size_t software_queue_frames = 0;
+  std::size_t minimum_asrc_headroom_frames = 0;
+};
+
 RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path);
 GeometryConfig LoadGeometryFromFile(const std::string& path);
 void ValidateRuntimeConfig(const RuntimeConfig& config);
+void ValidateRuntimeAudioContract(const RuntimeConfig& config, const RuntimeAudioContract& contract);
 void ValidateGeometryConfig(const GeometryConfig& geometry);
 }  // namespace sonitude::app

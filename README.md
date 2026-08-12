@@ -137,6 +137,8 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 - Error: `target_buffer_frames - occupancy`
 - Output: resample **ratio** clamped to `[min_ratio, max_ratio]` with slew-limited steps
 - Too full → ratio < 1 (generate fewer playback frames); too empty → ratio > 1 (generate more)
+- Default target: 128 frames; startup rejects targets without at least one block of negotiated headroom on each side
+- Negotiated capture/playback rates must exactly match their configured nominal DSP rates
 - Telemetry: `asrc_ratio_ppm`
 
 **Stereo resampler** (`IStereoResampler`, `PlaybackWorker`):

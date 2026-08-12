@@ -74,6 +74,7 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
 - Evidence/result:
   - RT primitives (SPSC ring, block pool, ASRC controller, resampler interfaces) and tests implemented.
   - M2 passthrough mode in `sonitude_realtime` implemented.
+  - Current runtime keeps blocking capture, DSP, and playback on one audio loop; separate RT capture/render/playback workers and per-thread scheduling remain pending M2 hardening gates.
   - Hardware soak evidence (30 min occupancy/XRUN log) pending Pi execution.
 
 ## Milestone 3 - Calibration and offline analysis

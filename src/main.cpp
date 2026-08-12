@@ -127,11 +127,25 @@ int main(int argc, char** argv)
 #if defined(__linux__)
     std::signal(SIGINT, SignalStop);
     std::signal(SIGTERM, SignalStop);
+    constexpr std::size_t kPrefillBlocks = 2;
 
     sonitude::audio::alsa::AlsaPcmDevice cap;
     sonitude::audio::alsa::AlsaPcmDevice pb;
     cap.openCapture(runtime_config.capture);
     pb.openPlayback(runtime_config.playback);
+    const auto cap_params = cap.negotiated();
+    const auto pb_params = pb.negotiated();
+    const std::size_t desired_software_queue_frames =
+        cap_params.period_frames * (kPrefillBlocks - 1U);
+    sonitude::app::ValidateRuntimeAudioContract(
+        runtime_config,
+        {.capture_sample_rate_hz = cap_params.sample_rate_hz,
+         .playback_sample_rate_hz = pb_params.sample_rate_hz,
+         .playback_buffer_frames = pb_params.buffer_frames,
+         .software_queue_frames = desired_software_queue_frames,
+         .minimum_asrc_headroom_frames = cap_params.period_frames});
+    const std::uint32_t dsp_sample_rate_hz = cap_params.sample_rate_hz;
+
     sonitude::rt::TelemetryCounters counters;
     sonitude::audio::alsa::CaptureWorker cap_worker(&cap, &runtime_config, &counters);
     auto resampler = sonitude::dsp::CreateSrcResampler();
@@ -157,10 +171,10 @@ int main(int argc, char** argv)
     }
     const auto calibration = sonitude::app::LoadCalibrationFromFile(runtime_config.calibration_path);
     sonitude::app::ValidateCalibrationConfig(
-        calibration, geometry_ids, runtime_config.capture.sample_rate_hz);
+        calibration, geometry_ids, dsp_sample_rate_hz);
     sonitude::dsp::CalibrationApplier calibration_applier(calibration.channels,
                                                           geometry_ids,
-                                                          runtime_config.capture.sample_rate_hz,
+                                                          dsp_sample_rate_hz,
                                                           runtime_config.calibration_dc_block_hz);
 
     std::unique_ptr<sonitude::spatial::IDoaProvider> provider;
@@ -194,16 +208,16 @@ int main(int argc, char** argv)
 
     sonitude::dsp::DelaySumBeamformer beamformer;
     beamformer.configure(
-        geometry, runtime_config.steering, calibration, runtime_config.capture.sample_rate_hz, 4096);
+        geometry, runtime_config.steering, calibration, dsp_sample_rate_hz, 4096);
     sonitude::dsp::ConservativeSuppressor suppressor;
     suppressor.configure(
         {.ambient_floor_linear = runtime_config.steering.ambient_floor_linear,
          .fade_ms = runtime_config.suppression.fade_ms,
          .activity_threshold = runtime_config.suppression.activity_threshold,
          .confidence_threshold = runtime_config.suppression.confidence_threshold},
-        runtime_config.capture.sample_rate_hz);
+        dsp_sample_rate_hz);
     sonitude::dsp::PeakLimiter limiter;
-    limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, runtime_config.capture.sample_rate_hz);
+    limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
 
     constexpr std::size_t kPlaybackRingSlots = 16;
     const std::size_t period_frames = cap_worker.periodFrames();
@@ -217,7 +231,6 @@ int main(int argc, char** argv)
     std::size_t write_slot = 0;
     std::size_t software_queued_frames = 0;
     bool playback_started = false;
-    constexpr std::size_t kPrefillBlocks = 2;
 
     std::cout << "Running " << mode << " mode. Press Ctrl+C to stop.\n";
     sonitude::audio::BeamformerSteering last_target{};

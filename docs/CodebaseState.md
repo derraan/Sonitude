@@ -205,9 +205,10 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 **PI controller** (`AsrcController`, `src/dsp/asrc_controller.hpp`):
 
 - Input: playback **buffer occupancy** (frames queued)
-- Error: `occupancy - target_buffer_frames`
+- Error: `target_buffer_frames - occupancy`
 - Output: resample **ratio** clamped to `[min_ratio, max_ratio]` with slew-limited steps
-- Too full → ratio > 1 (play faster); too empty → ratio < 1 (play slower)
+- Too full → ratio < 1 (generate fewer playback frames); too empty → ratio > 1 (generate more)
+- Startup validates the target against negotiated playback capacity and requires one block of headroom on both sides.
 - Telemetry: `asrc_ratio_ppm`
 
 **Stereo resampler** (`IStereoResampler`, `PlaybackWorker`):

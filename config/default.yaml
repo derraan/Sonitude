@@ -20,7 +20,7 @@ asrc:
   allow_bypass_for_locked_bench: false
   min_ratio: 0.995
   max_ratio: 1.005
-  target_buffer_frames: 256
+  target_buffer_frames: 128
   pi_kp: 0.0002
   pi_ki: 0.00001
 

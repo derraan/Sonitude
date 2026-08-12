@@ -57,6 +57,8 @@ ODAS/mock DOA -> source association -> source confidence and zone selection
 
 ## Thread model (target)
 
+Current M2 runtime uses one blocking capture/DSP/playback audio loop; the three RT-worker split and per-thread scheduling isolation below remain pending hardening gates. Control and telemetry already run on separate threads.
+
 - **Capture worker thread (RT):** ALSA capture, sequence accounting, ring publication.
 - **Audio render thread (RT):** beamforming, suppression policy, limiting, ASRC feed.
 - **Playback worker thread (RT):** ALSA playback, underrun recovery telemetry.

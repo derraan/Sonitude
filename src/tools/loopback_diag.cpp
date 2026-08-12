@@ -34,6 +34,15 @@ int main(int argc, char** argv)
     sonitude::audio::alsa::AlsaPcmDevice pb;
     cap.openCapture(config.capture);
     pb.openPlayback(config.playback);
+    const auto cap_params = cap.negotiated();
+    const auto pb_params = pb.negotiated();
+    sonitude::app::ValidateRuntimeAudioContract(
+        config,
+        {.capture_sample_rate_hz = cap_params.sample_rate_hz,
+         .playback_sample_rate_hz = pb_params.sample_rate_hz,
+         .playback_buffer_frames = pb_params.buffer_frames,
+         .software_queue_frames = 0,
+         .minimum_asrc_headroom_frames = cap_params.period_frames});
 
     sonitude::rt::TelemetryCounters counters;
     sonitude::audio::alsa::CaptureWorker cap_worker(&cap, &config, &counters);

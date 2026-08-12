@@ -181,6 +181,14 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error("capture sample_rate_hz is out of expected bounds");
   }
+  if (config.playback.sample_rate_hz < 16000 || config.playback.sample_rate_hz > 96000)
+  {
+    throw std::runtime_error("playback sample_rate_hz is out of expected bounds");
+  }
+  if (config.capture.sample_rate_hz != config.playback.sample_rate_hz)
+  {
+    throw std::runtime_error("capture and playback nominal sample rates must match");
+  }
 
   if (config.capture.period_frames == 0 || config.capture.periods < 2)
   {
@@ -284,6 +292,33 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     {
       throw std::runtime_error("zone azimuth bounds must be within [-180, 360]");
     }
+  }
+}
+
+void ValidateRuntimeAudioContract(const RuntimeConfig& config, const RuntimeAudioContract& contract)
+{
+  if (contract.capture_sample_rate_hz != config.capture.sample_rate_hz)
+  {
+    throw std::runtime_error("negotiated capture sample rate does not match the configured DSP rate");
+  }
+  if (contract.playback_sample_rate_hz != config.playback.sample_rate_hz)
+  {
+    throw std::runtime_error("negotiated playback sample rate does not match the configured DSP rate");
+  }
+  if (!config.asrc.enabled)
+  {
+    return;
+  }
+
+  const std::size_t usable_capacity =
+      contract.playback_buffer_frames + contract.software_queue_frames;
+  const std::size_t target = config.asrc.target_buffer_frames;
+  const std::size_t headroom = contract.minimum_asrc_headroom_frames;
+  if (usable_capacity == 0 || headroom == 0 || target < headroom ||
+      target >= usable_capacity || (usable_capacity - target) < headroom)
+  {
+    throw std::runtime_error(
+        "ASRC target_buffer_frames lacks headroom within negotiated playback capacity");
   }
 }
 
