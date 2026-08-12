@@ -140,7 +140,7 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 - Default target: 128 frames; startup requires one negotiated block of headroom above the retained software-queue floor and below playback-capacity ceiling
 - Negotiated capture/playback rates must exactly match their configured nominal DSP rates
 - Startup also verifies negotiated capture channels can satisfy `active_channel_map`
-- Telemetry: `asrc_ratio_ppm`
+- Telemetry: `asrc_ratio_ppm`, `pb_write_fail`
 
 **Stereo resampler** (`IStereoResampler`, `PlaybackWorker`):
 
