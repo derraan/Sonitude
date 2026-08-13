@@ -1,8 +1,4 @@
-#include <algorithm>
-#include <cctype>
-#include <fstream>
 #include <iostream>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -15,15 +11,10 @@
 #include "dsp/calibration_applier.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/suppressor.hpp"
+#include "tools/wav_replay_support.hpp"
 
 namespace
 {
-struct SteeringEvent
-{
-  std::size_t frame_index = 0;
-  sonitude::audio::BeamformerSteering target{};
-};
-
 void PrintUsage()
 {
   std::cout << "Usage:\n"
@@ -32,51 +23,6 @@ void PrintUsage()
             << "                      [--enable-suppression] [--disable-limiter]\n";
 }
 
-std::vector<SteeringEvent> LoadSteeringScript(const std::string& path, const std::uint32_t sample_rate_hz)
-{
-  std::ifstream in(path);
-  if (!in)
-  {
-    throw std::runtime_error("Unable to open steering script: " + path);
-  }
-
-  std::vector<SteeringEvent> events;
-  std::string line;
-  while (std::getline(in, line))
-  {
-    if (line.empty() || line[0] == '#')
-    {
-      continue;
-    }
-    std::replace(line.begin(), line.end(), '\t', ',');
-    std::stringstream ss(line);
-    std::string t_s;
-    std::string az_s;
-    std::string el_s;
-    if (!std::getline(ss, t_s, ',') || !std::getline(ss, az_s, ',') || !std::getline(ss, el_s, ','))
-    {
-      // allow optional header line
-      continue;
-    }
-    if (!std::isdigit(static_cast<unsigned char>(t_s[0])) && t_s[0] != '-' && t_s[0] != '+')
-    {
-      continue;
-    }
-    const double t = std::stod(t_s);
-    const float az = std::stof(az_s);
-    const float el = std::stof(el_s);
-    events.push_back(
-        {static_cast<std::size_t>(std::max(0.0, t) * static_cast<double>(sample_rate_hz)), {az, el}});
-  }
-  std::sort(events.begin(), events.end(), [](const SteeringEvent& a, const SteeringEvent& b) {
-    return a.frame_index < b.frame_index;
-  });
-  if (events.empty())
-  {
-    events.push_back({0, {0.0F, 0.0F}});
-  }
-  return events;
-}
 }  // namespace
 
 int main(int argc, char** argv)
@@ -158,28 +104,22 @@ int main(int argc, char** argv)
     }
 
     const std::size_t frames = input_wav.interleaved.size() / input_wav.channels;
-    std::vector<sonitude::audio::MicFrame> mic(frames);
+    std::vector<sonitude::audio::MicFrame> mic =
+        sonitude::tools::wav_replay::ExtractMappedMicFrames(input_wav, runtime.active_channel_map);
     std::vector<sonitude::audio::MicFrame> calibrated(frames);
-    for (std::size_t i = 0; i < frames; ++i)
-    {
-      sonitude::audio::MicFrame frame{};
-      for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
-      {
-        frame[ch] = input_wav.interleaved[i * input_wav.channels + runtime.active_channel_map[ch]];
-      }
-      mic[i] = frame;
-    }
     sonitude::dsp::CalibrationApplier calibration_applier(
         calibration.channels, geometry_ids, runtime.capture.sample_rate_hz, runtime.calibration_dc_block_hz);
     calibration_applier.processBlock(
         std::span<const sonitude::audio::MicFrame>(mic.data(), mic.size()),
         std::span<sonitude::audio::MicFrame>(calibrated.data(), calibrated.size()));
 
-    const auto events = LoadSteeringScript(script_path, input_wav.sample_rate_hz);
+    const auto events = sonitude::tools::wav_replay::LoadSteeringScript(
+        script_path, input_wav.sample_rate_hz);
     sonitude::dsp::DelaySumBeamformer beamformer;
     beamformer.configure(
         geometry, runtime.steering, calibration, input_wav.sample_rate_hz, runtime.capture.period_frames);
-    beamformer.setTarget(events.front().target);
+    constexpr sonitude::audio::BeamformerSteering kNeutralTarget{};
+    beamformer.setTarget(kNeutralTarget);
     sonitude::dsp::ConservativeSuppressor suppressor;
     suppressor.configure(
         {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
@@ -188,29 +128,30 @@ int main(int argc, char** argv)
          .confidence_threshold = runtime.suppression.confidence_threshold},
         input_wav.sample_rate_hz);
     sonitude::dsp::PeakLimiter limiter;
+    // TODO(sonitude-limiter): Promote limiter defaults into replay/runtime config once
+    // calibration-backed limiter tuning is available across target devices.
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
 
     std::vector<float> mono(frames, 0.0F);
-    std::size_t event_index = 1;
     constexpr std::size_t kBlock = 256;
-    for (std::size_t start = 0; start < frames; start += kBlock)
+    const auto segments =
+        sonitude::tools::wav_replay::BuildReplaySegments(frames, kBlock, events, kNeutralTarget);
+    for (const auto& segment : segments)
     {
-      while (event_index < events.size() && events[event_index].frame_index <= start)
-      {
-        beamformer.setTarget(events[event_index].target);
-        ++event_index;
-      }
-      const std::size_t count = std::min(kBlock, frames - start);
-      beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
-                         std::span<float>(mono.data() + start, count));
+      beamformer.setTarget(segment.target);
+      beamformer.process(
+          std::span<const sonitude::audio::MicFrame>(calibrated.data() + segment.start_frame,
+                                                     segment.frame_count),
+          std::span<float>(mono.data() + segment.start_frame, segment.frame_count));
       if (enable_suppression)
       {
         suppressor.setControl(true, 1.0F);
-        suppressor.process(std::span<float>(mono.data() + start, count));
+        suppressor.process(
+            std::span<float>(mono.data() + segment.start_frame, segment.frame_count));
       }
       if (!disable_limiter)
       {
-        limiter.process(std::span<float>(mono.data() + start, count));
+        limiter.process(std::span<float>(mono.data() + segment.start_frame, segment.frame_count));
       }
     }
 

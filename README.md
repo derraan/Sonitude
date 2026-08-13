@@ -165,8 +165,8 @@ Authoritative gate evidence: `[docs/milestones.md](docs/milestones.md)`.
 | **M2** | Real-time primitives             | `in_progress` | Lock-free/preallocated path; XRUN telemetry; ASRC interface; passthrough mode       |
 | **M3** | Calibration and offline analysis | `in_progress` | Calibration apply path; offline estimator; YAML report with backup-safe writes      |
 | **M4** | Beamformer                       | `in_progress` | Fractional delay-and-sum implemented; scripted steering WAV harness passes synthetic checks |
-| **M5** | ODAS control integration         | `pending`     | Mock provider + ODAS adapter; safe fallback on ODAS loss                            |
-| **M6** | Conversation state machine       | `pending`     | Deterministic hysteresis transitions; telemetry for state and confidence            |
+| **M5** | ODAS control integration         | `in_progress` | Mock provider + ODAS adapter; safe fallback on ODAS loss                            |
+| **M6** | Conversation state machine       | `in_progress` | Deterministic hysteresis transitions; telemetry for state and confidence            |
 | **M7** | Suppression v1                   | `in_progress` | One-distractor conservative policy implemented; smooth fade in/out; safe fallback checks pending |
 | **M8** | Measurement and hardening        | `pending`     | Latency marker tooling; soak logs; measured latency percentiles reported            |
 
@@ -242,6 +242,11 @@ sudo apt update
 sudo apt install -y cmake ninja-build g++ libasound2-dev libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
 ```
 
+## Repository hygiene notes
+
+- `mic-array-pico2w-usb6ch/skills_planner.md` remains tracked as project planning/context documentation for the vendored firmware subtree.
+- `mic-array-pico2w-usb6ch/inmp441_test_capture.wav` is intentionally not tracked in this host repository; generate local captures as needed for firmware bring-up.
+
 
 
 ### Windows development scaffold validation
@@ -295,6 +300,7 @@ ctest --test-dir build --output-on-failure
 - **Codebase snapshot (scope, DSP, layout, interfaces):** `[docs/CodebaseState.md](docs/CodebaseState.md)`
 - Architecture and thread/data ownership: `[docs/architecture.md](docs/architecture.md)`
 - Linux/ALSA setup and runtime policy: `[docs/device_setup.md](docs/device_setup.md)`
+- Linux/Pi post-PR4 hardware validation runbook: `[docs/linux_pi_hardware_gate_runbook.md](docs/linux_pi_hardware_gate_runbook.md)`
 - Calibration format and tooling roadmap: `[docs/calibration.md](docs/calibration.md)`
 - Latency measurement method and caveats: `[docs/latency_measurement.md](docs/latency_measurement.md)`
 - Full milestone gate checklist and evidence tracking: `[docs/milestones.md](docs/milestones.md)`

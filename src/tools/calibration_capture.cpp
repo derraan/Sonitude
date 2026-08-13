@@ -1,32 +1,162 @@
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "app/config.hpp"
+#include "audio/audio_types.hpp"
+#if defined(__linux__)
+#include "audio/alsa/alsa_device.hpp"
+#include "audio/alsa/capture_worker.hpp"
+#include "rt/telemetry.hpp"
+#endif
 #include "audio/wav_io.hpp"
+
+namespace
+{
+struct Options
+{
+  std::string config_path = "config/default.yaml";
+  std::string output_path = "build/calibration_capture.wav";
+  double seconds = 5.0;
+  bool synthetic = false;
+};
+
+void PrintUsage()
+{
+  std::cout << "Usage:\n"
+            << "  sonitude_calibration_capture [--config <runtime_yaml>] [--seconds <duration>] \\\n"
+            << "      [--output <wav>] [--synthetic]\n";
+}
+
+Options ParseArgs(const int argc, char** argv)
+{
+  Options options;
+  for (int i = 1; i < argc; ++i)
+  {
+    const std::string arg(argv[i]);
+    if (arg == "--config" && i + 1 < argc)
+    {
+      options.config_path = argv[++i];
+    }
+    else if (arg == "--output" && i + 1 < argc)
+    {
+      options.output_path = argv[++i];
+    }
+    else if (arg == "--seconds" && i + 1 < argc)
+    {
+      options.seconds = std::stod(argv[++i]);
+    }
+    else if (arg == "--synthetic")
+    {
+      options.synthetic = true;
+    }
+    else if (arg == "--help")
+    {
+      PrintUsage();
+      std::exit(0);
+    }
+    else
+    {
+      throw std::runtime_error("Unknown or incomplete argument: " + arg);
+    }
+  }
+  if (options.seconds <= 0.0)
+  {
+    throw std::runtime_error("--seconds must be greater than zero");
+  }
+  return options;
+}
+
+sonitude::audio::WavData GenerateSyntheticCapture(const std::uint32_t sample_rate_hz,
+                                                  const std::size_t frames)
+{
+  sonitude::audio::WavData wav;
+  wav.sample_rate_hz = sample_rate_hz;
+  wav.channels = sonitude::audio::kMicChannels;
+  wav.format = sonitude::audio::PcmFormat::FLOAT32_LE;
+  wav.interleaved.resize(frames * wav.channels, 0.0F);
+
+  for (std::size_t i = 0; i < frames; ++i)
+  {
+    const float t = static_cast<float>(i) / static_cast<float>(sample_rate_hz);
+    for (std::size_t ch = 0; ch < wav.channels; ++ch)
+    {
+      const float base_hz = 400.0F + (70.0F * static_cast<float>(ch));
+      wav.interleaved[(i * wav.channels) + ch] = 0.08F * std::sin(2.0F * 3.1415926535F * base_hz * t);
+    }
+  }
+  return wav;
+}
+}  // namespace
 
 int main(int argc, char** argv)
 {
-  (void)argc;
-  (void)argv;
-  // Portable fallback in M3: emit deterministic 6ch synthetic capture block that downstream
-  // calibration_estimate can consume on non-Linux hosts.
-  sonitude::audio::WavData wav;
-  wav.sample_rate_hz = 44100;
-  wav.channels = 6;
-  wav.format = sonitude::audio::PcmFormat::FLOAT32_LE;
-  constexpr std::size_t frames = 44100;
-  wav.interleaved.resize(frames * wav.channels, 0.0F);
-  for (std::size_t i = 0; i < frames; ++i)
+  try
   {
-    const float t = static_cast<float>(i) / 44100.0F;
-    for (std::size_t ch = 0; ch < wav.channels; ++ch)
+    const Options options = ParseArgs(argc, argv);
+    if (options.synthetic)
     {
-      wav.interleaved[i * wav.channels + ch] =
-          0.1F * std::sin((2.0F * 3.1415926535F * (500.0F + (100.0F * static_cast<float>(ch)))) * t);
+      std::cout << "WARNING: --synthetic selected. Output is deterministic synthetic audio and is NOT "
+                   "valid calibration evidence.\n";
+      const std::uint32_t sample_rate_hz = 44100;
+      const std::size_t frames = static_cast<std::size_t>(options.seconds * sample_rate_hz);
+      auto wav = GenerateSyntheticCapture(sample_rate_hz, frames);
+      sonitude::audio::WriteWavFile(options.output_path, wav);
+      std::cout << "Wrote synthetic capture WAV: " << options.output_path << '\n';
+      return 0;
     }
+
+#if !defined(__linux__)
+    std::cerr << "calibration_capture failed: ALSA capture is Linux-only; use --synthetic on this platform.\n";
+    return 1;
+#else
+    const auto config = sonitude::app::LoadRuntimeConfigFromFile(options.config_path);
+    sonitude::audio::alsa::AlsaPcmDevice device;
+    device.openCapture(config.capture);
+    sonitude::rt::TelemetryCounters counters;
+    sonitude::audio::alsa::CaptureWorker worker(&device, &config, &counters);
+
+    const std::size_t target_frames =
+        static_cast<std::size_t>(options.seconds * static_cast<double>(config.capture.sample_rate_hz));
+    std::vector<float> interleaved;
+    interleaved.reserve(target_frames * sonitude::audio::kMicChannels);
+
+    while ((interleaved.size() / sonitude::audio::kMicChannels) < target_frames)
+    {
+      std::vector<sonitude::audio::MicFrame> block;
+      if (!worker.readBlock(block))
+      {
+        continue;
+      }
+      for (const auto& frame : block)
+      {
+        if ((interleaved.size() / sonitude::audio::kMicChannels) >= target_frames)
+        {
+          break;
+        }
+        for (float sample : frame)
+        {
+          interleaved.push_back(sample);
+        }
+      }
+    }
+
+    sonitude::audio::WavData wav;
+    wav.sample_rate_hz = config.capture.sample_rate_hz;
+    wav.channels = sonitude::audio::kMicChannels;
+    wav.format = sonitude::audio::PcmFormat::FLOAT32_LE;
+    wav.interleaved = std::move(interleaved);
+    sonitude::audio::WriteWavFile(options.output_path, wav);
+    std::cout << "Captured " << target_frames << " frames to " << options.output_path << '\n';
+    return 0;
+#endif
   }
-  sonitude::audio::WriteWavFile("build/calibration_capture.wav", wav);
-  std::cout << "Wrote build/calibration_capture.wav (placeholder capture source)\n";
-  return 0;
+  catch (const std::exception& ex)
+  {
+    std::cerr << "calibration_capture failed: " << ex.what() << '\n';
+    return 1;
+  }
 }
