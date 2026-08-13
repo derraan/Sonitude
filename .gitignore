@@ -10,3 +10,6 @@
 # OS files
 Thumbs.db
 .DS_Store
+
+# Firmware local capture artifacts
+/mic-array-pico2w-usb6ch/inmp441_test_capture.wav

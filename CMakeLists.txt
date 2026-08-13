@@ -8,6 +8,7 @@ project(
 )
 
 option(SONITUDE_BUILD_TESTS "Build Sonitude unit tests" ON)
+option(SONITUDE_BUILD_FUZZERS "Build Sonitude libFuzzer harnesses" OFF)
 option(SONITUDE_FETCH_DEPS "Fetch dependencies when not found locally" ON)
 option(SONITUDE_WITH_LIBSAMPLERATE "Enable libsamplerate-backed resampler" ON)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -45,6 +46,7 @@ add_library(
   src/dsp/resampler_linear.cpp
   src/dsp/resampler_cubic.cpp
   src/dsp/resampler_src.cpp
+  src/dsp/selective_suppressor.cpp
   src/dsp/suppressor.cpp
   src/rt/rt_thread.cpp
   src/spatial/mock_doa_provider.cpp
@@ -210,6 +212,13 @@ target_link_libraries(
   PRIVATE
     sonitude_core
 )
+if(SONITUDE_WITH_ALSA)
+  target_link_libraries(
+    sonitude_calibration_capture
+    PRIVATE
+      sonitude_audio_alsa
+  )
+endif()
 
 add_executable(
   sonitude_calibration_estimate
@@ -229,6 +238,7 @@ add_executable(
 add_executable(
   sonitude_wav_replay
   src/tools/wav_replay.cpp
+  src/tools/wav_replay_support.cpp
 )
 target_link_libraries(
   sonitude_wav_replay
@@ -261,9 +271,12 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/snapshot_tests.cpp
     tests/unit/suppressor_tests.cpp
     tests/unit/odas_parser_tests.cpp
+    tests/unit/source_tracker_tests.cpp
     tests/unit/control_loop_tests.cpp
     tests/unit/zone_tests.cpp
     tests/unit/state_machine_tests.cpp
+    tests/unit/wav_replay_tests.cpp
+    src/tools/wav_replay_support.cpp
   )
 
   target_link_libraries(
@@ -286,5 +299,79 @@ if(SONITUDE_BUILD_TESTS)
   add_test(
     NAME sonitude_unit_tests
     COMMAND sonitude_unit_tests
+  )
+  set_tests_properties(sonitude_unit_tests PROPERTIES LABELS "unit")
+
+  add_executable(
+    sonitude_integration_tests
+    tests/integration/integration_smoke_tests.cpp
+  )
+  target_link_libraries(
+    sonitude_integration_tests
+    PRIVATE
+      sonitude_core
+  )
+  target_compile_definitions(
+    sonitude_integration_tests
+    PRIVATE
+      SONITUDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  add_test(
+    NAME sonitude_integration_tests
+    COMMAND sonitude_integration_tests
+  )
+  set_tests_properties(sonitude_integration_tests PROPERTIES LABELS "integration")
+endif()
+
+if(SONITUDE_BUILD_FUZZERS)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "SONITUDE_BUILD_FUZZERS requires clang/clang++")
+  endif()
+
+  add_executable(
+    fuzz_odas_parser
+    tests/fuzz/odas_parser_fuzz.cpp
+  )
+  target_link_libraries(
+    fuzz_odas_parser
+    PRIVATE
+      sonitude_core
+  )
+  target_compile_options(
+    fuzz_odas_parser
+    PRIVATE
+      -fsanitize=fuzzer,address,undefined
+      -fno-omit-frame-pointer
+  )
+  target_link_options(
+    fuzz_odas_parser
+    PRIVATE
+      -fsanitize=fuzzer,address,undefined
+  )
+
+  add_executable(
+    fuzz_wav_io
+    tests/fuzz/wav_io_fuzz.cpp
+  )
+  target_link_libraries(
+    fuzz_wav_io
+    PRIVATE
+      sonitude_core
+  )
+  target_compile_definitions(
+    fuzz_wav_io
+    PRIVATE
+      SONITUDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  target_compile_options(
+    fuzz_wav_io
+    PRIVATE
+      -fsanitize=fuzzer,address,undefined
+      -fno-omit-frame-pointer
+  )
+  target_link_options(
+    fuzz_wav_io
+    PRIVATE
+      -fsanitize=fuzzer,address,undefined
   )
 endif()

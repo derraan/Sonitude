@@ -29,5 +29,120 @@ jobs:
           -DSONITUDE_WITH_LIBSAMPLERATE=${{ matrix.libsamplerate }}
       - name: Build
         run: cmake --build build
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure -L unit
+      - name: Integration tests
+        run: ctest --test-dir build --output-on-failure -L integration
+
+  debug-sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config clang libasound2-dev libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
+      - name: Configure (Debug + ASan/UBSan)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          -DSONITUDE_FETCH_DEPS=OFF
+          -DSONITUDE_WITH_ALSA=ON
+          -DSONITUDE_WITH_LIBSAMPLERATE=ON
+      - name: Build
+        run: cmake --build build
+      - name: Unit tests (sanitized)
+        run: ctest --test-dir build --output-on-failure -L unit
+      - name: Integration tests (sanitized)
+        run: ctest --test-dir build --output-on-failure -L integration
+
+  clang-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+      - name: Enforce formatting
+        run: |
+          files=$(git ls-files '*.cpp' '*.hpp' '*.h' '*.c')
+          if [ -z "$files" ]; then
+            echo "No source files to check."
+            exit 0
+          fi
+          clang-format --dry-run --Werror $files
+
+  clang-tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-tidy dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config clang-tidy libasound2-dev libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
+      - name: Configure (compile database)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DSONITUDE_FETCH_DEPS=OFF
+          -DSONITUDE_WITH_ALSA=ON
+          -DSONITUDE_WITH_LIBSAMPLERATE=ON
+      - name: Run clang-tidy
+        run: >
+          clang-tidy -p build
+          --checks=-*,clang-analyzer-*,bugprone-*
+          --warnings-as-errors=*
+          src/audio/wav_io.cpp
+          src/spatial/odas_message_parser.cpp
+
+  fuzz-targets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install fuzzing dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config clang libasound2-dev libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
+      - name: Configure fuzzers
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=clang++
+          -DSONITUDE_FETCH_DEPS=OFF
+          -DSONITUDE_WITH_ALSA=ON
+          -DSONITUDE_WITH_LIBSAMPLERATE=ON
+          -DSONITUDE_BUILD_FUZZERS=ON
+      - name: Build fuzz targets
+        run: cmake --build build --target fuzz_odas_parser fuzz_wav_io
+      - name: Run ODAS parser fuzz (bounded)
+        run: ./build/fuzz_odas_parser -max_total_time=20
+      - name: Run WAV parser fuzz (bounded)
+        run: ./build/fuzz_wav_io -max_total_time=20
+
+  firmware-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pico toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi
+      - name: Fetch Pico SDK
+        run: |
+          git clone --depth 1 --branch 2.1.0 https://github.com/raspberrypi/pico-sdk.git "${{ github.workspace }}/pico-sdk"
+          git -C "${{ github.workspace }}/pico-sdk" submodule update --init --depth 1
+      - name: Configure firmware
+        working-directory: mic-array-pico2w-usb6ch
+        env:
+          PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+      - name: Build firmware
+        working-directory: mic-array-pico2w-usb6ch
+        run: cmake --build build
