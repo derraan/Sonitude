@@ -1,7 +1,21 @@
 #include "spatial/source_tracker.hpp"
 
+#include "spatial/angles.hpp"
+
 namespace sonitude::spatial
 {
+namespace
+{
+bool IsStale(const std::uint64_t now_ns, const std::uint64_t last_update_ns, const std::uint64_t stale_after_ns)
+{
+  if (now_ns < last_update_ns)
+  {
+    return false;
+  }
+  return (now_ns - last_update_ns) > stale_after_ns;
+}
+}  // namespace
+
 void SourceTracker::ingest(const std::vector<SourceObservation>& observations, const std::uint64_t now_ns)
 {
   for (const SourceObservation& obs : observations)
@@ -13,7 +27,10 @@ void SourceTracker::ingest(const std::vector<SourceObservation>& observations, c
       tr.last_update_ns = now_ns;
       continue;
     }
-    tr.obs.azimuth_deg = (0.75F * tr.obs.azimuth_deg) + (0.25F * obs.azimuth_deg);
+    const double delta =
+        SignedAngularDistanceDeg(static_cast<double>(tr.obs.azimuth_deg), static_cast<double>(obs.azimuth_deg));
+    tr.obs.azimuth_deg = static_cast<float>(
+        NormalizeAzimuthDeg(static_cast<double>(tr.obs.azimuth_deg) + (0.25 * delta)));
     tr.obs.elevation_deg = (0.75F * tr.obs.elevation_deg) + (0.25F * obs.elevation_deg);
     tr.obs.confidence = obs.confidence;
     tr.obs.timestamp_ns = obs.timestamp_ns;
@@ -22,7 +39,7 @@ void SourceTracker::ingest(const std::vector<SourceObservation>& observations, c
 
   for (auto it = tracks_.begin(); it != tracks_.end();)
   {
-    if (now_ns - it->second.last_update_ns > stale_after_ns_)
+    if (IsStale(now_ns, it->second.last_update_ns, stale_after_ns_))
     {
       it = tracks_.erase(it);
     }
@@ -39,7 +56,29 @@ std::optional<SourceObservation> SourceTracker::best(const std::uint64_t now_ns)
   for (const auto& [id, track] : tracks_)
   {
     (void)id;
-    if (now_ns - track.last_update_ns > stale_after_ns_)
+    if (IsStale(now_ns, track.last_update_ns, stale_after_ns_))
+    {
+      continue;
+    }
+    if (best_track == nullptr || track.obs.confidence > best_track->obs.confidence)
+    {
+      best_track = &track;
+    }
+  }
+  if (best_track == nullptr)
+  {
+    return std::nullopt;
+  }
+  return best_track->obs;
+}
+
+std::optional<SourceObservation> SourceTracker::strongestDistractor(const std::uint64_t now_ns,
+                                                                    const std::uint64_t focus_source_id) const
+{
+  const Track* best_track = nullptr;
+  for (const auto& [id, track] : tracks_)
+  {
+    if (id == focus_source_id || IsStale(now_ns, track.last_update_ns, stale_after_ns_))
     {
       continue;
     }

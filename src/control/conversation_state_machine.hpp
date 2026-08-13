@@ -25,6 +25,7 @@ struct ConversationInput
 {
   bool has_track = false;
   audio::BeamformerSteering track{};
+  float confidence = 0.0F;
   float speech_probability = 0.0F;
 };
 
@@ -40,6 +41,8 @@ class ConversationStateMachine
  private:
   void transitionTo(ConversationState next);
   bool directionStable(float azimuth_deg) const;
+  bool isFocusEligible(const std::optional<ResolvedZone>& zone) const;
+  bool isAmbientZone(const std::optional<ResolvedZone>& zone) const;
 
   app::StateMachineConfig config_{};
   float ambient_floor_linear_ = 0.25F;

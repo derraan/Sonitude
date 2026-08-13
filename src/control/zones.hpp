@@ -8,12 +8,18 @@
 
 namespace sonitude::control
 {
+struct ResolvedZone
+{
+  std::string name;
+  app::ZonePolicy policy = app::ZonePolicy::Focus;
+};
+
 class ZoneMap
 {
  public:
   explicit ZoneMap(std::vector<app::ZoneConfig> zones);
 
-  std::optional<std::string> zoneFor(float azimuth_deg) const;
+  std::optional<ResolvedZone> zoneFor(float azimuth_deg) const;
   bool contains(const std::string& zone_name, float azimuth_deg) const;
 
  private:

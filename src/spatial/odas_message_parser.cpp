@@ -166,6 +166,31 @@ std::vector<SourceObservation> OdasMessageParser::parseOneObject(const std::stri
 std::vector<SourceObservation> OdasMessageParser::feed(const std::string_view bytes)
 {
   buffer_.append(bytes.data(), bytes.size());
+  if (buffer_.size() > max_buffer_bytes_)
+  {
+    const auto resync = buffer_.find('{');
+    if (resync == std::string::npos)
+    {
+      buffer_.clear();
+    }
+    else
+    {
+      buffer_.erase(0, resync);
+      if (buffer_.size() > max_buffer_bytes_)
+      {
+        const auto tail_open = buffer_.rfind('{');
+        if (tail_open == std::string::npos)
+        {
+          buffer_.clear();
+        }
+        else
+        {
+          buffer_.erase(0, tail_open);
+        }
+      }
+    }
+    ++overflow_resync_count_;
+  }
   std::vector<SourceObservation> out;
 
   std::size_t start = 0;

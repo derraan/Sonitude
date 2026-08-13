@@ -23,8 +23,9 @@ sonitude::control::ConversationStateMachine BuildMachine()
   cfg.hold_direction_ms = 120;
   cfg.zone_direction_stability_deg = 15.0F;
   std::vector<sonitude::app::ZoneConfig> zones = {
-      {"front", -45.0F, 45.0F},
-      {"rear", 100.0F, 260.0F},
+      {"front", -45.0F, 45.0F, sonitude::app::ZonePolicy::Focus},
+      {"assist", 45.0F, 100.0F, sonitude::app::ZonePolicy::Assist},
+      {"rear", 100.0F, 260.0F, sonitude::app::ZonePolicy::Ambient},
   };
   return sonitude::control::ConversationStateMachine(cfg, 0.25F, sonitude::control::ZoneMap(zones));
 }
@@ -36,16 +37,20 @@ void TestTransitionPathAndHysteresis()
   sonitude::control::ConversationInput in{};
   in.has_track = true;
   in.track = {20.0F, 0.0F};
+  in.confidence = 0.85F;
   in.speech_probability = 0.9F;
 
   auto out = sm.update(in, 10'000'000ULL);
   Require(sm.state() == sonitude::control::ConversationState::Candidate, "ambient->candidate expected");
   Require(out.failsafe == false, "candidate should be non-failsafe");
+  Require(out.zone_name == "front", "snapshot should preserve resolved zone");
+  Require(out.confidence > 0.8F, "snapshot confidence should propagate from input");
 
   out = sm.update(in, 120'000'000ULL);
   Require(sm.state() == sonitude::control::ConversationState::Focused, "candidate->focused expected");
 
   in.has_track = false;
+  in.confidence = 0.0F;
   in.speech_probability = 0.0F;
   out = sm.update(in, 130'000'000ULL);
   Require(sm.state() == sonitude::control::ConversationState::Held, "focused->held expected");
@@ -56,6 +61,37 @@ void TestTransitionPathAndHysteresis()
   out = sm.update(in, 500'000'000ULL);
   Require(sm.state() == sonitude::control::ConversationState::Ambient, "releasing->ambient expected");
   Require(out.failsafe, "ambient should be failsafe");
+}
+
+void TestAmbientPolicyBlocksCandidate()
+{
+  auto sm = BuildMachine();
+  sonitude::control::ConversationInput in{};
+  in.has_track = true;
+  in.track = {170.0F, 0.0F};
+  in.confidence = 0.9F;
+  in.speech_probability = 0.9F;
+  (void)sm.update(in, 10'000'000ULL);
+  Require(sm.state() == sonitude::control::ConversationState::Ambient,
+          "ambient zone should block ambient->candidate transition");
+}
+
+void TestFocusedToReleasingOnAmbientCrossing()
+{
+  auto sm = BuildMachine();
+  sonitude::control::ConversationInput in{};
+  in.has_track = true;
+  in.track = {0.0F, 0.0F};
+  in.confidence = 0.9F;
+  in.speech_probability = 0.9F;
+  (void)sm.update(in, 10'000'000ULL);
+  (void)sm.update(in, 150'000'000ULL);
+  Require(sm.state() == sonitude::control::ConversationState::Focused, "expected focused state");
+
+  in.track = {170.0F, 0.0F};
+  (void)sm.update(in, 170'000'000ULL);
+  Require(sm.state() == sonitude::control::ConversationState::Releasing,
+          "focused source entering ambient zone should release focus");
 }
 
 void TestTransitionCoverageSanity()
@@ -73,6 +109,7 @@ void TestTransitionCoverageSanity()
         sonitude::control::ConversationInput in{};
         in.has_track = has_track;
         in.track = {has_track ? 30.0F : 0.0F, 0.0F};
+        in.confidence = has_track ? 0.8F : 0.0F;
         in.speech_probability = speech;
         now += 110'000'000ULL;
         (void)sm.update(in, now);
@@ -99,5 +136,7 @@ void TestTransitionCoverageSanity()
 void RunStateMachineTests()
 {
   TestTransitionPathAndHysteresis();
+  TestAmbientPolicyBlocksCandidate();
+  TestFocusedToReleasingOnAmbientCrossing();
   TestTransitionCoverageSanity();
 }

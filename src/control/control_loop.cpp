@@ -6,6 +6,20 @@
 
 namespace sonitude::control
 {
+namespace
+{
+bool TimeoutElapsed(const std::uint64_t now_ns,
+                    const std::uint64_t start_ns,
+                    const std::uint64_t timeout_ns)
+{
+  if (now_ns < start_ns)
+  {
+    return false;
+  }
+  return (now_ns - start_ns) >= timeout_ns;
+}
+}  // namespace
+
 ControlLoop::ControlLoop(spatial::IDoaProvider* provider,
                          rt::SnapshotPublisher<SteeringSnapshot> publisher,
                          const ControlLoopConfig config,
@@ -49,6 +63,9 @@ void ControlLoop::tick(const std::uint64_t now_ns)
       input.has_track = true;
       input.track.azimuth_deg = active->azimuth_deg;
       input.track.elevation_deg = active->elevation_deg;
+      input.confidence = active->confidence;
+      // TODO(sonitude-vad): Replace ODAS activity proxy with IVad-backed speech probability once
+      // a real VAD implementation replaces MockVad in runtime mode.
       input.speech_probability = active->confidence;
     }
     next = conversation_->update(input, now_ns);
@@ -61,15 +78,21 @@ void ControlLoop::tick(const std::uint64_t now_ns)
     next.target.azimuth_deg = active->azimuth_deg;
     next.target.elevation_deg = active->elevation_deg;
     next.ambient_mix = 0.0F;
+    next.confidence = active->confidence;
+    next.speech_probability = active->confidence;
     next.failsafe = false;
   }
-  else if (now_ns - last_observation_ns_ >= config_.failsafe_timeout_ns || !provider_->isHealthy())
+  else if (TimeoutElapsed(now_ns, last_observation_ns_, config_.failsafe_timeout_ns) || !provider_->isHealthy())
   {
     next = last_snapshot_;
     ++generation_;
     next.generation = generation_;
     next.target = {0.0F, 0.0F};
     next.ambient_mix = config_.ambient_floor_linear;
+    next.confidence = 0.0F;
+    next.speech_probability = 0.0F;
+    next.zone_name.clear();
+    next.has_distractor = false;
     next.failsafe = true;
   }
   else
@@ -77,6 +100,17 @@ void ControlLoop::tick(const std::uint64_t now_ns)
     next = last_snapshot_;
     ++generation_;
     next.generation = generation_;
+  }
+
+  next.has_distractor = false;
+  if (active.has_value())
+  {
+    if (const auto distractor = tracker_.strongestDistractor(now_ns, active->source_id); distractor.has_value())
+    {
+      next.has_distractor = true;
+      next.distractor.azimuth_deg = distractor->azimuth_deg;
+      next.distractor.elevation_deg = distractor->elevation_deg;
+    }
   }
 
   last_snapshot_ = next;

@@ -8,14 +8,14 @@ namespace sonitude::control
 {
 ZoneMap::ZoneMap(std::vector<app::ZoneConfig> zones) : zones_(std::move(zones)) {}
 
-std::optional<std::string> ZoneMap::zoneFor(const float azimuth_deg) const
+std::optional<ResolvedZone> ZoneMap::zoneFor(const float azimuth_deg) const
 {
   for (const auto& zone : zones_)
   {
     if (spatial::AngleWithinIntervalDeg(
             azimuth_deg, static_cast<double>(zone.azimuth_min_deg), static_cast<double>(zone.azimuth_max_deg)))
     {
-      return zone.name;
+      return ResolvedZone{zone.name, zone.policy};
     }
   }
   return std::nullopt;

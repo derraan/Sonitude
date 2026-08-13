@@ -12,6 +12,8 @@ namespace sonitude::vad
 class MockVad final : public IVad
 {
  public:
+  // TODO(sonitude-vad): Replace scripted probabilities with a production VAD backend that
+  // implements IVad and provides calibrated speech probability estimates.
   explicit MockVad(std::vector<float> scripted_probabilities)
       : scripted_probabilities_(std::move(scripted_probabilities))
   {

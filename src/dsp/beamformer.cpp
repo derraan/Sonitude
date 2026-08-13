@@ -92,6 +92,8 @@ void DelaySumBeamformer::configure(const app::GeometryConfig& geometry,
     current_lines_[i].reset();
     pending_lines_[i].configure(max_configured_delay + 2.0);
     pending_lines_[i].reset();
+    reference_lines_[i].configure(max_configured_delay + 2.0);
+    reference_lines_[i].reset();
   }
 
   current_target_ = {0.0F, 0.0F};
@@ -183,6 +185,23 @@ void DelaySumBeamformer::process(const std::span<const audio::MicFrame> input,
       current_delays_ = pending_delays_;
       std::swap(current_lines_, pending_lines_);
     }
+  }
+}
+
+void DelaySumBeamformer::processWithReference(const std::span<const audio::MicFrame> input,
+                                              const std::span<float> focus_out,
+                                              const audio::BeamformerSteering distractor_target,
+                                              const std::span<float> reference_out)
+{
+  if (reference_out.size() < input.size())
+  {
+    throw std::runtime_error("reference_out span too small for input");
+  }
+  process(input, focus_out);
+  const DelayArray distractor_delays = computeDelaysForTarget(distractor_target);
+  for (std::size_t i = 0; i < input.size(); ++i)
+  {
+    reference_out[i] = renderOne(input[i], distractor_delays, reference_lines_);
   }
 }
 }  // namespace sonitude::dsp

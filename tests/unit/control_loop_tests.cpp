@@ -20,6 +20,7 @@ void TestControlLoopTracksAndFailsafe()
 {
   std::vector<sonitude::spatial::MockDoaEvent> events;
   events.push_back({100'000'000ULL, {11, 20.0F, 0.0F, 0.8F, 100'000'000ULL}});
+  events.push_back({100'000'000ULL, {42, -40.0F, 0.0F, 0.7F, 100'000'000ULL}});
   events.push_back({150'000'000ULL, {11, 25.0F, 0.0F, 0.9F, 150'000'000ULL}});
   events.push_back({550'000'000ULL, {12, -15.0F, 0.0F, 0.85F, 550'000'000ULL}});
   sonitude::spatial::MockDoaProvider provider(std::move(events));
@@ -36,6 +37,9 @@ void TestControlLoopTracksAndFailsafe()
   loop.tick(100'000'000ULL);
   auto s = reader.acquire();
   Require(!s.failsafe, "control loop should steer when observations are present");
+  Require(s.has_distractor, "control loop should expose strongest non-focus distractor");
+  Require(s.confidence > 0.7F, "control loop should propagate source confidence");
+  Require(s.speech_probability > 0.7F, "control loop should propagate speech probability proxy");
 
   provider.setFrozen(true);
   loop.tick(450'000'000ULL);
