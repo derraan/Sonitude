@@ -229,6 +229,7 @@ add_executable(
 add_executable(
   sonitude_wav_replay
   src/tools/wav_replay.cpp
+  src/tools/wav_replay_support.cpp
 )
 target_link_libraries(
   sonitude_wav_replay
