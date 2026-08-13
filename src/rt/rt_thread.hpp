@@ -22,4 +22,9 @@ class RtThread
 };
 
 bool TryConfigureRtScheduling(std::thread& thread, std::int32_t priority);
+bool TryConfigureRtScheduling(std::jthread& thread, std::int32_t priority);
+bool TryConfigureOtherScheduling(std::thread& thread);
+bool TryConfigureOtherScheduling(std::jthread& thread);
+bool TryConfigureCurrentThreadRtScheduling(std::int32_t priority);
+bool TryEnableMemoryLocking();
 }  // namespace sonitude::rt

@@ -35,6 +35,7 @@ class AlsaPcmDevice
   std::int64_t writeInterleaved(const std::uint8_t* src, std::uint32_t frames) const;
   std::int64_t availFrames() const;
   std::size_t playbackQueuedFrames() const;
+  void dropStream() const;
 
  private:
   void configure(const app::DeviceConfig& config, bool is_capture);

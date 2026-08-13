@@ -17,10 +17,16 @@ class PlaybackWorker
                  dsp::IStereoResampler* resampler,
                  dsp::AsrcController* controller,
                  rt::TelemetryCounters* counters,
-                 bool asrc_enabled);
+                 bool asrc_enabled,
+                 std::size_t capture_period_frames,
+                 double asrc_max_ratio);
 
   bool writeStereo(std::span<const dsp::StereoSample> input, std::size_t occupancy_frames);
   bool writeStereo(const std::vector<dsp::StereoSample>& input, std::size_t occupancy_frames);
+  static std::size_t CalculateRequiredScratchFrames(std::size_t capture_period_frames,
+                                                    std::size_t playback_period_frames,
+                                                    double asrc_max_ratio);
+  std::size_t scratchCapacityFrames() const { return pending_.size(); }
 
  private:
   AlsaPcmDevice* device_ = nullptr;

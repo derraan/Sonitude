@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -49,32 +50,32 @@ inline float DecodeOneSample(const std::uint8_t* bytes, const PcmFormat format)
     }
     case PcmFormat::S24_3LE:
     {
-      std::int32_t v = static_cast<std::int32_t>(bytes[0]) |
-                       (static_cast<std::int32_t>(bytes[1]) << 8) |
-                       (static_cast<std::int32_t>(bytes[2]) << 16);
-      if ((v & 0x00800000) != 0)
+      std::uint32_t raw = static_cast<std::uint32_t>(bytes[0]) |
+                          (static_cast<std::uint32_t>(bytes[1]) << 8) |
+                          (static_cast<std::uint32_t>(bytes[2]) << 16);
+      if ((raw & 0x00800000U) != 0U)
       {
-        v |= 0xFF000000;
+        raw |= 0xFF000000U;
       }
+      const std::int32_t v = std::bit_cast<std::int32_t>(raw);
       return static_cast<float>(v) / 8388608.0F;
     }
     case PcmFormat::S32_LE:
     {
-      const std::int32_t v = static_cast<std::int32_t>(bytes[0]) |
-                             (static_cast<std::int32_t>(bytes[1]) << 8) |
-                             (static_cast<std::int32_t>(bytes[2]) << 16) |
-                             (static_cast<std::int32_t>(bytes[3]) << 24);
+      const std::uint32_t raw = static_cast<std::uint32_t>(bytes[0]) |
+                                (static_cast<std::uint32_t>(bytes[1]) << 8) |
+                                (static_cast<std::uint32_t>(bytes[2]) << 16) |
+                                (static_cast<std::uint32_t>(bytes[3]) << 24);
+      const std::int32_t v = std::bit_cast<std::int32_t>(raw);
       return static_cast<float>(v) / 2147483648.0F;
     }
     case PcmFormat::FLOAT32_LE:
     {
-      float out = 0.0F;
-      std::uint8_t* dst = reinterpret_cast<std::uint8_t*>(&out);
-      dst[0] = bytes[0];
-      dst[1] = bytes[1];
-      dst[2] = bytes[2];
-      dst[3] = bytes[3];
-      return ClampFloat(out);
+      const std::uint32_t raw = static_cast<std::uint32_t>(bytes[0]) |
+                                (static_cast<std::uint32_t>(bytes[1]) << 8) |
+                                (static_cast<std::uint32_t>(bytes[2]) << 16) |
+                                (static_cast<std::uint32_t>(bytes[3]) << 24);
+      return ClampFloat(std::bit_cast<float>(raw));
     }
   }
   throw std::runtime_error("Unsupported PCM format");
@@ -111,11 +112,11 @@ inline void EncodeOneSample(const float sample, const PcmFormat format, std::uin
     }
     case PcmFormat::FLOAT32_LE:
     {
-      const auto* src = reinterpret_cast<const std::uint8_t*>(&clamped);
-      bytes[0] = src[0];
-      bytes[1] = src[1];
-      bytes[2] = src[2];
-      bytes[3] = src[3];
+      const std::uint32_t raw = std::bit_cast<std::uint32_t>(clamped);
+      bytes[0] = static_cast<std::uint8_t>(raw & 0xFFU);
+      bytes[1] = static_cast<std::uint8_t>((raw >> 8) & 0xFFU);
+      bytes[2] = static_cast<std::uint8_t>((raw >> 16) & 0xFFU);
+      bytes[3] = static_cast<std::uint8_t>((raw >> 24) & 0xFFU);
       return;
     }
   }

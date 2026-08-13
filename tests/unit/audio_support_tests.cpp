@@ -1,5 +1,9 @@
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <functional>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -17,6 +21,59 @@ void Require(const bool condition, const std::string& message)
   {
     throw std::runtime_error(message);
   }
+}
+
+void ExpectThrows(const std::function<void()>& fn, const std::string& message)
+{
+  bool threw = false;
+  try
+  {
+    fn();
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, message);
+}
+
+void AppendLe16(std::vector<std::uint8_t>& bytes, const std::uint16_t value)
+{
+  bytes.push_back(static_cast<std::uint8_t>(value & 0xFFU));
+  bytes.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFFU));
+}
+
+void AppendLe32(std::vector<std::uint8_t>& bytes, const std::uint32_t value)
+{
+  bytes.push_back(static_cast<std::uint8_t>(value & 0xFFU));
+  bytes.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFFU));
+  bytes.push_back(static_cast<std::uint8_t>((value >> 16) & 0xFFU));
+  bytes.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFFU));
+}
+
+void AppendTag(std::vector<std::uint8_t>& bytes, const std::array<char, 4>& tag)
+{
+  for (const char ch : tag)
+  {
+    bytes.push_back(static_cast<std::uint8_t>(ch));
+  }
+}
+
+void FinalizeRiffSize(std::vector<std::uint8_t>& bytes)
+{
+  const std::uint32_t riff_size = static_cast<std::uint32_t>(bytes.size() - 8U);
+  bytes[4] = static_cast<std::uint8_t>(riff_size & 0xFFU);
+  bytes[5] = static_cast<std::uint8_t>((riff_size >> 8) & 0xFFU);
+  bytes[6] = static_cast<std::uint8_t>((riff_size >> 16) & 0xFFU);
+  bytes[7] = static_cast<std::uint8_t>((riff_size >> 24) & 0xFFU);
+}
+
+void WriteBytesToFile(const std::string& path, const std::vector<std::uint8_t>& bytes)
+{
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  Require(out.good(), "failed to create WAV fixture");
+  out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  Require(out.good(), "failed to write WAV fixture");
 }
 
 void TestS16RoundTrip()
@@ -73,6 +130,96 @@ void TestWavRoundTrip()
   }
   (void)std::remove(path.c_str());
 }
+
+void TestWavRejectsShortFmtChunk()
+{
+  std::vector<std::uint8_t> bytes;
+  AppendTag(bytes, {'R', 'I', 'F', 'F'});
+  AppendLe32(bytes, 0);
+  AppendTag(bytes, {'W', 'A', 'V', 'E'});
+  AppendTag(bytes, {'f', 'm', 't', ' '});
+  AppendLe32(bytes, 12);
+  AppendLe16(bytes, 1);
+  AppendLe16(bytes, 1);
+  AppendLe32(bytes, 16000);
+  AppendLe32(bytes, 32000);
+  AppendLe16(bytes, 2);
+  AppendTag(bytes, {'d', 'a', 't', 'a'});
+  AppendLe32(bytes, 2);
+  AppendLe16(bytes, 0);
+  FinalizeRiffSize(bytes);
+
+  const std::string path = "unit_wav_short_fmt.wav";
+  WriteBytesToFile(path, bytes);
+  ExpectThrows([&path]() { (void)sonitude::audio::ReadWavFile(path); },
+               "WAV reader must reject fmt chunks smaller than 16 bytes");
+  (void)std::remove(path.c_str());
+}
+
+void TestWavOddChunkPaddingIsHandled()
+{
+  std::vector<std::uint8_t> bytes;
+  AppendTag(bytes, {'R', 'I', 'F', 'F'});
+  AppendLe32(bytes, 0);
+  AppendTag(bytes, {'W', 'A', 'V', 'E'});
+
+  AppendTag(bytes, {'J', 'U', 'N', 'K'});
+  AppendLe32(bytes, 1);
+  bytes.push_back(static_cast<std::uint8_t>('x'));
+  bytes.push_back(0);  // RIFF pad byte for odd-sized chunk.
+
+  AppendTag(bytes, {'f', 'm', 't', ' '});
+  AppendLe32(bytes, 16);
+  AppendLe16(bytes, 1);
+  AppendLe16(bytes, 1);
+  AppendLe32(bytes, 16000);
+  AppendLe32(bytes, 32000);
+  AppendLe16(bytes, 2);
+  AppendLe16(bytes, 16);
+
+  AppendTag(bytes, {'d', 'a', 't', 'a'});
+  AppendLe32(bytes, 2);
+  AppendLe16(bytes, 1200);
+
+  FinalizeRiffSize(bytes);
+
+  const std::string path = "unit_wav_with_odd_chunk.wav";
+  WriteBytesToFile(path, bytes);
+  const auto wav = sonitude::audio::ReadWavFile(path);
+  Require(wav.sample_rate_hz == 16000, "WAV reader should parse sample rate after odd chunk padding");
+  Require(wav.channels == 1, "WAV reader should parse channel count after odd chunk padding");
+  Require(wav.interleaved.size() == 1, "WAV reader should decode one sample after odd chunk padding");
+  (void)std::remove(path.c_str());
+}
+
+void TestWavRejectsOversizedChunkDeclaration()
+{
+  std::vector<std::uint8_t> bytes;
+  AppendTag(bytes, {'R', 'I', 'F', 'F'});
+  AppendLe32(bytes, 0);
+  AppendTag(bytes, {'W', 'A', 'V', 'E'});
+
+  AppendTag(bytes, {'f', 'm', 't', ' '});
+  AppendLe32(bytes, 16);
+  AppendLe16(bytes, 1);
+  AppendLe16(bytes, 1);
+  AppendLe32(bytes, 16000);
+  AppendLe32(bytes, 32000);
+  AppendLe16(bytes, 2);
+  AppendLe16(bytes, 16);
+
+  AppendTag(bytes, {'d', 'a', 't', 'a'});
+  AppendLe32(bytes, 0x70000000U);
+  AppendLe16(bytes, 0);
+
+  FinalizeRiffSize(bytes);
+
+  const std::string path = "unit_wav_oversized_chunk.wav";
+  WriteBytesToFile(path, bytes);
+  ExpectThrows([&path]() { (void)sonitude::audio::ReadWavFile(path); },
+               "WAV reader must reject chunk sizes that exceed file bounds");
+  (void)std::remove(path.c_str());
+}
 }  // namespace
 
 void RunAudioSupportTests()
@@ -80,4 +227,7 @@ void RunAudioSupportTests()
   TestS16RoundTrip();
   TestChannelExtract();
   TestWavRoundTrip();
+  TestWavRejectsShortFmtChunk();
+  TestWavOddChunkPaddingIsHandled();
+  TestWavRejectsOversizedChunkDeclaration();
 }
