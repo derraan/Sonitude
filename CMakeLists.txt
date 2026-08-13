@@ -46,7 +46,6 @@ add_library(
   src/dsp/resampler_linear.cpp
   src/dsp/resampler_cubic.cpp
   src/dsp/resampler_src.cpp
-  src/dsp/selective_suppressor.cpp
   src/dsp/suppressor.cpp
   src/rt/rt_thread.cpp
   src/spatial/mock_doa_provider.cpp
@@ -238,7 +237,6 @@ add_executable(
 add_executable(
   sonitude_wav_replay
   src/tools/wav_replay.cpp
-  src/tools/wav_replay_support.cpp
 )
 target_link_libraries(
   sonitude_wav_replay
@@ -271,13 +269,10 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/snapshot_tests.cpp
     tests/unit/suppressor_tests.cpp
     tests/unit/odas_parser_tests.cpp
-    tests/unit/source_tracker_tests.cpp
     tests/unit/control_loop_tests.cpp
     tests/unit/zone_tests.cpp
     tests/unit/state_machine_tests.cpp
-    tests/unit/wav_replay_tests.cpp
-    src/tools/wav_replay_support.cpp
-  )
+    )
 
   target_link_libraries(
     sonitude_unit_tests
