@@ -45,6 +45,7 @@ add_library(
   src/dsp/resampler_linear.cpp
   src/dsp/resampler_cubic.cpp
   src/dsp/resampler_src.cpp
+  src/dsp/selective_suppressor.cpp
   src/dsp/suppressor.cpp
   src/rt/rt_thread.cpp
   src/spatial/mock_doa_provider.cpp
