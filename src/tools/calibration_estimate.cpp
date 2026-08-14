@@ -1,8 +1,6 @@
-#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -11,6 +9,7 @@
 #include "app/calibration_writer.hpp"
 #include "app/config.hpp"
 #include "audio/wav_io.hpp"
+#include "tools/calibration_estimate_support.hpp"
 
 namespace
 {
@@ -64,86 +63,6 @@ Options ParseArgs(const int argc, char** argv)
   return options;
 }
 
-float Mean(const std::vector<float>& v)
-{
-  if (v.empty())
-  {
-    return 0.0F;
-  }
-  double sum = 0.0;
-  for (const float x : v)
-  {
-    sum += x;
-  }
-  return static_cast<float>(sum / static_cast<double>(v.size()));
-}
-
-struct CorrelationEstimate
-{
-  float delay_samples = 0.0F;
-  int polarity = 1;
-};
-
-CorrelationEstimate EstimateDelayAndPolarity(const std::vector<float>& reference,
-                                             const std::vector<float>& channel,
-                                             const int max_lag)
-{
-  if (reference.size() != channel.size() || reference.empty())
-  {
-    throw std::runtime_error("cross-correlation requires non-empty equal-length channels");
-  }
-
-  const std::size_t n = reference.size();
-  std::vector<double> corr(static_cast<std::size_t>((2 * max_lag) + 1), 0.0);
-  for (int lag = -max_lag; lag <= max_lag; ++lag)
-  {
-    double sum = 0.0;
-    for (std::size_t i = 0; i < n; ++i)
-    {
-      const std::int64_t shifted = static_cast<std::int64_t>(i) + lag;
-      if (shifted < 0 || shifted >= static_cast<std::int64_t>(n))
-      {
-        continue;
-      }
-      sum += static_cast<double>(reference[i]) * static_cast<double>(channel[static_cast<std::size_t>(shifted)]);
-    }
-    corr[static_cast<std::size_t>(lag + max_lag)] = sum;
-  }
-
-  int best_lag = 0;
-  double best_abs = -1.0;
-  double best_value = 0.0;
-  for (int lag = -max_lag; lag <= max_lag; ++lag)
-  {
-    const double value = corr[static_cast<std::size_t>(lag + max_lag)];
-    const double magnitude = std::fabs(value);
-    if (magnitude > best_abs)
-    {
-      best_abs = magnitude;
-      best_value = value;
-      best_lag = lag;
-    }
-  }
-
-  double fractional_offset = 0.0;
-  if (best_lag > -max_lag && best_lag < max_lag)
-  {
-    const double c_prev = corr[static_cast<std::size_t>((best_lag - 1) + max_lag)];
-    const double c_peak = corr[static_cast<std::size_t>(best_lag + max_lag)];
-    const double c_next = corr[static_cast<std::size_t>((best_lag + 1) + max_lag)];
-    const double denom = (c_prev - (2.0 * c_peak) + c_next);
-    if (std::fabs(denom) > std::numeric_limits<double>::epsilon())
-    {
-      fractional_offset = 0.5 * (c_prev - c_next) / denom;
-      fractional_offset = std::clamp(fractional_offset, -1.0, 1.0);
-    }
-  }
-
-  CorrelationEstimate estimate;
-  estimate.delay_samples = static_cast<float>(-static_cast<double>(best_lag) - fractional_offset);
-  estimate.polarity = (best_value >= 0.0) ? 1 : -1;
-  return estimate;
-}
 }  // namespace
 
 int main(int argc, char** argv)
@@ -191,30 +110,25 @@ int main(int argc, char** argv)
     }
 
     const auto& reference = channels[0];
+    const auto reference_moments = sonitude::tools::calibration::ComputeChannelMoments(reference);
     constexpr int kMaxLagSamples = 256;
     for (std::size_t ch = 0; ch < wav.channels; ++ch)
     {
       const auto& sig = channels[ch];
-      const float dc = Mean(sig);
-      double rms_sum = 0.0;
-      double max_abs = 0.0;
-      for (const float s : sig)
-      {
-        const float c = s - dc;
-        rms_sum += static_cast<double>(c) * static_cast<double>(c);
-        max_abs = std::max(max_abs, static_cast<double>(std::fabs(c)));
-      }
-      const float rms = static_cast<float>(std::sqrt(rms_sum / static_cast<double>(sig.size())));
-      const CorrelationEstimate corr =
-          (ch == 0U) ? CorrelationEstimate{} : EstimateDelayAndPolarity(reference, sig, kMaxLagSamples);
+      const auto moments = sonitude::tools::calibration::ComputeChannelMoments(sig);
+      const auto corr = (ch == 0U)
+                            ? sonitude::tools::calibration::DelayPolarityEstimate{}
+                            : sonitude::tools::calibration::EstimateDelayAndPolarity(
+                                  reference, sig, kMaxLagSamples);
       auto& out = cal.channels[ch];
       out.id = geometry_ids[ch];
       out.polarity = (ch == 0U) ? 1 : corr.polarity;
-      out.gain_linear = (rms > 1e-6F) ? (0.1F / rms) : 1.0F;
+      out.gain_linear = (ch == 0U) ? 1.0F : (reference_moments.rms / moments.rms);
       out.delay_samples = (ch == 0U) ? 0.0F : corr.delay_samples;
-      out.dc_offset = dc;
-      std::cout << out.id << " dc=" << dc << " rms=" << rms << " peak=" << max_abs
-                << " delay=" << out.delay_samples << " polarity=" << out.polarity << "\n";
+      out.dc_offset = moments.mean;
+      std::cout << out.id << " dc=" << moments.mean << " rms=" << moments.rms
+                << " delay=" << out.delay_samples << " polarity=" << out.polarity
+                << " gain=" << out.gain_linear << " corr=" << corr.peak_correlation << "\n";
     }
     sonitude::app::ValidateCalibrationConfig(cal, geometry_ids, runtime.capture.sample_rate_hz);
     sonitude::app::WriteCalibrationYamlBackupSafe(options.output_path, cal, true);

@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -93,6 +95,11 @@ bool LooksLikeHeaderTimeField(const std::string& value)
 std::vector<SteeringEvent> LoadSteeringScript(const std::string& path,
                                               const std::uint32_t sample_rate_hz)
 {
+  if (sample_rate_hz == 0)
+  {
+    throw std::runtime_error("sample_rate_hz must be non-zero");
+  }
+
   std::ifstream in(path);
   if (!in)
   {
@@ -131,11 +138,26 @@ std::vector<SteeringEvent> LoadSteeringScript(const std::string& path,
     parsed_any_row = true;
 
     const double time_s = ParseDoubleExact(fields[0], line_number, "time_s");
+    if (!std::isfinite(time_s) || time_s < 0.0)
+    {
+      throw std::runtime_error("line " + std::to_string(line_number) +
+                               ": time_s must be finite and non-negative");
+    }
     const float azimuth_deg = ParseFloatExact(fields[1], line_number, "azimuth_deg");
     const float elevation_deg = ParseFloatExact(fields[2], line_number, "elevation_deg");
-    events.push_back({static_cast<std::size_t>(std::max(0.0, time_s) *
-                                               static_cast<double>(sample_rate_hz)),
-                      {azimuth_deg, elevation_deg}});
+    if (!std::isfinite(azimuth_deg) || !std::isfinite(elevation_deg))
+    {
+      throw std::runtime_error("line " + std::to_string(line_number) +
+                               ": steering angles must be finite");
+    }
+
+    const double frame_index_d = time_s * static_cast<double>(sample_rate_hz);
+    if (frame_index_d > static_cast<double>(std::numeric_limits<std::size_t>::max()))
+    {
+      throw std::runtime_error("line " + std::to_string(line_number) +
+                               ": frame index overflow from time/sample_rate");
+    }
+    events.push_back({static_cast<std::size_t>(frame_index_d), {azimuth_deg, elevation_deg}});
   }
 
   std::sort(events.begin(), events.end(), [](const SteeringEvent& a, const SteeringEvent& b) {
@@ -147,6 +169,14 @@ std::vector<SteeringEvent> LoadSteeringScript(const std::string& path,
 std::vector<audio::MicFrame> ExtractMappedMicFrames(const audio::WavData& wav,
                                                     const std::vector<std::size_t>& channel_map)
 {
+  if (wav.channels == 0)
+  {
+    throw std::runtime_error("input WAV must have at least one channel");
+  }
+  if ((wav.interleaved.size() % wav.channels) != 0)
+  {
+    throw std::runtime_error("input WAV interleaved sample count is not channel-aligned");
+  }
   if (channel_map.size() != audio::kMicChannels)
   {
     throw std::runtime_error("active_channel_map must contain exactly six channels");

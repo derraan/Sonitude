@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -73,6 +74,106 @@ void TestWavRoundTrip()
   }
   (void)std::remove(path.c_str());
 }
+
+void WriteLe16(std::ofstream& out, const std::uint16_t value)
+{
+  out.put(static_cast<char>(value & 0xFFU));
+  out.put(static_cast<char>((value >> 8) & 0xFFU));
+}
+
+void WriteLe32(std::ofstream& out, const std::uint32_t value)
+{
+  out.put(static_cast<char>(value & 0xFFU));
+  out.put(static_cast<char>((value >> 8) & 0xFFU));
+  out.put(static_cast<char>((value >> 16) & 0xFFU));
+  out.put(static_cast<char>((value >> 24) & 0xFFU));
+}
+
+void TestWavRejectsMalformedPayloads()
+{
+  {
+    const std::string path = "unit_wav_bad_header.wav";
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write("NOPE", 4);
+    out.close();
+    bool threw = false;
+    try
+    {
+      (void)sonitude::audio::ReadWavFile(path);
+    }
+    catch (const std::exception&)
+    {
+      threw = true;
+    }
+    (void)std::remove(path.c_str());
+    Require(threw, "invalid RIFF header should throw");
+  }
+
+  {
+    const std::string path = "unit_wav_truncated_data.wav";
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write("RIFF", 4);
+    WriteLe32(out, 60);
+    out.write("WAVE", 4);
+    out.write("fmt ", 4);
+    WriteLe32(out, 16);
+    WriteLe16(out, 1);
+    WriteLe16(out, 1);
+    WriteLe32(out, 44100);
+    WriteLe32(out, 88200);
+    WriteLe16(out, 2);
+    WriteLe16(out, 16);
+    out.write("data", 4);
+    WriteLe32(out, 8);
+    WriteLe16(out, 0);
+    WriteLe16(out, 0);
+    out.close();
+    bool threw = false;
+    try
+    {
+      (void)sonitude::audio::ReadWavFile(path);
+    }
+    catch (const std::exception&)
+    {
+      threw = true;
+    }
+    (void)std::remove(path.c_str());
+    Require(threw, "truncated data payload should throw");
+  }
+
+  {
+    const std::string path = "unit_wav_unaligned_data.wav";
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write("RIFF", 4);
+    WriteLe32(out, 48);
+    out.write("WAVE", 4);
+    out.write("fmt ", 4);
+    WriteLe32(out, 16);
+    WriteLe16(out, 1);
+    WriteLe16(out, 2);
+    WriteLe32(out, 44100);
+    WriteLe32(out, 176400);
+    WriteLe16(out, 4);
+    WriteLe16(out, 16);
+    out.write("data", 4);
+    WriteLe32(out, 3);
+    out.put(static_cast<char>(0));
+    out.put(static_cast<char>(0));
+    out.put(static_cast<char>(0));
+    out.close();
+    bool threw = false;
+    try
+    {
+      (void)sonitude::audio::ReadWavFile(path);
+    }
+    catch (const std::exception&)
+    {
+      threw = true;
+    }
+    (void)std::remove(path.c_str());
+    Require(threw, "sample-unaligned payload should throw");
+  }
+}
 }  // namespace
 
 void RunAudioSupportTests()
@@ -80,4 +181,5 @@ void RunAudioSupportTests()
   TestS16RoundTrip();
   TestChannelExtract();
   TestWavRoundTrip();
+  TestWavRejectsMalformedPayloads();
 }

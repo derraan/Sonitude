@@ -17,7 +17,7 @@ int main(int argc, char** argv)
   {
     const auto config = sonitude::app::LoadRuntimeConfigFromFile(config_path);
     std::cout << "Sonitude M1 probe using config: " << config_path << "\n";
-#if defined(__linux__)
+#if SONITUDE_HAS_ALSA
     const auto cap = sonitude::audio::alsa::ProbeSingleCaptureDevice(config.capture);
     const auto pb = sonitude::audio::alsa::ProbeSinglePlaybackDevice(config.playback);
     auto print_device = [](const sonitude::audio::alsa::DeviceProbeResult& d, const std::string& label) {
@@ -39,7 +39,7 @@ int main(int argc, char** argv)
     std::cout << "]\n";
     return 0;
 #else
-    std::cout << "ALSA probing is only available on Linux.\n";
+    std::cout << "ALSA probing is unavailable in this build (SONITUDE_HAS_ALSA=0).\n";
     (void)config;
     return 0;
 #endif

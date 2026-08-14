@@ -40,6 +40,27 @@ void TestMalformedCsvRejected()
   Require(threw, "malformed steering CSV should throw");
 }
 
+void TestNegativeScriptTimeRejected()
+{
+  const std::string path = "unit_wav_replay_negative_time.csv";
+  {
+    std::ofstream out(path);
+    out << "time_s,azimuth_deg,elevation_deg\n";
+    out << "-0.01,10,0\n";
+  }
+  bool threw = false;
+  try
+  {
+    (void)sonitude::tools::wav_replay::LoadSteeringScript(path, 44100);
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  (void)std::remove(path.c_str());
+  Require(threw, "negative script time should throw");
+}
+
 void TestFirstEventDelayedUsesNeutralTarget()
 {
   const std::vector<sonitude::tools::wav_replay::SteeringEvent> events = {
@@ -107,12 +128,34 @@ void TestNonIdentityChannelMap()
   }
   Require(threw, "out-of-range active channel map should throw");
 }
+
+void TestZeroSampleRateRejected()
+{
+  const std::string path = "unit_wav_replay_empty.csv";
+  {
+    std::ofstream out(path);
+    out << "time_s,azimuth_deg,elevation_deg\n";
+  }
+  bool threw = false;
+  try
+  {
+    (void)sonitude::tools::wav_replay::LoadSteeringScript(path, 0);
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  (void)std::remove(path.c_str());
+  Require(threw, "zero sample rate should throw");
+}
 }  // namespace
 
 void RunWavReplayTests()
 {
   TestMalformedCsvRejected();
+  TestNegativeScriptTimeRejected();
   TestFirstEventDelayedUsesNeutralTarget();
   TestEventInsideBlockSplitsProcessing();
   TestNonIdentityChannelMap();
+  TestZeroSampleRateRejected();
 }

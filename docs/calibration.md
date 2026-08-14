@@ -35,6 +35,17 @@ Per-channel parameters:
   - generated YAML calibration candidate
 - Safety requirement: do not overwrite existing calibration without explicit backup/confirmation.
 
+### Current estimator assumptions
+
+`sonitude_calibration_estimate` currently computes gain as **relative trim against the reference channel (`channels[0]`)**:
+
+- `gain_linear[channel] = reference_rms / channel_rms`
+- `gain_linear[reference] = 1.0`
+
+This requires a controlled common excitation across microphones (same source and stable level) so that RMS ratios represent capsule-response differences rather than source-position changes.
+
+If hardware acceptance needs an absolute SPL calibration protocol, define that protocol in the hardware runbook before promoting these estimates to production calibration artifacts.
+
 ## Limits and assumptions
 
 - Geometry in `config/geometry_soundbubble_initial.yaml` is provisional planar data.

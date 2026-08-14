@@ -4,7 +4,7 @@ This runbook captures the remaining on-target validation gates that cannot be fu
 
 ## Scope
 
-Run these gates on Raspberry Pi 5 (or equivalent Linux target) after syncing branch `audit/remediation`.
+Run these gates on Raspberry Pi 5 (or equivalent Linux target) after syncing branch `audit/pr3-evidence-tools` (or the merge-commit under validation).
 
 ## 0) Linux target setup and baseline build
 
@@ -86,17 +86,72 @@ Compare generated calibration against reference:
 ```bash
 python3 - <<'PY'
 import yaml
+import math
 from pathlib import Path
-ref = yaml.safe_load(Path("config/calibration_example.yaml").read_text(encoding="utf-8"))
-new = yaml.safe_load(Path("build/calibration_estimate_pi.yaml").read_text(encoding="utf-8"))
-print("reference mics:", len(ref.get("microphones", [])))
-print("estimate  mics:", len(new.get("microphones", [])))
+
+EXPECTED_IDS = [
+    "M0_upper_inner_left",
+    "M1_upper_inner_right",
+    "M2_upper_outer_left",
+    "M3_upper_outer_right",
+    "M4_left_earcup",
+    "M5_right_earcup",
+]
+
+def load_yaml(path):
+    return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(f"FAIL: {message}")
+
+def require_finite(value, label):
+    require(isinstance(value, (int, float)) and math.isfinite(float(value)), f"{label} must be finite")
+
+def validate_channels(doc, label):
+    require(isinstance(doc, dict), f"{label} must parse as a YAML mapping")
+    require("sample_rate_hz" in doc, f"{label} missing sample_rate_hz")
+    require_finite(doc["sample_rate_hz"], f"{label}.sample_rate_hz")
+    require(int(doc["sample_rate_hz"]) > 0, f"{label}.sample_rate_hz must be > 0")
+
+    channels = doc.get("channels")
+    require(isinstance(channels, list), f"{label}.channels must be a YAML sequence")
+    require(len(channels) == len(EXPECTED_IDS), f"{label}.channels must contain {len(EXPECTED_IDS)} entries")
+
+    ids = []
+    for idx, ch in enumerate(channels):
+        require(isinstance(ch, dict), f"{label}.channels[{idx}] must be a mapping")
+        channel_id = ch.get("id")
+        require(isinstance(channel_id, str) and channel_id, f"{label}.channels[{idx}].id must be a non-empty string")
+        ids.append(channel_id)
+        require(ch.get("polarity") in (-1, 1), f"{label}.channels[{idx}].polarity must be -1 or +1")
+        require_finite(ch.get("delay_samples"), f"{label}.channels[{idx}].delay_samples")
+        require_finite(ch.get("gain_linear"), f"{label}.channels[{idx}].gain_linear")
+        if "dc_offset" in ch:
+            require_finite(ch["dc_offset"], f"{label}.channels[{idx}].dc_offset")
+
+    require(len(set(ids)) == len(ids), f"{label}.channels ids must be unique")
+    require(set(ids) == set(EXPECTED_IDS), f"{label}.channels ids must match expected geometry IDs")
+    print(f"{label}: sample_rate_hz={int(doc['sample_rate_hz'])}, channels={len(channels)}")
+
+ref = load_yaml("config/calibration_example.yaml")
+new = load_yaml("build/calibration_estimate_pi.yaml")
+validate_channels(ref, "reference")
+validate_channels(new, "estimate")
+print("PASS: calibration schema validation checks succeeded")
 PY
 ```
 
 Record:
-- Mic count parity and obvious outlier delays/gains.
+- Channel-count parity and obvious outlier delays/gains.
 - Whether estimated file is valid for runtime load.
+
+### Synthetic-vs-hardware evidence rule
+
+`--synthetic` exists only for deterministic CI/smoke execution checks. Any artifact generated with `--synthetic` must be treated as **non-hardware evidence** and kept separate from Pi acceptance artifacts.
+
+- CI smoke example (non-hardware): `./build/sonitude_calibration_capture --synthetic --seconds 2 --output build/ci_capture.wav`
+- Hardware acceptance evidence: run without `--synthetic` on target hardware and archive logs/artifacts with device+config provenance.
 
 ## 4) Suppression intelligibility/SNR gate
 

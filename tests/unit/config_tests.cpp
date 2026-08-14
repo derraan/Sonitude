@@ -18,6 +18,8 @@ void RunControlLoopTests();
 void RunZoneTests();
 void RunStateMachineTests();
 void RunSuppressorTests();
+void RunWavReplayTests();
+void RunCalibrationEstimateTests();
 
 namespace
 {
@@ -259,6 +261,8 @@ int main()
     RunControlLoopTests();
     RunZoneTests();
     RunStateMachineTests();
+    RunWavReplayTests();
+    RunCalibrationEstimateTests();
     std::cout << "All unit tests passed.\n";
     return 0;
   }
