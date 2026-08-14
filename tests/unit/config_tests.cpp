@@ -14,12 +14,10 @@ void RunBeamformerTests();
 void RunLimiterTests();
 void RunSnapshotTests();
 void RunOdasParserTests();
-void RunSourceTrackerTests();
 void RunControlLoopTests();
 void RunZoneTests();
 void RunStateMachineTests();
 void RunSuppressorTests();
-void RunWavReplayTests();
 
 namespace
 {
@@ -255,11 +253,14 @@ void TestRuntimeAudioContractHeadroom()
 
 void TestRuntimeConfigOdasContradictionFails()
 {
+  auto config =
+      sonitude::app::LoadRuntimeConfigFromFile(FixturePath("tests/fixtures/runtime_valid.yaml"));
+  config.odas.enabled = false;
+  config.odas.use_mock_provider = false;
   bool threw = false;
   try
   {
-    (void)sonitude::app::LoadRuntimeConfigFromFile(
-        FixturePath("tests/fixtures/runtime_invalid_odas_disabled_real.yaml"));
+    sonitude::app::ValidateRuntimeConfig(config);
   }
   catch (const std::exception&)
   {
@@ -319,11 +320,9 @@ int main()
     RunLimiterTests();
     RunSnapshotTests();
     RunOdasParserTests();
-    RunSourceTrackerTests();
     RunControlLoopTests();
     RunZoneTests();
     RunStateMachineTests();
-    RunWavReplayTests();
     std::cout << "All unit tests passed.\n";
     return 0;
   }

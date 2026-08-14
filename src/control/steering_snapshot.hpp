@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
+#include <type_traits>
 
 #include "audio/audio_types.hpp"
 
@@ -15,8 +15,9 @@ struct SteeringSnapshot
   float confidence = 0.0F;
   float speech_probability = 0.0F;
   std::uint64_t generation = 0;
-  std::string zone_name;
   bool failsafe = true;
   bool has_distractor = false;
 };
+
+static_assert(std::is_trivially_copyable_v<SteeringSnapshot>);
 }  // namespace sonitude::control

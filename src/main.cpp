@@ -18,6 +18,7 @@
 #include "audio/alsa/alsa_device.hpp"
 #include "audio/alsa/capture_worker.hpp"
 #include "audio/alsa/playback_worker.hpp"
+#include "audio/playback_block_pool.hpp"
 #include "control/control_loop.hpp"
 #include "control/conversation_state_machine.hpp"
 #include "control/zones.hpp"
@@ -30,7 +31,6 @@
 #include "dsp/suppressor.hpp"
 #include "rt/param_snapshot.hpp"
 #include "rt/rt_thread.hpp"
-#include "rt/spsc_ring.hpp"
 #include "rt/telemetry.hpp"
 #include "spatial/mock_doa_provider.hpp"
 #include "spatial/odas_provider.hpp"
@@ -40,13 +40,15 @@ namespace
 #if defined(__linux__)
 std::atomic<bool> g_running{true};
 
-void SignalStop(const int) { g_running.store(false, std::memory_order_relaxed); }
-
-struct PlaybackBlockRef
+enum class RuntimeFailure : std::uint8_t
 {
-  std::size_t slot = 0;
-  std::size_t frames = 0;
+  None,
+  PlaybackWrite,
+  PlaybackBlockRelease,
+  PlaybackQueuePublish,
 };
+
+void SignalStop(const int) { g_running.store(false, std::memory_order_relaxed); }
 #endif
 
 void PrintUsage()
@@ -258,11 +260,7 @@ int main(int argc, char** argv)
     std::vector<float> mono(period_frames, 0.0F);
     std::vector<float> distractor_reference(period_frames, 0.0F);
     std::vector<sonitude::dsp::StereoSample> stereo(period_frames);
-    std::vector<std::vector<sonitude::dsp::StereoSample>> playback_blocks(
-        kPlaybackRingSlots, std::vector<sonitude::dsp::StereoSample>(period_frames));
-    sonitude::rt::SpscRing<PlaybackBlockRef> playback_ring(32);
-    std::size_t write_slot = 0;
-    std::atomic<std::size_t> software_queued_frames{0};
+    sonitude::audio::PlaybackBlockPool playback_pool(kPlaybackRingSlots, period_frames);
 
     std::cout << "Running " << mode << " mode. Press Ctrl+C to stop.\n";
     sonitude::audio::BeamformerSteering last_target{};
@@ -272,10 +270,6 @@ int main(int argc, char** argv)
         !sonitude::rt::TryEnableMemoryLocking())
     {
       std::cerr << "Warning: mlockall failed; realtime memory locking is unavailable.\n";
-    }
-    if (!sonitude::rt::TryConfigureCurrentThreadRtScheduling(runtime_config.realtime.capture_priority))
-    {
-      std::cerr << "Warning: capture/DSP thread realtime scheduling was not applied.\n";
     }
     std::jthread control_thread;
     if (mode == "beamform")
@@ -310,16 +304,31 @@ int main(int argc, char** argv)
 
     std::condition_variable_any telemetry_cv;
     std::mutex telemetry_mutex;
+    std::atomic<RuntimeFailure> runtime_failure{RuntimeFailure::None};
     std::jthread telemetry_thread([&](std::stop_token stop_token)
     {
       const auto period = std::chrono::milliseconds(runtime_config.telemetry.stats_period_ms);
       std::unique_lock<std::mutex> lock(telemetry_mutex);
-      while (g_running.load(std::memory_order_relaxed) && !stop_token.stop_requested())
+      while (!stop_token.stop_requested())
       {
         const bool stop_now = telemetry_cv.wait_for(
             lock, stop_token, period, [&] { return !g_running.load(std::memory_order_relaxed); });
         if (stop_now || !g_running.load(std::memory_order_relaxed))
         {
+          switch (runtime_failure.load(std::memory_order_acquire))
+          {
+            case RuntimeFailure::PlaybackWrite:
+              std::cerr << "Playback write failed repeatedly; audio loop stopped.\n";
+              break;
+            case RuntimeFailure::PlaybackBlockRelease:
+              std::cerr << "Playback block ownership invariant failed; audio loop stopped.\n";
+              break;
+            case RuntimeFailure::PlaybackQueuePublish:
+              std::cerr << "Playback filled queue invariant failed; audio loop stopped.\n";
+              break;
+            case RuntimeFailure::None:
+              break;
+          }
           break;
         }
         lock.unlock();
@@ -350,11 +359,11 @@ int main(int argc, char** argv)
       bool playback_started = false;
       std::size_t consecutive_playback_write_failures = 0;
       while (!stop_token.stop_requested() &&
-             (g_running.load(std::memory_order_relaxed) || playback_ring.size() > 0U))
+             (g_running.load(std::memory_order_relaxed) || playback_pool.filledCount() > 0U))
       {
         if (!playback_started)
         {
-          if (playback_ring.size() < kPrefillBlocks)
+          if (playback_pool.filledCount() < kPrefillBlocks)
           {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
@@ -362,28 +371,24 @@ int main(int argc, char** argv)
           playback_started = true;
         }
 
-        PlaybackBlockRef block;
-        if (!playback_ring.pop(block))
+        sonitude::audio::PlaybackBlockRef block;
+        if (!playback_pool.consume(block))
         {
           counters.ring_underruns.fetch_add(1, std::memory_order_relaxed);
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
           continue;
         }
 
-        software_queued_frames.fetch_sub(block.frames, std::memory_order_relaxed);
         const std::size_t device_queued = pb.playbackQueuedFrames();
         const std::size_t occupancy =
-            software_queued_frames.load(std::memory_order_relaxed) + device_queued;
-        if (!pb_worker.writeStereo(
-                std::span<const sonitude::dsp::StereoSample>(playback_blocks[block.slot].data(),
-                                                             block.frames),
-                occupancy))
+            playback_pool.queuedFrames() + block.frames + device_queued;
+        if (!pb_worker.writeStereo(playback_pool.readable(block), occupancy))
         {
           counters.playback_write_failures.fetch_add(1, std::memory_order_relaxed);
           ++consecutive_playback_write_failures;
           if (consecutive_playback_write_failures >= kMaxConsecutivePlaybackFailures)
           {
-            std::cerr << "Playback write failed repeatedly; stopping audio loop.\n";
+            runtime_failure.store(RuntimeFailure::PlaybackWrite, std::memory_order_release);
             g_running.store(false, std::memory_order_relaxed);
             telemetry_cv.notify_all();
           }
@@ -391,6 +396,12 @@ int main(int argc, char** argv)
         else
         {
           consecutive_playback_write_failures = 0;
+        }
+        if (!playback_pool.release(block.slot))
+        {
+          runtime_failure.store(RuntimeFailure::PlaybackBlockRelease, std::memory_order_release);
+          g_running.store(false, std::memory_order_relaxed);
+          telemetry_cv.notify_all();
         }
       }
     });
@@ -410,6 +421,14 @@ int main(int argc, char** argv)
         cap.dropStream();
       }
     });
+    if (!sonitude::rt::TryConfigureOtherScheduling(capture_unblock_thread))
+    {
+      std::cerr << "Warning: capture-unblock thread SCHED_OTHER pinning was not applied.\n";
+    }
+    if (!sonitude::rt::TryConfigureCurrentThreadRtScheduling(runtime_config.realtime.capture_priority))
+    {
+      std::cerr << "Warning: capture/DSP thread realtime scheduling was not applied.\n";
+    }
 
     while (g_running.load(std::memory_order_relaxed))
     {
@@ -490,18 +509,21 @@ int main(int argc, char** argv)
         }
       }
 
-      std::copy(stereo.begin(),
-                stereo.begin() + static_cast<std::ptrdiff_t>(frame_count),
-                playback_blocks[write_slot].begin());
-      const std::size_t written_slot = write_slot;
-      write_slot = (write_slot + 1U) % playback_blocks.size();
-      if (!playback_ring.push({written_slot, frame_count}))
+      std::size_t write_slot = 0;
+      if (!playback_pool.acquire(write_slot))
       {
         counters.ring_overruns.fetch_add(1, std::memory_order_relaxed);
+        continue;
       }
-      else
+      const auto output_block = playback_pool.writable(write_slot);
+      std::copy(stereo.begin(),
+                stereo.begin() + static_cast<std::ptrdiff_t>(frame_count),
+                output_block.begin());
+      if (!playback_pool.publish(write_slot, frame_count))
       {
-        software_queued_frames.fetch_add(frame_count, std::memory_order_relaxed);
+        runtime_failure.store(RuntimeFailure::PlaybackQueuePublish, std::memory_order_release);
+        g_running.store(false, std::memory_order_relaxed);
+        telemetry_cv.notify_all();
       }
 
     }
