@@ -238,10 +238,18 @@ target_link_libraries(
   PRIVATE
     sonitude_core
 )
+if(SONITUDE_WITH_ALSA)
+  target_link_libraries(
+    sonitude_calibration_capture
+    PRIVATE
+      sonitude_audio_alsa
+  )
+endif()
 
 add_executable(
   sonitude_calibration_estimate
   src/tools/calibration_estimate.cpp
+  src/tools/calibration_estimate_support.cpp
 )
 target_link_libraries(
   sonitude_calibration_estimate
@@ -257,6 +265,7 @@ add_executable(
 add_executable(
   sonitude_wav_replay
   src/tools/wav_replay.cpp
+  src/tools/wav_replay_support.cpp
 )
 target_link_libraries(
   sonitude_wav_replay
@@ -284,6 +293,7 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/rt_tests.cpp
     tests/unit/asrc_sim_tests.cpp
     tests/unit/calibration_tests.cpp
+    tests/unit/calibration_estimate_tests.cpp
     tests/unit/beamformer_tests.cpp
     tests/unit/limiter_tests.cpp
     tests/unit/suppressor_tests.cpp
@@ -294,6 +304,9 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/state_machine_tests.cpp
     tests/unit/lifecycle_tests.cpp
     tests/unit/thread_safety_tests.cpp
+    tests/unit/wav_replay_tests.cpp
+    src/tools/calibration_estimate_support.cpp
+    src/tools/wav_replay_support.cpp
   )
 
   target_link_libraries(

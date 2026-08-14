@@ -220,6 +220,68 @@ void TestWavRejectsOversizedChunkDeclaration()
                "WAV reader must reject chunk sizes that exceed file bounds");
   (void)std::remove(path.c_str());
 }
+
+void TestWavRejectsMalformedPayloads()
+{
+  {
+    const std::string path = "unit_wav_bad_header.wav";
+    WriteBytesToFile(path, {'N', 'O', 'P', 'E'});
+    ExpectThrows([&path]() { (void)sonitude::audio::ReadWavFile(path); },
+                 "invalid RIFF header should throw");
+    (void)std::remove(path.c_str());
+  }
+
+  {
+    std::vector<std::uint8_t> bytes;
+    AppendTag(bytes, {'R', 'I', 'F', 'F'});
+    AppendLe32(bytes, 0);
+    AppendTag(bytes, {'W', 'A', 'V', 'E'});
+    AppendTag(bytes, {'f', 'm', 't', ' '});
+    AppendLe32(bytes, 16);
+    AppendLe16(bytes, 1);
+    AppendLe16(bytes, 1);
+    AppendLe32(bytes, 44100);
+    AppendLe32(bytes, 88200);
+    AppendLe16(bytes, 2);
+    AppendLe16(bytes, 16);
+    AppendTag(bytes, {'d', 'a', 't', 'a'});
+    AppendLe32(bytes, 8);
+    AppendLe16(bytes, 0);
+    AppendLe16(bytes, 0);
+    FinalizeRiffSize(bytes);
+
+    const std::string path = "unit_wav_truncated_data.wav";
+    WriteBytesToFile(path, bytes);
+    ExpectThrows([&path]() { (void)sonitude::audio::ReadWavFile(path); },
+                 "truncated data payload should throw");
+    (void)std::remove(path.c_str());
+  }
+
+  {
+    std::vector<std::uint8_t> bytes;
+    AppendTag(bytes, {'R', 'I', 'F', 'F'});
+    AppendLe32(bytes, 0);
+    AppendTag(bytes, {'W', 'A', 'V', 'E'});
+    AppendTag(bytes, {'f', 'm', 't', ' '});
+    AppendLe32(bytes, 16);
+    AppendLe16(bytes, 1);
+    AppendLe16(bytes, 2);
+    AppendLe32(bytes, 44100);
+    AppendLe32(bytes, 176400);
+    AppendLe16(bytes, 4);
+    AppendLe16(bytes, 16);
+    AppendTag(bytes, {'d', 'a', 't', 'a'});
+    AppendLe32(bytes, 3);
+    bytes.insert(bytes.end(), 3, 0);
+    FinalizeRiffSize(bytes);
+
+    const std::string path = "unit_wav_unaligned_data.wav";
+    WriteBytesToFile(path, bytes);
+    ExpectThrows([&path]() { (void)sonitude::audio::ReadWavFile(path); },
+                 "sample-unaligned payload should throw");
+    (void)std::remove(path.c_str());
+  }
+}
 }  // namespace
 
 void RunAudioSupportTests()
@@ -230,4 +292,5 @@ void RunAudioSupportTests()
   TestWavRejectsShortFmtChunk();
   TestWavOddChunkPaddingIsHandled();
   TestWavRejectsOversizedChunkDeclaration();
+  TestWavRejectsMalformedPayloads();
 }

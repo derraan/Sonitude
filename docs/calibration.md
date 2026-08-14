@@ -35,6 +35,35 @@ Per-channel parameters:
   - generated YAML calibration candidate
 - Safety requirement: do not overwrite existing calibration without explicit backup/confirmation.
 
+### Current estimator assumptions
+
+`sonitude_calibration_estimate` currently computes gain as **relative trim against the reference channel (`channels[0]`)**:
+
+- `gain_linear[channel] = reference_rms / channel_rms`
+- `gain_linear[reference] = 1.0`
+
+This requires a controlled common excitation across microphones (same source and stable level) so that RMS ratios represent capsule-response differences rather than source-position changes.
+
+Every estimator invocation must provide `--min-correlation <0..1>`. The estimator rejects each
+non-reference channel whose mean-removed normalized peak correlation is below that threshold,
+before it creates, backs up, or replaces the YAML output. Hardware acceptance must use the
+project-approved threshold selected through hardware characterization.
+
+Synthetic/testing estimation must be explicit and separately named:
+
+```bash
+./build/sonitude_calibration_estimate \
+  --input build/ci_capture.synthetic.wav \
+  --output build/ci_estimate.yaml \
+  --min-correlation 0 \
+  --synthetic
+```
+
+The zero threshold above is only an execution-path test value. It is not a hardware acceptance
+threshold and must not be used to approve calibration evidence.
+
+If hardware acceptance needs an absolute SPL calibration protocol, define that protocol in the hardware runbook before promoting these estimates to production calibration artifacts.
+
 ## Limits and assumptions
 
 - Geometry in `config/geometry_soundbubble_initial.yaml` is provisional planar data.

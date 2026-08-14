@@ -20,6 +20,8 @@ void RunStateMachineTests();
 void RunSuppressorTests();
 void RunLifecycleTests();
 void RunThreadSafetyTests();
+void RunWavReplayTests();
+void RunCalibrationEstimateTests();
 
 namespace
 {
@@ -350,6 +352,8 @@ int main()
     RunStateMachineTests();
     RunLifecycleTests();
     RunThreadSafetyTests();
+    RunWavReplayTests();
+    RunCalibrationEstimateTests();
     std::cout << "All unit tests passed.\n";
     return 0;
   }

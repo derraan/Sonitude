@@ -13,9 +13,11 @@
 #include "app/calibration_config.hpp"
 #include "app/config.hpp"
 #include "app/logging.hpp"
+#if SONITUDE_HAS_ALSA
 #include "audio/alsa/alsa_device.hpp"
 #include "audio/alsa/capture_worker.hpp"
 #include "audio/alsa/playback_worker.hpp"
+#endif
 #include "control/control_loop.hpp"
 #include "control/conversation_state_machine.hpp"
 #include "control/rt_steering_snapshot.hpp"
@@ -49,7 +51,7 @@ void PrintUsage()
       << "  sonitude_realtime --help\n";
 }
 
-#if defined(__linux__)
+#if SONITUDE_HAS_ALSA
 constexpr std::size_t kPrefillBlocks = 2;
 constexpr std::size_t kPlaybackBlockSlots = 16;
 constexpr std::size_t kMaxConsecutivePlaybackFailures = 16;
@@ -213,7 +215,7 @@ int main(int argc, char** argv)
       return 0;
     }
 
-#if defined(__linux__)
+#if SONITUDE_HAS_ALSA
     // ------------------------------------------------------------------
     // Phase 1: initialisation. The supervisor thread stays SCHED_OTHER for
     // all of it, so nothing here can be inherited as a realtime policy, and
@@ -863,7 +865,7 @@ int main(int argc, char** argv)
     }
     return 0;
 #else
-    std::cout << "Passthrough mode is Linux-only (ALSA).\n";
+    std::cout << "Passthrough mode is unavailable because this build has no ALSA support.\n";
     return 0;
 #endif
   }
