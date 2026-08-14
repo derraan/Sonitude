@@ -104,6 +104,9 @@ struct RealtimeConfig
   std::int32_t capture_priority = 80;
   std::int32_t playback_priority = 78;
   bool enable_mlockall = true;
+  // When true, mlockall(MCL_CURRENT | MCL_FUTURE) is a startup requirement.
+  // Development and unit-test configurations leave this false.
+  bool require_memory_lock = false;
   // When true, a realtime thread that cannot obtain SCHED_FIFO aborts startup
   // instead of running degraded. Production deployments should set this.
   bool require_realtime = false;

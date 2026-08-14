@@ -361,7 +361,8 @@ int main(int argc, char** argv)
     // Phase 2: lifecycle and memory locking, still on the supervisor.
     // ------------------------------------------------------------------
     sonitude::rt::Lifecycle lifecycle;
-    if (!sonitude::rt::InstallSignalHandlers(lifecycle))
+    sonitude::rt::SignalHandlerInstallation signal_handlers(lifecycle);
+    if (!signal_handlers.installed())
     {
       std::cerr << "Warning: could not install SIGINT/SIGTERM handlers.\n";
     }
@@ -374,6 +375,12 @@ int main(int argc, char** argv)
                   << ". Grant CAP_IPC_LOCK or raise RLIMIT_MEMLOCK "
                   << "(see scripts/set_realtime_environment.sh); page faults may cause audio "
                   << "dropouts.\n";
+        if (runtime_config.realtime.require_memory_lock)
+        {
+          std::cerr << "Startup failed: production configuration requires successful memory "
+                       "locking.\n";
+          return 1;
+        }
       }
     }
 

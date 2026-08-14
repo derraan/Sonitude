@@ -4,6 +4,10 @@
 #include <chrono>
 #include <cstdint>
 
+#if defined(__linux__)
+#include <signal.h>
+#endif
+
 #include "rt/wake_event.hpp"
 
 namespace sonitude::rt
@@ -70,8 +74,35 @@ class Lifecycle
   WakeEvent wake_;
 };
 
-// Installs SIGINT/SIGTERM handlers that call lifecycle.requestStop(Signal).
-// The lifecycle must outlive the process's use of signals. Returns false when
-// a handler could not be installed.
-bool InstallSignalHandlers(Lifecycle& lifecycle) noexcept;
+static_assert(std::atomic<Lifecycle*>::is_always_lock_free,
+              "the signal target pointer must always be lock-free");
+
+// Owns the process SIGINT/SIGTERM installation. Declare this immediately after
+// its Lifecycle so this object is destroyed first. Destruction blocks the
+// handled signals, clears the target, and restores both previous handlers
+// before the Lifecycle can be destroyed.
+class SignalHandlerInstallation
+{
+ public:
+  explicit SignalHandlerInstallation(Lifecycle& lifecycle) noexcept;
+  ~SignalHandlerInstallation();
+
+  SignalHandlerInstallation(const SignalHandlerInstallation&) = delete;
+  SignalHandlerInstallation& operator=(const SignalHandlerInstallation&) = delete;
+  SignalHandlerInstallation(SignalHandlerInstallation&&) = delete;
+  SignalHandlerInstallation& operator=(SignalHandlerInstallation&&) = delete;
+
+  bool installed() const noexcept { return installed_; }
+
+ private:
+#if defined(__linux__)
+  struct sigaction previous_int_
+  {
+  };
+  struct sigaction previous_term_
+  {
+  };
+#endif
+  bool installed_ = false;
+};
 }  // namespace sonitude::rt

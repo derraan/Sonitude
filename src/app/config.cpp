@@ -175,6 +175,8 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
   config.realtime.capture_priority = RequireScalar<std::int32_t>(realtime, "capture_priority");
   config.realtime.playback_priority = RequireScalar<std::int32_t>(realtime, "playback_priority");
   config.realtime.enable_mlockall = RequireScalar<bool>(realtime, "enable_mlockall");
+  config.realtime.require_memory_lock =
+      OptionalScalar<bool>(realtime, "require_memory_lock", false);
   config.realtime.require_realtime = OptionalScalar<bool>(realtime, "require_realtime", false);
   config.realtime.rt_stack_kib = OptionalScalar<std::uint32_t>(realtime, "rt_stack_kib", 512U);
   config.realtime.rt_prefault_kib = OptionalScalar<std::uint32_t>(realtime, "rt_prefault_kib", 128U);
@@ -326,6 +328,11 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   if (config.realtime.playback_priority < 1 || config.realtime.playback_priority > 99)
   {
     throw std::runtime_error("realtime.playback_priority must be in [1, 99]");
+  }
+  if (config.realtime.require_memory_lock && !config.realtime.enable_mlockall)
+  {
+    throw std::runtime_error(
+        "realtime.require_memory_lock=true requires realtime.enable_mlockall=true");
   }
 
   if (config.zones.empty())

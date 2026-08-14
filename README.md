@@ -174,9 +174,17 @@ Authoritative gate evidence: `[docs/milestones.md](docs/milestones.md)`.
 Status legend: `pending` · `in_progress` · `done` · `blocked`
 
 ```bash
-./build/sonitude_realtime --config config/default.yaml --mode passthrough   # Linux + ALSA
+./build/sonitude_realtime --config config/default.yaml --mode passthrough   # development
+./scripts/run_realtime.sh                                                   # production Pi
 ctest --test-dir build --output-on-failure                                 # portable
 ```
+
+The production launcher explicitly uses `config/production_pi.yaml`. It fails
+startup unless `mlockall(MCL_CURRENT | MCL_FUTURE)` succeeds and both audio
+threads obtain their requested FIFO policies. Before accepting a Pi run, the
+printed scheduling table must show capture `SCHED_FIFO/80`, playback
+`SCHED_FIFO/78`, and control/telemetry `SCHED_OTHER/0`, with no `DEGRADED`
+thread.
 
 
 

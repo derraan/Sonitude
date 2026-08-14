@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <latch>
 #include <stdexcept>
@@ -14,6 +15,15 @@
 
 namespace
 {
+#if defined(__linux__)
+volatile std::sig_atomic_t g_previous_handler_calls = 0;
+
+void PreviousSignalHandler(int)
+{
+  g_previous_handler_calls = 1;
+}
+#endif
+
 void Require(const bool condition, const std::string& message)
 {
   if (!condition)
@@ -107,6 +117,71 @@ void TestStopReleasesConcurrentWaiters()
   Require(observed.load(std::memory_order_relaxed) == kWaiters,
           "every waiter must observe a single stop request");
 }
+
+#if defined(__linux__)
+void TestSignalInstallationDeliveryTeardownAndRestoration()
+{
+  struct sigaction original_int
+  {
+  };
+  struct sigaction original_term
+  {
+  };
+  Require(::sigaction(SIGINT, nullptr, &original_int) == 0,
+          "the existing SIGINT handler must be readable");
+  Require(::sigaction(SIGTERM, nullptr, &original_term) == 0,
+          "the existing SIGTERM handler must be readable");
+
+  struct sigaction previous
+  {
+  };
+  previous.sa_handler = PreviousSignalHandler;
+  (void)::sigemptyset(&previous.sa_mask);
+  previous.sa_flags = 0;
+  Require(::sigaction(SIGINT, &previous, nullptr) == 0,
+          "the test SIGINT handler must install");
+  Require(::sigaction(SIGTERM, &previous, nullptr) == 0,
+          "the test SIGTERM handler must install");
+
+  {
+    sonitude::rt::Lifecycle lifecycle;
+    {
+      sonitude::rt::SignalHandlerInstallation installation(lifecycle);
+      Require(installation.installed(), "SIGINT/SIGTERM installation must succeed");
+      Require(::raise(SIGINT) == 0, "SIGINT delivery must succeed");
+      Require(lifecycle.stopRequested(), "SIGINT must request lifecycle stop");
+      Require(lifecycle.reason() == sonitude::rt::StopReason::Signal,
+              "SIGINT must preserve the signal stop reason");
+      lifecycle.requestStop(sonitude::rt::StopReason::PlaybackFailure);
+      Require(lifecycle.reason() == sonitude::rt::StopReason::Signal,
+              "a later stop must not replace the signal reason");
+    }
+
+    struct sigaction restored_int
+    {
+    };
+    struct sigaction restored_term
+    {
+    };
+    Require(::sigaction(SIGINT, nullptr, &restored_int) == 0,
+            "the restored SIGINT handler must be readable");
+    Require(::sigaction(SIGTERM, nullptr, &restored_term) == 0,
+            "the restored SIGTERM handler must be readable");
+    Require(restored_int.sa_handler == PreviousSignalHandler,
+            "teardown must restore the previous SIGINT handler");
+    Require(restored_term.sa_handler == PreviousSignalHandler,
+            "teardown must restore the previous SIGTERM handler");
+
+    g_previous_handler_calls = 0;
+    Require(::raise(SIGTERM) == 0, "restored SIGTERM delivery must succeed");
+    Require(g_previous_handler_calls == 1,
+            "a signal after teardown must reach the previous handler");
+  }
+
+  (void)::sigaction(SIGTERM, &original_term, nullptr);
+  (void)::sigaction(SIGINT, &original_int, nullptr);
+}
+#endif
 
 // The gate is the mechanism that stops a thread from running before its policy
 // is settled, so it is tested directly rather than only through main().
@@ -292,6 +367,9 @@ void RunLifecycleTests()
   TestWakeEventReleasesBlockedWaiter();
   TestStopIsStickyAndFirstReasonWins();
   TestStopReleasesConcurrentWaiters();
+#if defined(__linux__)
+  TestSignalInstallationDeliveryTeardownAndRestoration();
+#endif
   TestStartGateHoldsWorkUntilRelease();
   TestStartGateAbortSkipsWork();
   TestSlowThreadIsNeverRealtime();

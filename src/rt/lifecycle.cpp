@@ -1,15 +1,16 @@
 #include "rt/lifecycle.hpp"
 
-#include <csignal>
+#if defined(__linux__)
+#include <pthread.h>
+#endif
 
 namespace sonitude::rt
 {
 namespace
 {
-// Only ever set once, by the supervisor, before signal handlers are installed.
 std::atomic<Lifecycle*> g_signal_target{nullptr};
 
-void HandleStopSignal(int)
+void HandleStopSignal(int) noexcept
 {
   Lifecycle* target = g_signal_target.load(std::memory_order_acquire);
   if (target != nullptr)
@@ -17,6 +18,17 @@ void HandleStopSignal(int)
     target->requestStop(StopReason::Signal);
   }
 }
+
+#if defined(__linux__)
+sigset_t StopSignalSet() noexcept
+{
+  sigset_t signals;
+  (void)::sigemptyset(&signals);
+  (void)::sigaddset(&signals, SIGINT);
+  (void)::sigaddset(&signals, SIGTERM);
+  return signals;
+}
+#endif
 }  // namespace
 
 const char* StopReasonName(const StopReason reason) noexcept
@@ -63,10 +75,76 @@ bool Lifecycle::waitForStopOr(const std::chrono::milliseconds period) noexcept
   return stopRequested();
 }
 
-bool InstallSignalHandlers(Lifecycle& lifecycle) noexcept
+SignalHandlerInstallation::SignalHandlerInstallation(Lifecycle& lifecycle) noexcept
 {
-  g_signal_target.store(&lifecycle, std::memory_order_release);
-  return std::signal(SIGINT, HandleStopSignal) != SIG_ERR &&
-         std::signal(SIGTERM, HandleStopSignal) != SIG_ERR;
+#if defined(__linux__)
+  const sigset_t signals = StopSignalSet();
+  sigset_t previous_mask;
+  if (::pthread_sigmask(SIG_BLOCK, &signals, &previous_mask) != 0)
+  {
+    return;
+  }
+
+  Lifecycle* expected = nullptr;
+  if (!g_signal_target.compare_exchange_strong(
+          expected, &lifecycle, std::memory_order_release, std::memory_order_relaxed))
+  {
+    (void)::pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr);
+    return;
+  }
+
+  struct sigaction action
+  {
+  };
+  action.sa_handler = HandleStopSignal;
+  (void)::sigemptyset(&action.sa_mask);
+  action.sa_flags = SA_RESTART;
+
+  const bool int_installed = ::sigaction(SIGINT, &action, &previous_int_) == 0;
+  const bool term_installed =
+      int_installed && ::sigaction(SIGTERM, &action, &previous_term_) == 0;
+  if (!term_installed)
+  {
+    if (int_installed)
+    {
+      (void)::sigaction(SIGINT, &previous_int_, nullptr);
+    }
+    g_signal_target.store(nullptr, std::memory_order_release);
+  }
+  else
+  {
+    installed_ = true;
+  }
+  (void)::pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr);
+#else
+  (void)lifecycle;
+#endif
+}
+
+SignalHandlerInstallation::~SignalHandlerInstallation()
+{
+#if defined(__linux__)
+  if (!installed_)
+  {
+    return;
+  }
+
+  // Runtime threads are joined before this owner is destroyed. Blocking both
+  // signals on the remaining supervisor closes the final teardown window:
+  // after the target is cleared, no invocation can acquire the Lifecycle.
+  const sigset_t signals = StopSignalSet();
+  sigset_t previous_mask;
+  const bool mask_changed = ::pthread_sigmask(SIG_BLOCK, &signals, &previous_mask) == 0;
+
+  g_signal_target.store(nullptr, std::memory_order_release);
+  (void)::sigaction(SIGTERM, &previous_term_, nullptr);
+  (void)::sigaction(SIGINT, &previous_int_, nullptr);
+  installed_ = false;
+
+  if (mask_changed)
+  {
+    (void)::pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr);
+  }
+#endif
 }
 }  // namespace sonitude::rt

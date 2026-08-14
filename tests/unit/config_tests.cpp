@@ -44,8 +44,33 @@ void TestRuntimeConfigValid()
   Require(config.suppression.fade_ms > 0.0F, "suppression config should parse from runtime YAML");
   Require(config.calibration_dc_block_hz > 0.0F, "calibration_dc_block_hz should parse from runtime YAML");
   Require(config.realtime.capture_priority > 0, "realtime config should parse from runtime YAML");
+  Require(!config.realtime.require_memory_lock,
+          "missing require_memory_lock must retain the backward-compatible false default");
   Require(config.zones.front().policy == sonitude::app::ZonePolicy::Focus,
           "zone policy should parse from runtime YAML");
+}
+
+void TestProductionRealtimeContract()
+{
+  const auto config =
+      sonitude::app::LoadRuntimeConfigFromFile(FixturePath("config/production_pi.yaml"));
+  Require(config.realtime.require_realtime,
+          "the production Pi configuration must require realtime scheduling");
+  Require(config.realtime.enable_mlockall && config.realtime.require_memory_lock,
+          "the production Pi configuration must require memory locking");
+
+  auto invalid = config;
+  invalid.realtime.enable_mlockall = false;
+  bool threw = false;
+  try
+  {
+    sonitude::app::ValidateRuntimeConfig(invalid);
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "require_memory_lock without enable_mlockall must be rejected");
 }
 
 void TestRuntimeConfigDuplicateChannelFails()
@@ -302,6 +327,7 @@ int main()
   try
   {
     TestRuntimeConfigValid();
+    TestProductionRealtimeContract();
     TestRuntimeConfigDuplicateChannelFails();
     TestRuntimeAudioContract();
     TestRuntimeAudioContractHeadroom();
