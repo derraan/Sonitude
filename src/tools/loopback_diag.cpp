@@ -59,7 +59,13 @@ int main(int argc, char** argv)
     const bool asrc_enabled =
         config.asrc.enabled && !config.asrc.allow_bypass_for_locked_bench;
     sonitude::audio::alsa::PlaybackWorker pb_worker(
-        &pb, resampler.get(), &ctl, &counters, asrc_enabled);
+        &pb,
+        resampler.get(),
+        &ctl,
+        &counters,
+        asrc_enabled,
+        cap_params.period_frames,
+        config.asrc.max_ratio);
 
     const std::size_t period_frames = cap_worker.periodFrames();
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);

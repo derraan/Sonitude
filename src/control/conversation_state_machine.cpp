@@ -1,6 +1,7 @@
 #include "control/conversation_state_machine.hpp"
 
 #include <cmath>
+#include <optional>
 #include <utility>
 
 namespace sonitude::control
@@ -43,9 +44,14 @@ SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input
   }
 
   const bool speech = input.speech_probability >= 0.6F;
+  std::int16_t zone_id = kNoZoneId;
   if (input.has_track)
   {
-    (void)zones_.zoneFor(input.track.azimuth_deg);
+    const std::optional<std::size_t> zone_index = zones_.zoneIndexFor(input.track.azimuth_deg);
+    if (zone_index.has_value())
+    {
+      zone_id = static_cast<std::int16_t>(*zone_index);
+    }
   }
   switch (state_)
   {
@@ -122,6 +128,7 @@ SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input
 
   SteeringSnapshot out{};
   out.generation = ++generation_;
+  out.zone_id = zone_id;
   out.failsafe = (state_ == ConversationState::Ambient);
   if (state_ == ConversationState::Ambient)
   {

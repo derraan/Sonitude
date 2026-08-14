@@ -21,6 +21,18 @@ T RequireScalar(const YAML::Node& node, const char* key)
   return node[key].as<T>();
 }
 
+// Used for keys added after the first configuration files shipped, so existing
+// configs keep loading with the documented default.
+template <typename T>
+T OptionalScalar(const YAML::Node& node, const char* key, const T& fallback)
+{
+  if (!node || !node[key])
+  {
+    return fallback;
+  }
+  return node[key].as<T>();
+}
+
 DeviceConfig ParseDevice(const YAML::Node& node, const char* parent_key)
 {
   if (!node || !node.IsMap())
@@ -163,6 +175,11 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
   config.realtime.capture_priority = RequireScalar<std::int32_t>(realtime, "capture_priority");
   config.realtime.playback_priority = RequireScalar<std::int32_t>(realtime, "playback_priority");
   config.realtime.enable_mlockall = RequireScalar<bool>(realtime, "enable_mlockall");
+  config.realtime.require_realtime = OptionalScalar<bool>(realtime, "require_realtime", false);
+  config.realtime.rt_stack_kib = OptionalScalar<std::uint32_t>(realtime, "rt_stack_kib", 512U);
+  config.realtime.rt_prefault_kib = OptionalScalar<std::uint32_t>(realtime, "rt_prefault_kib", 128U);
+  config.realtime.startup_timeout_ms =
+      OptionalScalar<std::uint32_t>(realtime, "startup_timeout_ms", 2000U);
 
   config.zones = ParseZones(root["zones"]);
 

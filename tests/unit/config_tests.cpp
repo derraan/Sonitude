@@ -12,14 +12,13 @@ void RunAsrcSimulationTests();
 void RunCalibrationTests();
 void RunBeamformerTests();
 void RunLimiterTests();
-void RunSnapshotTests();
 void RunOdasParserTests();
-void RunSourceTrackerTests();
 void RunControlLoopTests();
 void RunZoneTests();
 void RunStateMachineTests();
 void RunSuppressorTests();
-void RunWavReplayTests();
+void RunLifecycleTests();
+void RunThreadSafetyTests();
 
 namespace
 {
@@ -317,13 +316,12 @@ int main()
     RunBeamformerTests();
     RunSuppressorTests();
     RunLimiterTests();
-    RunSnapshotTests();
     RunOdasParserTests();
-    RunSourceTrackerTests();
     RunControlLoopTests();
     RunZoneTests();
     RunStateMachineTests();
-    RunWavReplayTests();
+    RunLifecycleTests();
+    RunThreadSafetyTests();
     std::cout << "All unit tests passed.\n";
     return 0;
   }

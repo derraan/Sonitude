@@ -97,9 +97,19 @@ struct TelemetryConfig
 
 struct RealtimeConfig
 {
+  // Provisional values. No measured WCET exists for this pipeline yet, so the
+  // ordering here is a conservative starting point, not a scheduling result.
+  // See docs/thread_safety_audit_2026-08-14.md for what must be measured before
+  // these numbers can be treated as justified.
   std::int32_t capture_priority = 80;
   std::int32_t playback_priority = 78;
   bool enable_mlockall = true;
+  // When true, a realtime thread that cannot obtain SCHED_FIFO aborts startup
+  // instead of running degraded. Production deployments should set this.
+  bool require_realtime = false;
+  std::uint32_t rt_stack_kib = 512;
+  std::uint32_t rt_prefault_kib = 128;
+  std::uint32_t startup_timeout_ms = 2000;
 };
 
 struct RuntimeConfig

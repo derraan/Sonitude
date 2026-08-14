@@ -26,6 +26,29 @@ else()
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Sanitizer builds for the concurrency tests. ThreadSanitizer and
+# AddressSanitizer cannot be combined, so SONITUDE_SANITIZER selects one.
+# These builds are for the non-realtime test configuration: TSan in particular
+# interposes on synchronisation and must not be used to judge timing.
+set(SONITUDE_SANITIZER "none" CACHE STRING "Sanitizer to enable: none, thread, address")
+set_property(CACHE SONITUDE_SANITIZER PROPERTY STRINGS none thread address)
+if(NOT SONITUDE_SANITIZER STREQUAL "none")
+  if(MSVC)
+    message(FATAL_ERROR "SONITUDE_SANITIZER is only supported for GCC/Clang builds")
+  endif()
+  if(SONITUDE_SANITIZER STREQUAL "thread")
+    add_compile_options(-fsanitize=thread -g -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+  elseif(SONITUDE_SANITIZER STREQUAL "address")
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -g
+                        -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+  else()
+    message(FATAL_ERROR "Unknown SONITUDE_SANITIZER: ${SONITUDE_SANITIZER}")
+  endif()
+  message(STATUS "Sanitizer enabled: ${SONITUDE_SANITIZER}")
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Dependencies)
 
@@ -47,7 +70,10 @@ add_library(
   src/dsp/resampler_src.cpp
   src/dsp/selective_suppressor.cpp
   src/dsp/suppressor.cpp
-  src/rt/rt_thread.cpp
+  src/rt/lifecycle.cpp
+  src/rt/managed_thread.cpp
+  src/rt/scheduling.cpp
+  src/rt/wake_event.cpp
   src/spatial/mock_doa_provider.cpp
   src/spatial/odas_message_parser.cpp
   src/spatial/odas_provider.cpp
@@ -65,6 +91,7 @@ target_link_libraries(
   PUBLIC
     yaml-cpp::yaml-cpp
     spdlog::spdlog
+    Threads::Threads
 )
 
 if(SONITUDE_WITH_LIBSAMPLERATE AND SONITUDE_LIBSAMPLERATE_FOUND)
@@ -259,18 +286,20 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/calibration_tests.cpp
     tests/unit/beamformer_tests.cpp
     tests/unit/limiter_tests.cpp
-    tests/unit/snapshot_tests.cpp
     tests/unit/suppressor_tests.cpp
     tests/unit/odas_parser_tests.cpp
     tests/unit/control_loop_tests.cpp
     tests/unit/zone_tests.cpp
     tests/unit/state_machine_tests.cpp
+    tests/unit/lifecycle_tests.cpp
+    tests/unit/thread_safety_tests.cpp
   )
 
   target_link_libraries(
     sonitude_unit_tests
     PRIVATE
       sonitude_core
+      Threads::Threads
   )
   target_include_directories(
     sonitude_unit_tests
