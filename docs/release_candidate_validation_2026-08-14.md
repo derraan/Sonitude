@@ -4,7 +4,7 @@
 
 - Integration branch: `integration/release-candidate-2026-08-14`
 - Base: `origin/main` at `ecac64f62813901ea6cbb7c1a634817151877968`
-- Validated source-tree commit: `0b6ed23e73b62ab0db6d9c87cfeec3daae3f005e`
+- Validated source-tree commit: `546a411ab57103bbc0fbfbf8da9b7f69cd34619b`
 - PR #27 foundation: `c16a005e1668d13643508b52306469c50873dd91`
 - PR #24 semantic source: `f782795c2f016839595e0e0eb8109930a80b9e74`
 - PR #25 tooling source: `c22b858df9a6101aa1123f5aca24057c76a91a5a`
@@ -216,26 +216,35 @@ git diff --check
   production acceptance threshold.
 - clang-tidy reported warnings only in non-user/system code and suppressed
   them; both targeted first-party sources passed with warnings-as-errors.
-- GitHub CI URLs are pending until the integration branch and draft PR are
-  pushed in Phase 9. Add the workflow and draft PR URLs here after those runs
-  complete.
+- The first PR-event Gitleaks job returned HTTP 403 because the workflow lacked
+  `pull-requests: read`. Commit `546a411` added that least-privilege permission;
+  the complete push and PR workflow reruns then passed.
 
 ## GitHub CI
 
-Pending branch publication. Required jobs are:
+Draft PR: https://github.com/derraan/Sonitude/pull/28
 
-- Build and test: libsamplerate ON
-- Build and test: libsamplerate OFF
-- Build and test: ALSA OFF
-- ASan + UBSan
-- TSan integrated concurrency/lifecycle tests
-- clang-format 18
-- clang-tidy 18
-- bounded ODAS and WAV fuzzing
-- Pico firmware build
-- Gitleaks
+Green runs for source commit `546a411ab57103bbc0fbfbf8da9b7f69cd34619b`:
 
-CI run URLs: **pending branch push and draft PR creation**.
+- Push Linux matrix:
+  https://github.com/derraan/Sonitude/actions/runs/31795644554
+- Pull-request Linux matrix:
+  https://github.com/derraan/Sonitude/actions/runs/31795647937
+- Pull-request repository Gitleaks workflow:
+  https://github.com/derraan/Sonitude/actions/runs/31795647944
+
+Results:
+
+- PASS — Build and test: libsamplerate ON.
+- PASS — Build and test: libsamplerate OFF.
+- PASS — Build and test: ALSA OFF.
+- PASS — ASan + UBSan.
+- PASS — TSan integrated concurrency/lifecycle tests.
+- PASS — clang-format 18.
+- PASS — clang-tidy 18.
+- PASS — bounded ODAS and WAV fuzzing.
+- PASS — Pico firmware build.
+- PASS — Gitleaks in the Linux matrix and repository security workflow.
 
 ## Hardware validation pending
 
