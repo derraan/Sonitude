@@ -19,4 +19,5 @@ struct WavData
 
 void WriteWavFile(const std::string& path, const WavData& data);
 WavData ReadWavFile(const std::string& path);
+WavData ReadWavBytes(const std::uint8_t* data, std::size_t size);
 }  // namespace sonitude::audio

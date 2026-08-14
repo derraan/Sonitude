@@ -353,11 +353,6 @@ if(SONITUDE_BUILD_FUZZERS)
     PRIVATE
       sonitude_core
   )
-  target_compile_definitions(
-    fuzz_wav_io
-    PRIVATE
-      SONITUDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-  )
   target_compile_options(
     fuzz_wav_io
     PRIVATE

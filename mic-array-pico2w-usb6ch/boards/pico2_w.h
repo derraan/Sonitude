@@ -98,9 +98,12 @@
 #define CYW43_WL_GPIO_VBUS_PIN 2
 #endif
 
-// If CYW43_USES_VSYS_PIN is defined then CYW43 uses the VSYS GPIO (defined by PICO_VSYS_PIN) for other purposes.
-// If this is the case, to use the VSYS GPIO it's necessary to ensure CYW43 is not using it.
-// This can be achieved by wrapping the use of the VSYS GPIO in cyw43_thread_enter / cyw43_thread_exit.
+// If CYW43_USES_VSYS_PIN is defined then CYW43 uses the VSYS GPIO
+// (defined by PICO_VSYS_PIN) for other purposes.
+// If this is the case, to use the VSYS GPIO it's necessary to ensure CYW43
+// is not using it.
+// This can be achieved by wrapping the use of the VSYS GPIO in
+// cyw43_thread_enter / cyw43_thread_exit.
 #ifndef CYW43_USES_VSYS_PIN
 #define CYW43_USES_VSYS_PIN 1
 #endif

@@ -66,15 +66,16 @@ jobs:
       - name: Install clang-format
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-format
+          sudo apt-get install -y clang-format-18
       - name: Enforce formatting
         run: |
+          clang-format-18 --version
           files=$(git ls-files '*.cpp' '*.hpp' '*.h' '*.c')
           if [ -z "$files" ]; then
             echo "No source files to check."
             exit 0
           fi
-          clang-format --dry-run --Werror $files
+          clang-format-18 --dry-run --Werror $files
 
   clang-tidy:
     runs-on: ubuntu-latest
@@ -120,9 +121,9 @@ jobs:
       - name: Build fuzz targets
         run: cmake --build build --target fuzz_odas_parser fuzz_wav_io
       - name: Run ODAS parser fuzz (bounded)
-        run: ./build/fuzz_odas_parser -max_total_time=20
+        run: ./build/fuzz_odas_parser -max_total_time=20 tests/fuzz/corpus/odas
       - name: Run WAV parser fuzz (bounded)
-        run: ./build/fuzz_wav_io -max_total_time=20
+        run: ./build/fuzz_wav_io -max_total_time=20 tests/fuzz/corpus/wav
 
   firmware-build:
     runs-on: ubuntu-latest

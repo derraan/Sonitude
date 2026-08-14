@@ -3,6 +3,7 @@
 #include <array>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 namespace sonitude::audio
@@ -28,7 +29,7 @@ void WriteLe32(std::ofstream& out, const std::uint32_t value)
   out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 }
 
-std::uint16_t ReadLe16(std::ifstream& in)
+std::uint16_t ReadLe16(std::istream& in)
 {
   std::array<std::uint8_t, 2> bytes{};
   in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -39,7 +40,7 @@ std::uint16_t ReadLe16(std::ifstream& in)
   return static_cast<std::uint16_t>(bytes[0]) | (static_cast<std::uint16_t>(bytes[1]) << 8);
 }
 
-std::uint32_t ReadLe32(std::ifstream& in)
+std::uint32_t ReadLe32(std::istream& in)
 {
   std::array<std::uint8_t, 4> bytes{};
   in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -124,14 +125,8 @@ void WriteWavFile(const std::string& path, const WavData& data)
   out.write(reinterpret_cast<const char*>(pcm.data()), static_cast<std::streamsize>(pcm.size()));
 }
 
-WavData ReadWavFile(const std::string& path)
+WavData ReadWavFromStream(std::istream& in)
 {
-  std::ifstream in(path, std::ios::binary);
-  if (!in)
-  {
-    throw std::runtime_error("Unable to open WAV for reading: " + path);
-  }
-
   std::array<char, 4> riff{};
   in.read(riff.data(), 4);
   if (std::memcmp(riff.data(), "RIFF", 4) != 0)
@@ -212,5 +207,26 @@ WavData ReadWavFile(const std::string& path)
   out.format = format;
   out.interleaved = InterleavedToFloat(pcm_bytes.data(), total_samples / channels, channels, format);
   return out;
+}
+
+WavData ReadWavFile(const std::string& path)
+{
+  std::ifstream in(path, std::ios::binary);
+  if (!in)
+  {
+    throw std::runtime_error("Unable to open WAV for reading: " + path);
+  }
+  return ReadWavFromStream(in);
+}
+
+WavData ReadWavBytes(const std::uint8_t* data, const std::size_t size)
+{
+  if (data == nullptr || size == 0)
+  {
+    throw std::runtime_error("WAV byte buffer is empty");
+  }
+  const std::string bytes(reinterpret_cast<const char*>(data), size);
+  std::istringstream in(bytes, std::ios::binary);
+  return ReadWavFromStream(in);
 }
 }  // namespace sonitude::audio
