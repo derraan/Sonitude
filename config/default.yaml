@@ -47,15 +47,19 @@ zones:
   front_auto_focus:
     azimuth_min_deg: -45.0
     azimuth_max_deg: 45.0
+    policy: "focus"
   right_assist:
     azimuth_min_deg: 45.0
     azimuth_max_deg: 100.0
+    policy: "assist"
   left_assist:
     azimuth_min_deg: -100.0
     azimuth_max_deg: -45.0
+    policy: "assist"
   rear_ambient:
     azimuth_min_deg: 100.0
     azimuth_max_deg: 260.0
+    policy: "ambient"
 
 odas:
   enabled: false

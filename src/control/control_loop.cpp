@@ -53,7 +53,11 @@ void ControlLoop::tick(const std::uint64_t now_ns)
     last_observation_ns_ = now_ns;
   }
 
-  const std::optional<spatial::SourceObservation> active = tracker_.best(now_ns);
+  const bool provider_healthy = provider_->isHealthy();
+  const bool stale_observations =
+      TimeoutElapsed(now_ns, last_observation_ns_, config_.failsafe_timeout_ns);
+  const std::optional<spatial::SourceObservation> active =
+      (!provider_healthy || stale_observations) ? std::nullopt : tracker_.best(now_ns);
   SteeringSnapshot next{};
   if (conversation_ != nullptr)
   {
@@ -82,16 +86,17 @@ void ControlLoop::tick(const std::uint64_t now_ns)
     next.speech_probability = active->confidence;
     next.failsafe = false;
   }
-  else if (TimeoutElapsed(now_ns, last_observation_ns_, config_.failsafe_timeout_ns) || !provider_->isHealthy())
+  else if (stale_observations || !provider_healthy)
   {
     next = last_snapshot_;
     ++generation_;
     next.generation = generation_;
     next.target = {0.0F, 0.0F};
+    next.distractor = {0.0F, 0.0F};
     next.ambient_mix = config_.ambient_floor_linear;
     next.confidence = 0.0F;
     next.speech_probability = 0.0F;
-    next.zone_name.clear();
+    next.zone_id = ZoneId::None;
     next.has_distractor = false;
     next.failsafe = true;
   }
@@ -102,7 +107,20 @@ void ControlLoop::tick(const std::uint64_t now_ns)
     next.generation = generation_;
   }
 
+  if (stale_observations || !provider_healthy)
+  {
+    next.target = {0.0F, 0.0F};
+    next.distractor = {0.0F, 0.0F};
+    next.ambient_mix = config_.ambient_floor_linear;
+    next.confidence = 0.0F;
+    next.speech_probability = 0.0F;
+    next.zone_id = ZoneId::None;
+    next.has_distractor = false;
+    next.failsafe = true;
+  }
+
   next.has_distractor = false;
+  next.distractor = {0.0F, 0.0F};
   if (active.has_value())
   {
     if (const auto distractor = tracker_.strongestDistractor(now_ns, active->source_id); distractor.has_value())

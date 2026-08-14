@@ -5,12 +5,14 @@
 #include <vector>
 
 #include "app/config.hpp"
+#include "control/steering_snapshot.hpp"
 
 namespace sonitude::control
 {
 struct ResolvedZone
 {
   std::string name;
+  ZoneId zone_id = ZoneId::None;
   app::ZonePolicy policy = app::ZonePolicy::Focus;
 };
 

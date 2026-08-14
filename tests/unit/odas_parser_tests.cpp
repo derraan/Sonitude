@@ -5,6 +5,7 @@
 
 #include "spatial/mock_doa_provider.hpp"
 #include "spatial/odas_message_parser.hpp"
+#include "spatial/odas_provider.hpp"
 
 #if defined(__linux__)
 #include <sys/socket.h>
@@ -64,6 +65,61 @@ void TestOdasParserOverflowCapResync()
   Require(recovered[0].source_id == 4, "recovered parser source id mismatch");
 }
 
+void TestOdasParserBoundedEdgeCases()
+{
+  {
+    sonitude::spatial::OdasMessageParser parser(32);
+    const auto out = parser.feed(std::string(64, 'x'));
+    Require(out.empty(), "endless non-JSON bytes should not emit observations");
+    Require(parser.overflowResyncCount() > 0, "endless non-JSON bytes should trigger bounded resync");
+  }
+
+  {
+    sonitude::spatial::OdasMessageParser parser(64);
+    const std::string oversized_partial = std::string("{\"src\":[") + std::string(200, '{');
+    const auto out = parser.feed(oversized_partial);
+    Require(out.empty(), "oversized malformed partial should not emit observations");
+    Require(parser.overflowResyncCount() > 0, "oversized malformed partial should trigger bounded resync");
+  }
+
+  {
+    sonitude::spatial::OdasMessageParser parser(32);
+    const auto none = parser.feed(std::string(128, '{'));
+    Require(none.empty(), "repeated opening braces without closure should not emit observations");
+    Require(parser.overflowResyncCount() > 0,
+            "repeated opening braces must remain bounded and trigger overflow resync");
+  }
+
+  {
+    sonitude::spatial::OdasMessageParser parser(128);
+    const std::string malformed =
+        R"({"timeStamp":1.0,"src":[{"id":"bad","x":"a","y":"b","z":"c","activity":"d"}]})";
+    const auto out = parser.feed(malformed);
+    Require(out.empty(), "deeply malformed object should not emit observations");
+    const std::string payload =
+        R"({"timeStamp":6.0,"src":[{"id":6,"x":0.0,"y":1.0,"z":0.0,"activity":0.4}]})";
+    const auto recovered = parser.feed(payload);
+    Require(recovered.size() == 1, "parser should recover from malformed object to next valid object");
+  }
+
+  {
+    constexpr std::size_t kLimit = 72;
+    sonitude::spatial::OdasMessageParser parser(kLimit);
+    const auto none = parser.feed(std::string(kLimit, 'x'));
+    Require(none.empty(), "buffer exactly at limit should remain bounded without output");
+    const auto none2 = parser.feed("x");
+    Require(none2.empty(), "buffer over limit by one should still remain bounded without output");
+  }
+
+  {
+    sonitude::spatial::OdasMessageParser parser(0);
+    const auto none = parser.feed(std::string(32, '{'));
+    Require(none.empty(), "zero-sized configured buffer should stay bounded and not emit malformed objects");
+    const auto none2 = parser.feed(std::string(32, 'x'));
+    Require(none2.empty(), "zero-sized configured buffer should remain bounded on non-JSON bytes");
+  }
+}
+
 void TestMockDoaProviderScript()
 {
   std::vector<sonitude::spatial::MockDoaEvent> events;
@@ -82,6 +138,17 @@ void TestMockDoaProviderScript()
   Require(!provider.isHealthy(), "frozen provider must report unhealthy");
 }
 
+void TestOdasProviderUnreachableEndpointFailsClosed()
+{
+#if defined(__linux__)
+  auto provider = sonitude::spatial::CreateOdasProvider("unix:///tmp/sonitude-missing-odas.sock");
+  std::vector<sonitude::spatial::SourceObservation> out;
+  const bool got_data = provider->poll(out);
+  Require(!got_data, "unreachable ODAS endpoint should not emit data");
+  Require(!provider->isHealthy(), "unreachable ODAS endpoint should report unhealthy");
+#endif
+}
+
 #if defined(__linux__)
 void TestOdasParserSocketpairFailureInjection()
 {
@@ -89,7 +156,9 @@ void TestOdasParserSocketpairFailureInjection()
   int fds[2] = {-1, -1};
   Require(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0, "socketpair should be created");
   const std::string truncated = R"({"timeStamp":1.0,"src":[{"id":9,"x":1.0)";
-  (void)::write(fds[0], truncated.data(), truncated.size());
+  const ssize_t truncated_written = ::write(fds[0], truncated.data(), truncated.size());
+  Require(truncated_written == static_cast<ssize_t>(truncated.size()),
+          "expected truncated payload write to complete");
   ::close(fds[0]);
 
   std::vector<sonitude::spatial::SourceObservation> out;
@@ -109,10 +178,14 @@ void TestOdasParserSocketpairFailureInjection()
 
   Require(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0, "second socketpair should be created");
   const std::string garbage(600, 'g');
-  (void)::write(fds[0], garbage.data(), garbage.size());
+  const ssize_t garbage_written = ::write(fds[0], garbage.data(), garbage.size());
+  Require(garbage_written == static_cast<ssize_t>(garbage.size()),
+          "expected garbage payload write to complete");
   const std::string valid =
       R"({"timeStamp":3.0,"src":[{"id":8,"x":0.0,"y":1.0,"z":0.0,"activity":0.7}]})";
-  (void)::write(fds[0], valid.data(), valid.size());
+  const ssize_t valid_written = ::write(fds[0], valid.data(), valid.size());
+  Require(valid_written == static_cast<ssize_t>(valid.size()),
+          "expected valid payload write to complete");
   ::close(fds[0]);
 
   out.clear();
@@ -139,7 +212,9 @@ void RunOdasParserTests()
   TestOdasParserSplitFrames();
   TestOdasParserGarbageResync();
   TestOdasParserOverflowCapResync();
+  TestOdasParserBoundedEdgeCases();
   TestMockDoaProviderScript();
+  TestOdasProviderUnreachableEndpointFailsClosed();
 #if defined(__linux__)
   TestOdasParserSocketpairFailureInjection();
 #endif

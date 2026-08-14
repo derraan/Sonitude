@@ -42,10 +42,19 @@ void TestControlLoopTracksAndFailsafe()
   Require(s.speech_probability > 0.7F, "control loop should propagate speech probability proxy");
 
   provider.setFrozen(true);
+  loop.tick(200'000'000ULL);
+  s = reader.acquire();
+  Require(s.failsafe, "provider health failure should force immediate failsafe");
+
   loop.tick(450'000'000ULL);
   s = reader.acquire();
   Require(s.failsafe, "control loop should switch to failsafe after freeze timeout");
   Require(s.ambient_mix >= 0.25F, "failsafe should use configured ambient floor");
+  Require(!s.has_distractor, "failsafe must clear distractor presence metadata");
+  Require(s.zone_id == sonitude::control::ZoneId::None,
+          "failsafe must not leave stale zone metadata active");
+  Require(s.confidence == 0.0F, "failsafe confidence must be forced to safe zero");
+  Require(s.speech_probability == 0.0F, "failsafe speech probability must be forced to safe zero");
 
   provider.setFrozen(false);
   provider.setNowNs(600'000'000ULL);

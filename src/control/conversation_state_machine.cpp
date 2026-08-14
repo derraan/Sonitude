@@ -138,7 +138,7 @@ SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input
   out.failsafe = (state_ == ConversationState::Ambient);
   out.confidence = input.confidence;
   out.speech_probability = input.speech_probability;
-  out.zone_name = zone.has_value() ? zone->name : "";
+  out.zone_id = zone.has_value() ? zone->zone_id : ZoneId::None;
   if (state_ == ConversationState::Ambient)
   {
     out.target = {0.0F, 0.0F};

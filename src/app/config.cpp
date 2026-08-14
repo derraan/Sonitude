@@ -1,6 +1,7 @@
 #include "app/config.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <stdexcept>
 #include <unordered_set>
@@ -67,6 +68,30 @@ std::vector<ZoneConfig> ParseZones(const YAML::Node& node)
     zone.name = it.first.as<std::string>();
     zone.azimuth_min_deg = RequireScalar<float>(it.second, "azimuth_min_deg");
     zone.azimuth_max_deg = RequireScalar<float>(it.second, "azimuth_max_deg");
+    if (it.second["policy"])
+    {
+      std::string policy = it.second["policy"].as<std::string>();
+      std::transform(policy.begin(), policy.end(), policy.begin(), [](const unsigned char c)
+      {
+        return static_cast<char>(std::tolower(c));
+      });
+      if (policy == "focus")
+      {
+        zone.policy = ZonePolicy::Focus;
+      }
+      else if (policy == "assist")
+      {
+        zone.policy = ZonePolicy::Assist;
+      }
+      else if (policy == "ambient")
+      {
+        zone.policy = ZonePolicy::Ambient;
+      }
+      else
+      {
+        throw std::runtime_error("zone policy must be one of: focus, assist, ambient");
+      }
+    }
     out.push_back(zone);
   }
   return out;

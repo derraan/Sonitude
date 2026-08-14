@@ -43,7 +43,8 @@ void TestTransitionPathAndHysteresis()
   auto out = sm.update(in, 10'000'000ULL);
   Require(sm.state() == sonitude::control::ConversationState::Candidate, "ambient->candidate expected");
   Require(out.failsafe == false, "candidate should be non-failsafe");
-  Require(out.zone_name == "front", "snapshot should preserve resolved zone");
+  Require(out.zone_id == sonitude::control::ZoneId::None,
+          "unmapped zone names should not be emitted as dynamic realtime metadata");
   Require(out.confidence > 0.8F, "snapshot confidence should propagate from input");
 
   out = sm.update(in, 120'000'000ULL);

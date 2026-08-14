@@ -40,6 +40,7 @@ zones:
   front_auto_focus:
     azimuth_min_deg: -45.0
     azimuth_max_deg: 45.0
+    policy: "focus"
 odas:
   enabled: false
   use_mock_provider: true

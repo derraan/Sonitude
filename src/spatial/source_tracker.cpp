@@ -14,6 +14,24 @@ bool IsStale(const std::uint64_t now_ns, const std::uint64_t last_update_ns, con
   }
   return (now_ns - last_update_ns) > stale_after_ns;
 }
+
+bool BetterCandidate(const SourceObservation& candidate_obs,
+                     const std::uint64_t candidate_last_update_ns,
+                     const std::uint64_t candidate_id,
+                     const SourceObservation& current_best_obs,
+                     const std::uint64_t current_best_last_update_ns,
+                     const std::uint64_t current_best_id)
+{
+  if (candidate_obs.confidence != current_best_obs.confidence)
+  {
+    return candidate_obs.confidence > current_best_obs.confidence;
+  }
+  if (candidate_last_update_ns != current_best_last_update_ns)
+  {
+    return candidate_last_update_ns > current_best_last_update_ns;
+  }
+  return candidate_id < current_best_id;
+}
 }  // namespace
 
 void SourceTracker::ingest(const std::vector<SourceObservation>& observations, const std::uint64_t now_ns)
@@ -53,16 +71,23 @@ void SourceTracker::ingest(const std::vector<SourceObservation>& observations, c
 std::optional<SourceObservation> SourceTracker::best(const std::uint64_t now_ns) const
 {
   const Track* best_track = nullptr;
+  std::uint64_t best_id = 0;
   for (const auto& [id, track] : tracks_)
   {
-    (void)id;
     if (IsStale(now_ns, track.last_update_ns, stale_after_ns_))
     {
       continue;
     }
-    if (best_track == nullptr || track.obs.confidence > best_track->obs.confidence)
+    if (best_track == nullptr ||
+        BetterCandidate(track.obs,
+                        track.last_update_ns,
+                        id,
+                        best_track->obs,
+                        best_track->last_update_ns,
+                        best_id))
     {
       best_track = &track;
+      best_id = id;
     }
   }
   if (best_track == nullptr)
@@ -76,15 +101,23 @@ std::optional<SourceObservation> SourceTracker::strongestDistractor(const std::u
                                                                     const std::uint64_t focus_source_id) const
 {
   const Track* best_track = nullptr;
+  std::uint64_t best_id = 0;
   for (const auto& [id, track] : tracks_)
   {
     if (id == focus_source_id || IsStale(now_ns, track.last_update_ns, stale_after_ns_))
     {
       continue;
     }
-    if (best_track == nullptr || track.obs.confidence > best_track->obs.confidence)
+    if (best_track == nullptr ||
+        BetterCandidate(track.obs,
+                        track.last_update_ns,
+                        id,
+                        best_track->obs,
+                        best_track->last_update_ns,
+                        best_id))
     {
       best_track = &track;
+      best_id = id;
     }
   }
   if (best_track == nullptr)

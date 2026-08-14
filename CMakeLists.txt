@@ -45,6 +45,7 @@ add_library(
   src/dsp/resampler_linear.cpp
   src/dsp/resampler_cubic.cpp
   src/dsp/resampler_src.cpp
+  src/dsp/selective_suppressor.cpp
   src/dsp/suppressor.cpp
   src/rt/rt_thread.cpp
   src/spatial/mock_doa_provider.cpp
@@ -262,6 +263,7 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/suppressor_tests.cpp
     tests/unit/odas_parser_tests.cpp
     tests/unit/control_loop_tests.cpp
+    tests/unit/source_tracker_tests.cpp
     tests/unit/zone_tests.cpp
     tests/unit/state_machine_tests.cpp
   )

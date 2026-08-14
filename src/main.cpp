@@ -311,6 +311,12 @@ int main(int argc, char** argv)
       else
       {
         const auto snapshot = steering_reader.acquire();
+        counters.steering_confidence_milli.store(
+            static_cast<std::int64_t>(std::llround(snapshot.confidence * 1000.0F)),
+            std::memory_order_relaxed);
+        counters.speech_probability_milli.store(
+            static_cast<std::int64_t>(std::llround(snapshot.speech_probability * 1000.0F)),
+            std::memory_order_relaxed);
         if (!have_target || std::fabs(snapshot.target.azimuth_deg - last_target.azimuth_deg) > 0.01F ||
             std::fabs(snapshot.target.elevation_deg - last_target.elevation_deg) > 0.01F)
         {
@@ -324,7 +330,7 @@ int main(int argc, char** argv)
         if (runtime_config.suppression.enabled)
         {
           const bool focus_active = !snapshot.failsafe;
-          const float confidence = focus_active ? 1.0F : 0.0F;
+          const float confidence = focus_active ? snapshot.confidence : 0.0F;
           suppressor.setControl(focus_active, confidence);
           suppressor.process(std::span<float>(mono.data(), frame_count));
         }

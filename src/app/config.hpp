@@ -7,11 +7,19 @@
 
 namespace sonitude::app
 {
+enum class ZonePolicy : std::uint8_t
+{
+  Focus = 0,
+  Assist = 1,
+  Ambient = 2
+};
+
 struct ZoneConfig
 {
   std::string name;
   float azimuth_min_deg = 0.0F;
   float azimuth_max_deg = 0.0F;
+  ZonePolicy policy = ZonePolicy::Focus;
 };
 
 struct DeviceConfig

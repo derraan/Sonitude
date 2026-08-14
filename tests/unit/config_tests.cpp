@@ -15,6 +15,7 @@ void RunLimiterTests();
 void RunSnapshotTests();
 void RunOdasParserTests();
 void RunControlLoopTests();
+void RunSourceTrackerTests();
 void RunZoneTests();
 void RunStateMachineTests();
 void RunSuppressorTests();
@@ -257,6 +258,7 @@ int main()
     RunSnapshotTests();
     RunOdasParserTests();
     RunControlLoopTests();
+    RunSourceTrackerTests();
     RunZoneTests();
     RunStateMachineTests();
     std::cout << "All unit tests passed.\n";
