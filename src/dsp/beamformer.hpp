@@ -36,6 +36,10 @@ class DelaySumBeamformer final : public IBeamformer
                  std::size_t max_block_frames) override;
   void setTarget(audio::BeamformerSteering target) override;
   void process(std::span<const audio::MicFrame> input, std::span<float> mono_out) override;
+  void processWithReference(std::span<const audio::MicFrame> input,
+                            std::span<float> focus_out,
+                            audio::BeamformerSteering distractor_target,
+                            std::span<float> reference_out);
 
  private:
   using DelayArray = std::array<double, audio::kMicChannels>;
@@ -64,5 +68,6 @@ class DelaySumBeamformer final : public IBeamformer
 
   std::array<FractionalDelayLine, audio::kMicChannels> current_lines_{};
   std::array<FractionalDelayLine, audio::kMicChannels> pending_lines_{};
+  std::array<FractionalDelayLine, audio::kMicChannels> reference_lines_{};
 };
 }  // namespace sonitude::dsp

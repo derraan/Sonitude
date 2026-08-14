@@ -31,6 +31,8 @@ steering:
   ambient_floor_linear: 0.25
 
 suppression:
+  # TODO(sonitude-suppression): Keep default disabled until M7 acceptance gates
+  # demonstrate measurable SNR gains with bounded target-speech distortion.
   enabled: false
   fade_ms: 120.0
   activity_threshold: 0.03
@@ -47,15 +49,19 @@ zones:
   front_auto_focus:
     azimuth_min_deg: -45.0
     azimuth_max_deg: 45.0
+    policy: "focus"
   right_assist:
     azimuth_min_deg: 45.0
     azimuth_max_deg: 100.0
+    policy: "assist"
   left_assist:
     azimuth_min_deg: -100.0
     azimuth_max_deg: -45.0
+    policy: "assist"
   rear_ambient:
     azimuth_min_deg: 100.0
     azimuth_max_deg: 260.0
+    policy: "ambient"
 
 odas:
   enabled: false
@@ -67,3 +73,17 @@ telemetry:
   emit_csv: false
   emit_json: false
   stats_period_ms: 1000
+
+realtime:
+  # Provisional priorities: no measured WCET exists for this pipeline yet, so
+  # this ordering is a conservative starting point rather than the output of a
+  # scheduling analysis. See docs/thread_safety_audit_2026-08-14.md.
+  capture_priority: 80
+  playback_priority: 78
+  enable_mlockall: true
+  # Set true on the target so a missing SCHED_FIFO capability fails startup
+  # loudly instead of silently running the audio path at SCHED_OTHER.
+  require_realtime: false
+  rt_stack_kib: 512
+  rt_prefault_kib: 128
+  startup_timeout_ms: 2000

@@ -40,6 +40,7 @@ zones:
   front_auto_focus:
     azimuth_min_deg: -45.0
     azimuth_max_deg: 45.0
+    policy: "focus"
 odas:
   enabled: false
   use_mock_provider: true
@@ -49,3 +50,7 @@ telemetry:
   emit_csv: false
   emit_json: false
   stats_period_ms: 1000
+realtime:
+  capture_priority: 80
+  playback_priority: 78
+  enable_mlockall: false

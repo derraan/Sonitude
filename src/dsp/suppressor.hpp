@@ -24,7 +24,7 @@ class ISuppressor
   virtual float currentGain() const = 0;
 };
 
-class ConservativeSuppressor final : public ISuppressor
+class OutputGainGate final : public ISuppressor
 {
  public:
   void configure(const SuppressorConfig& config, std::uint32_t sample_rate_hz) override;
@@ -43,4 +43,7 @@ class ConservativeSuppressor final : public ISuppressor
   float envelope_attack_coeff_ = 0.35F;
   float envelope_release_coeff_ = 0.01F;
 };
+
+// TODO(sonitude-suppression): Remove legacy alias once all downstream references are migrated.
+using ConservativeSuppressor = OutputGainGate;
 }  // namespace sonitude::dsp

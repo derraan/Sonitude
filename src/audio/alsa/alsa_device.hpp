@@ -6,6 +6,8 @@
 #include "app/config.hpp"
 #include "audio/format_convert.hpp"
 
+struct pollfd;
+
 namespace sonitude::audio::alsa
 {
 struct NegotiatedParams
@@ -35,6 +37,19 @@ class AlsaPcmDevice
   std::int64_t writeInterleaved(const std::uint8_t* src, std::uint32_t frames) const;
   std::int64_t availFrames() const;
   std::size_t playbackQueuedFrames() const;
+  void dropStream() const;
+
+  // Event-driven waiting. These let a realtime thread block on the device
+  // itself, together with a shutdown descriptor, instead of waking on a timer
+  // to re-check a flag.
+  int pollDescriptorCount() const;
+  bool fillPollDescriptors(pollfd* descriptors, int count) const;
+  // Translates raw poll revents into ALSA's view of them. `count` must be the
+  // number of ALSA descriptors only.
+  bool pollRevents(pollfd* descriptors, int count, unsigned short* revents) const;
+
+  int prepare() const;
+  int start() const;
 
  private:
   void configure(const app::DeviceConfig& config, bool is_capture);

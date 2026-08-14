@@ -7,11 +7,19 @@
 
 namespace sonitude::app
 {
+enum class ZonePolicy : std::uint8_t
+{
+  Focus = 0,
+  Assist = 1,
+  Ambient = 2
+};
+
 struct ZoneConfig
 {
   std::string name;
   float azimuth_min_deg = 0.0F;
   float azimuth_max_deg = 0.0F;
+  ZonePolicy policy = ZonePolicy::Focus;
 };
 
 struct DeviceConfig
@@ -87,6 +95,23 @@ struct TelemetryConfig
   std::uint32_t stats_period_ms = 1000;
 };
 
+struct RealtimeConfig
+{
+  // Provisional values. No measured WCET exists for this pipeline yet, so the
+  // ordering here is a conservative starting point, not a scheduling result.
+  // See docs/thread_safety_audit_2026-08-14.md for what must be measured before
+  // these numbers can be treated as justified.
+  std::int32_t capture_priority = 80;
+  std::int32_t playback_priority = 78;
+  bool enable_mlockall = true;
+  // When true, a realtime thread that cannot obtain SCHED_FIFO aborts startup
+  // instead of running degraded. Production deployments should set this.
+  bool require_realtime = false;
+  std::uint32_t rt_stack_kib = 512;
+  std::uint32_t rt_prefault_kib = 128;
+  std::uint32_t startup_timeout_ms = 2000;
+};
+
 struct RuntimeConfig
 {
   DeviceConfig capture;
@@ -101,6 +126,7 @@ struct RuntimeConfig
   StateMachineConfig state_machine;
   OdasConfig odas;
   TelemetryConfig telemetry;
+  RealtimeConfig realtime;
   std::vector<ZoneConfig> zones;
 };
 
@@ -112,6 +138,11 @@ struct RuntimeAudioContract
   std::size_t playback_buffer_frames = 0;
   std::size_t software_queue_frames = 0;
   std::size_t minimum_asrc_headroom_frames = 0;
+  std::size_t capture_period_frames = 0;
+  std::size_t playback_period_frames = 0;
+  double asrc_max_ratio = 0.0;
+  std::size_t required_playback_scratch_frames = 0;
+  std::size_t negotiated_playback_scratch_frames = 0;
 };
 
 RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path);

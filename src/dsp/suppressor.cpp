@@ -14,7 +14,7 @@ float Clamp01(const float x)
 }
 }  // namespace
 
-void ConservativeSuppressor::configure(const SuppressorConfig& config, const std::uint32_t sample_rate_hz)
+void OutputGainGate::configure(const SuppressorConfig& config, const std::uint32_t sample_rate_hz)
 {
   if (sample_rate_hz == 0)
   {
@@ -32,6 +32,8 @@ void ConservativeSuppressor::configure(const SuppressorConfig& config, const std
   gain_step_per_sample_ = 1.0F / fade_samples;
 
   // Keep envelope memory short to follow speech on period-scale blocks.
+  // TODO(sonitude-suppression): Tune envelope coefficients from runtime config once selective
+  // suppression acceptance metrics and hardware calibration runs are available.
   envelope_attack_coeff_ = 0.35F;
   envelope_release_coeff_ = 0.01F;
 
@@ -42,13 +44,13 @@ void ConservativeSuppressor::configure(const SuppressorConfig& config, const std
   configured_ = true;
 }
 
-void ConservativeSuppressor::setControl(const bool focus_active, const float confidence)
+void OutputGainGate::setControl(const bool focus_active, const float confidence)
 {
   focus_active_ = focus_active;
   confidence_ = Clamp01(confidence);
 }
 
-void ConservativeSuppressor::process(const std::span<float> mono)
+void OutputGainGate::process(const std::span<float> mono)
 {
   if (!configured_)
   {

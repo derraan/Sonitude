@@ -3,6 +3,7 @@
 #include <array>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 
 namespace sonitude::audio
@@ -75,6 +76,43 @@ PcmFormat ResolveFormat(const std::uint16_t wav_format_tag, const std::uint16_t 
   }
   throw std::runtime_error("Unsupported WAV bit depth");
 }
+
+std::uint64_t CurrentOffset(std::ifstream& in)
+{
+  const std::streampos pos = in.tellg();
+  if (pos < 0)
+  {
+    throw std::runtime_error("Invalid WAV stream position");
+  }
+  return static_cast<std::uint64_t>(pos);
+}
+
+std::uint64_t RemainingBytes(std::ifstream& in, const std::uint64_t file_size)
+{
+  const std::uint64_t offset = CurrentOffset(in);
+  if (offset > file_size)
+  {
+    throw std::runtime_error("WAV stream advanced past file end");
+  }
+  return file_size - offset;
+}
+
+void SkipBytes(std::ifstream& in, const std::uint64_t count)
+{
+  if (count == 0)
+  {
+    return;
+  }
+  if (count > static_cast<std::uint64_t>(std::numeric_limits<std::streamoff>::max()))
+  {
+    throw std::runtime_error("WAV chunk skip exceeds stream seek range");
+  }
+  in.seekg(static_cast<std::streamoff>(count), std::ios::cur);
+  if (!in)
+  {
+    throw std::runtime_error("Failed to skip WAV chunk bytes");
+  }
+}
 }  // namespace
 
 void WriteWavFile(const std::string& path, const WavData& data)
@@ -131,9 +169,25 @@ WavData ReadWavFile(const std::string& path)
   {
     throw std::runtime_error("Unable to open WAV for reading: " + path);
   }
+  in.seekg(0, std::ios::end);
+  const std::streampos file_end = in.tellg();
+  if (file_end < 0)
+  {
+    throw std::runtime_error("Unable to inspect WAV file length");
+  }
+  const std::uint64_t file_size = static_cast<std::uint64_t>(file_end);
+  if (file_size < 12U)
+  {
+    throw std::runtime_error("WAV file too small for RIFF header");
+  }
+  in.seekg(0, std::ios::beg);
 
   std::array<char, 4> riff{};
   in.read(riff.data(), 4);
+  if (!in)
+  {
+    throw std::runtime_error("Unexpected EOF while reading RIFF header");
+  }
   if (std::memcmp(riff.data(), "RIFF", 4) != 0)
   {
     throw std::runtime_error("WAV RIFF header missing");
@@ -141,6 +195,10 @@ WavData ReadWavFile(const std::string& path)
   (void)ReadLe32(in);
   std::array<char, 4> wave{};
   in.read(wave.data(), 4);
+  if (!in)
+  {
+    throw std::runtime_error("Unexpected EOF while reading WAVE header");
+  }
   if (std::memcmp(wave.data(), "WAVE", 4) != 0)
   {
     throw std::runtime_error("WAV WAVE header missing");
@@ -154,6 +212,10 @@ WavData ReadWavFile(const std::string& path)
 
   while (in)
   {
+    if (RemainingBytes(in, file_size) < 8U)
+    {
+      break;
+    }
     std::array<char, 4> chunk_id{};
     in.read(chunk_id.data(), 4);
     if (!in)
@@ -161,8 +223,24 @@ WavData ReadWavFile(const std::string& path)
       break;
     }
     const std::uint32_t chunk_size = ReadLe32(in);
+    const std::uint64_t payload_bytes_available = RemainingBytes(in, file_size);
+    if (static_cast<std::uint64_t>(chunk_size) > payload_bytes_available)
+    {
+      throw std::runtime_error("WAV chunk size exceeds remaining file bytes");
+    }
+    const bool has_pad_byte = (chunk_size & 1U) != 0U;
+    const std::uint64_t total_chunk_footprint =
+        static_cast<std::uint64_t>(chunk_size) + (has_pad_byte ? 1U : 0U);
+    if (total_chunk_footprint > payload_bytes_available)
+    {
+      throw std::runtime_error("WAV chunk padding exceeds remaining file bytes");
+    }
     if (std::memcmp(chunk_id.data(), "fmt ", 4) == 0)
     {
+      if (chunk_size < 16U)
+      {
+        throw std::runtime_error("WAV fmt chunk is shorter than 16 bytes");
+      }
       wav_format_tag = ReadLe16(in);
       channels = ReadLe16(in);
       sample_rate = ReadLe32(in);
@@ -171,12 +249,12 @@ WavData ReadWavFile(const std::string& path)
       bits_per_sample = ReadLe16(in);
       if (chunk_size > 16)
       {
-        in.seekg(static_cast<std::streamoff>(chunk_size - 16), std::ios::cur);
+        SkipBytes(in, static_cast<std::uint64_t>(chunk_size - 16U));
       }
     }
     else if (std::memcmp(chunk_id.data(), "data", 4) == 0)
     {
-      pcm_bytes.resize(chunk_size);
+      pcm_bytes.resize(static_cast<std::size_t>(chunk_size));
       in.read(reinterpret_cast<char*>(pcm_bytes.data()), static_cast<std::streamsize>(chunk_size));
       if (!in)
       {
@@ -185,7 +263,12 @@ WavData ReadWavFile(const std::string& path)
     }
     else
     {
-      in.seekg(static_cast<std::streamoff>(chunk_size), std::ios::cur);
+      SkipBytes(in, static_cast<std::uint64_t>(chunk_size));
+    }
+
+    if (has_pad_byte)
+    {
+      SkipBytes(in, 1U);
     }
   }
 

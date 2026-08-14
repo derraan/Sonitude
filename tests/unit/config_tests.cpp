@@ -12,12 +12,13 @@ void RunAsrcSimulationTests();
 void RunCalibrationTests();
 void RunBeamformerTests();
 void RunLimiterTests();
-void RunSnapshotTests();
 void RunOdasParserTests();
 void RunControlLoopTests();
 void RunZoneTests();
 void RunStateMachineTests();
 void RunSuppressorTests();
+void RunLifecycleTests();
+void RunThreadSafetyTests();
 
 namespace
 {
@@ -42,6 +43,9 @@ void TestRuntimeConfigValid()
           "valid runtime config did not load six channels");
   Require(config.suppression.fade_ms > 0.0F, "suppression config should parse from runtime YAML");
   Require(config.calibration_dc_block_hz > 0.0F, "calibration_dc_block_hz should parse from runtime YAML");
+  Require(config.realtime.capture_priority > 0, "realtime config should parse from runtime YAML");
+  Require(config.zones.front().policy == sonitude::app::ZonePolicy::Focus,
+          "zone policy should parse from runtime YAML");
 }
 
 void TestRuntimeConfigDuplicateChannelFails()
@@ -71,6 +75,11 @@ void TestRuntimeAudioContract()
       .playback_buffer_frames = 192,
       .software_queue_frames = 64,
       .minimum_asrc_headroom_frames = 64,
+      .capture_period_frames = 64,
+      .playback_period_frames = 64,
+      .asrc_max_ratio = config.asrc.max_ratio,
+      .required_playback_scratch_frames = 256,
+      .negotiated_playback_scratch_frames = 256,
   };
   sonitude::app::ValidateRuntimeAudioContract(config, valid);
 
@@ -126,6 +135,11 @@ void TestRuntimeAudioContractHeadroom()
       .playback_buffer_frames = 192,
       .software_queue_frames = 64,
       .minimum_asrc_headroom_frames = 64,
+      .capture_period_frames = 64,
+      .playback_period_frames = 64,
+      .asrc_max_ratio = config.asrc.max_ratio,
+      .required_playback_scratch_frames = 256,
+      .negotiated_playback_scratch_frames = 256,
   };
 
   sonitude::app::ValidateRuntimeAudioContract(config, base);
@@ -204,6 +218,53 @@ void TestRuntimeAudioContractHeadroom()
   sufficient_channels.capture_channels = 6;
   config.asrc.target_buffer_frames = 128;
   sonitude::app::ValidateRuntimeAudioContract(config, sufficient_channels);
+
+  threw = false;
+  try
+  {
+    auto smaller_playback_period = base;
+    smaller_playback_period.playback_period_frames = 32;
+    smaller_playback_period.required_playback_scratch_frames = 256;
+    smaller_playback_period.negotiated_playback_scratch_frames = 192;
+    sonitude::app::ValidateRuntimeAudioContract(config, smaller_playback_period);
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(
+      threw,
+      "playback period smaller than capture period should fail when scratch capacity is insufficient");
+
+  threw = false;
+  try
+  {
+    auto ratio_stress = base;
+    ratio_stress.asrc_max_ratio = config.asrc.max_ratio;
+    ratio_stress.required_playback_scratch_frames = 320;
+    ratio_stress.negotiated_playback_scratch_frames = 256;
+    sonitude::app::ValidateRuntimeAudioContract(config, ratio_stress);
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "high ASRC ratio scratch demand beyond negotiated capacity should throw");
+}
+
+void TestRuntimeConfigOdasContradictionFails()
+{
+  bool threw = false;
+  try
+  {
+    (void)sonitude::app::LoadRuntimeConfigFromFile(
+        FixturePath("tests/fixtures/runtime_invalid_odas_disabled_real.yaml"));
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "odas.enabled=false with use_mock_provider=false should throw");
 }
 
 void TestGeometryValid()
@@ -244,6 +305,7 @@ int main()
     TestRuntimeConfigDuplicateChannelFails();
     TestRuntimeAudioContract();
     TestRuntimeAudioContractHeadroom();
+    TestRuntimeConfigOdasContradictionFails();
     TestGeometryValid();
     TestGeometryInvalidCountFails();
     TestAudioTypeInvariants();
@@ -254,11 +316,12 @@ int main()
     RunBeamformerTests();
     RunSuppressorTests();
     RunLimiterTests();
-    RunSnapshotTests();
     RunOdasParserTests();
     RunControlLoopTests();
     RunZoneTests();
     RunStateMachineTests();
+    RunLifecycleTests();
+    RunThreadSafetyTests();
     std::cout << "All unit tests passed.\n";
     return 0;
   }

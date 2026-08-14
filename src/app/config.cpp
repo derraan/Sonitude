@@ -21,6 +21,18 @@ T RequireScalar(const YAML::Node& node, const char* key)
   return node[key].as<T>();
 }
 
+// Used for keys added after the first configuration files shipped, so existing
+// configs keep loading with the documented default.
+template <typename T>
+T OptionalScalar(const YAML::Node& node, const char* key, const T& fallback)
+{
+  if (!node || !node[key])
+  {
+    return fallback;
+  }
+  return node[key].as<T>();
+}
+
 DeviceConfig ParseDevice(const YAML::Node& node, const char* parent_key)
 {
   if (!node || !node.IsMap())
@@ -67,6 +79,23 @@ std::vector<ZoneConfig> ParseZones(const YAML::Node& node)
     zone.name = it.first.as<std::string>();
     zone.azimuth_min_deg = RequireScalar<float>(it.second, "azimuth_min_deg");
     zone.azimuth_max_deg = RequireScalar<float>(it.second, "azimuth_max_deg");
+    const std::string policy = RequireScalar<std::string>(it.second, "policy");
+    if (policy == "focus")
+    {
+      zone.policy = ZonePolicy::Focus;
+    }
+    else if (policy == "assist")
+    {
+      zone.policy = ZonePolicy::Assist;
+    }
+    else if (policy == "ambient")
+    {
+      zone.policy = ZonePolicy::Ambient;
+    }
+    else
+    {
+      throw std::runtime_error("zone policy must be one of: focus, assist, ambient");
+    }
     out.push_back(zone);
   }
   return out;
@@ -141,6 +170,16 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
   config.telemetry.emit_csv = RequireScalar<bool>(telemetry, "emit_csv");
   config.telemetry.emit_json = RequireScalar<bool>(telemetry, "emit_json");
   config.telemetry.stats_period_ms = RequireScalar<std::uint32_t>(telemetry, "stats_period_ms");
+
+  const YAML::Node realtime = root["realtime"];
+  config.realtime.capture_priority = RequireScalar<std::int32_t>(realtime, "capture_priority");
+  config.realtime.playback_priority = RequireScalar<std::int32_t>(realtime, "playback_priority");
+  config.realtime.enable_mlockall = RequireScalar<bool>(realtime, "enable_mlockall");
+  config.realtime.require_realtime = OptionalScalar<bool>(realtime, "require_realtime", false);
+  config.realtime.rt_stack_kib = OptionalScalar<std::uint32_t>(realtime, "rt_stack_kib", 512U);
+  config.realtime.rt_prefault_kib = OptionalScalar<std::uint32_t>(realtime, "rt_prefault_kib", 128U);
+  config.realtime.startup_timeout_ms =
+      OptionalScalar<std::uint32_t>(realtime, "startup_timeout_ms", 2000U);
 
   config.zones = ParseZones(root["zones"]);
 
@@ -275,6 +314,19 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error("zone_direction_stability_deg must be in (0, 180]");
   }
+  if (!config.odas.enabled && !config.odas.use_mock_provider)
+  {
+    throw std::runtime_error(
+        "odas.enabled=false requires odas.use_mock_provider=true to avoid contradictory provider settings");
+  }
+  if (config.realtime.capture_priority < 1 || config.realtime.capture_priority > 99)
+  {
+    throw std::runtime_error("realtime.capture_priority must be in [1, 99]");
+  }
+  if (config.realtime.playback_priority < 1 || config.realtime.playback_priority > 99)
+  {
+    throw std::runtime_error("realtime.playback_priority must be in [1, 99]");
+  }
 
   if (config.zones.empty())
   {
@@ -308,6 +360,23 @@ void ValidateRuntimeAudioContract(const RuntimeConfig& config, const RuntimeAudi
   if (contract.capture_channels == 0)
   {
     throw std::runtime_error("negotiated capture channel count must be non-zero");
+  }
+  if (contract.capture_period_frames == 0 || contract.playback_period_frames == 0)
+  {
+    throw std::runtime_error("negotiated capture/playback periods must be non-zero");
+  }
+  if (contract.asrc_max_ratio <= 0.0)
+  {
+    throw std::runtime_error("negotiated ASRC max ratio must be positive");
+  }
+  if (contract.asrc_max_ratio > config.asrc.max_ratio)
+  {
+    throw std::runtime_error("negotiated ASRC max ratio exceeds configured ASRC max ratio");
+  }
+  if (contract.required_playback_scratch_frames > contract.negotiated_playback_scratch_frames)
+  {
+    throw std::runtime_error(
+        "playback scratch capacity is below the negotiated minimum for capture/playback periods");
   }
   for (const std::size_t channel : config.active_channel_map)
   {
