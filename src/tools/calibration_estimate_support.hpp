@@ -22,12 +22,10 @@ struct DelayPolarityEstimate
 ChannelMoments ComputeChannelMoments(std::span<const float> samples);
 
 DelayPolarityEstimate EstimateDelayAndPolarity(std::span<const float> reference,
-                                               std::span<const float> channel,
-                                               int max_lag_samples);
+                                               std::span<const float> channel, int max_lag_samples);
 
 float ParseMinimumCorrelation(const std::string& value);
 
-void RequireMinimumCorrelation(const std::string& channel_id,
-                               float measured_correlation,
+void RequireMinimumCorrelation(const std::string& channel_id, float measured_correlation,
                                float required_correlation);
-}  // namespace sonitude::tools::calibration
+} // namespace sonitude::tools::calibration

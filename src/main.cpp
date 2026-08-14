@@ -144,7 +144,7 @@ bool ValidateScheduling(const std::vector<ThreadRole>& roles, const bool require
   return acceptable;
 }
 #endif
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -248,27 +248,21 @@ int main(int argc, char** argv)
     const bool asrc_enabled =
         runtime_config.asrc.enabled &&
         !(runtime_config.asrc.allow_bypass_for_locked_bench && mode == "passthrough");
-    sonitude::audio::alsa::PlaybackWorker pb_worker(
-        &pb,
-        resampler.get(),
-        &ctl,
-        &counters,
-        asrc_enabled,
-        cap_params.period_frames,
-        runtime_config.asrc.max_ratio);
+    sonitude::audio::alsa::PlaybackWorker pb_worker(&pb, resampler.get(), &ctl, &counters,
+                                                    asrc_enabled, cap_params.period_frames,
+                                                    runtime_config.asrc.max_ratio);
     sonitude::app::ValidateRuntimeAudioContract(
-        runtime_config,
-        {.capture_sample_rate_hz = cap_params.sample_rate_hz,
-         .playback_sample_rate_hz = pb_params.sample_rate_hz,
-         .capture_channels = cap_params.channels,
-         .playback_buffer_frames = pb_params.buffer_frames,
-         .software_queue_frames = desired_software_queue_frames,
-         .minimum_asrc_headroom_frames = cap_params.period_frames,
-         .capture_period_frames = cap_params.period_frames,
-         .playback_period_frames = pb_params.period_frames,
-         .asrc_max_ratio = runtime_config.asrc.max_ratio,
-         .required_playback_scratch_frames = required_scratch_frames,
-         .negotiated_playback_scratch_frames = pb_worker.scratchCapacityFrames()});
+        runtime_config, {.capture_sample_rate_hz = cap_params.sample_rate_hz,
+                         .playback_sample_rate_hz = pb_params.sample_rate_hz,
+                         .capture_channels = cap_params.channels,
+                         .playback_buffer_frames = pb_params.buffer_frames,
+                         .software_queue_frames = desired_software_queue_frames,
+                         .minimum_asrc_headroom_frames = cap_params.period_frames,
+                         .capture_period_frames = cap_params.period_frames,
+                         .playback_period_frames = pb_params.period_frames,
+                         .asrc_max_ratio = runtime_config.asrc.max_ratio,
+                         .required_playback_scratch_frames = required_scratch_frames,
+                         .negotiated_playback_scratch_frames = pb_worker.scratchCapacityFrames()});
 
     std::vector<std::string> geometry_ids;
     geometry_ids.reserve(geometry.microphones.size());
@@ -276,10 +270,10 @@ int main(int argc, char** argv)
     {
       geometry_ids.push_back(mic.id);
     }
-    const auto calibration = sonitude::app::LoadCalibrationFromFile(runtime_config.calibration_path);
+    const auto calibration =
+        sonitude::app::LoadCalibrationFromFile(runtime_config.calibration_path);
     sonitude::app::ValidateCalibrationConfig(calibration, geometry_ids, dsp_sample_rate_hz);
-    sonitude::dsp::CalibrationApplier calibration_applier(calibration.channels,
-                                                          geometry_ids,
+    sonitude::dsp::CalibrationApplier calibration_applier(calibration.channels, geometry_ids,
                                                           dsp_sample_rate_hz,
                                                           runtime_config.calibration_dc_block_hz);
 
@@ -307,14 +301,13 @@ int main(int argc, char** argv)
     sonitude::control::SteeringChannel steering_channel;
 
     sonitude::control::ConversationStateMachine conversation(
-        runtime_config.state_machine,
-        runtime_config.steering.ambient_floor_linear,
+        runtime_config.state_machine, runtime_config.steering.ambient_floor_linear,
         sonitude::control::ZoneMap(runtime_config.zones));
     sonitude::control::ControlLoop control_loop(
-        provider.get(),
-        &steering_channel,
+        provider.get(), &steering_channel,
         {.failsafe_timeout_ns =
-             static_cast<std::uint64_t>(runtime_config.state_machine.release_hold_ms) * 1'000'000ULL,
+             static_cast<std::uint64_t>(runtime_config.state_machine.release_hold_ms) *
+             1'000'000ULL,
          .ambient_floor_linear = runtime_config.steering.ambient_floor_linear},
         &conversation);
 
@@ -496,8 +489,7 @@ int main(int argc, char** argv)
           {
             beamformer.processWithReference(
                 std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
-                std::span<float>(mono.data(), frame_count),
-                steering.distractor,
+                std::span<float>(mono.data(), frame_count), steering.distractor,
                 std::span<float>(distractor_reference.data(), frame_count));
           }
           else
@@ -552,8 +544,7 @@ int main(int argc, char** argv)
         else
         {
           const std::span<sonitude::dsp::StereoSample> destination = blocks.writable(slot);
-          std::copy(stereo.begin(),
-                    stereo.begin() + static_cast<std::ptrdiff_t>(frame_count),
+          std::copy(stereo.begin(), stereo.begin() + static_cast<std::ptrdiff_t>(frame_count),
                     destination.begin());
           if (!blocks.commit(slot, frame_count))
           {
@@ -589,8 +580,7 @@ int main(int argc, char** argv)
         {
           if (blocks.readyCount() < kPrefillBlocks)
           {
-            if (sonitude::rt::WaitAnyOf(playback_wake,
-                                        lifecycle.wakeEvent(),
+            if (sonitude::rt::WaitAnyOf(playback_wake, lifecycle.wakeEvent(),
                                         std::chrono::milliseconds(wait_timeout_ms)) ==
                 sonitude::rt::WaitOutcome::Second)
             {
@@ -609,8 +599,7 @@ int main(int argc, char** argv)
           // Clear any stale token, re-check, then block until work or shutdown.
           playback_wake.consume();
           if (blocks.readyCount() == 0U &&
-              sonitude::rt::WaitAnyOf(playback_wake,
-                                      lifecycle.wakeEvent(),
+              sonitude::rt::WaitAnyOf(playback_wake, lifecycle.wakeEvent(),
                                       std::chrono::milliseconds(wait_timeout_ms)) ==
                   sonitude::rt::WaitOutcome::Second)
           {
@@ -690,47 +679,42 @@ int main(int argc, char** argv)
       const auto period = std::chrono::milliseconds(runtime_config.telemetry.stats_period_ms);
       while (!lifecycle.waitForStopOr(period))
       {
-        std::cout << "telemetry:"
-                  << " cap_frames=" << counters.capture_frames.load(std::memory_order_relaxed)
-                  << " pb_frames=" << counters.playback_frames.load(std::memory_order_relaxed)
-                  << " cap_xruns=" << counters.capture_xruns.load(std::memory_order_relaxed)
-                  << " pb_xruns=" << counters.playback_xruns.load(std::memory_order_relaxed)
-                  << " pb_write_fail="
-                  << counters.playback_write_failures.load(std::memory_order_relaxed)
-                  << " cap_wait_timeouts="
-                  << counters.capture_wait_timeouts.load(std::memory_order_relaxed)
-                  << " cap_wait_errors="
-                  << counters.capture_wait_errors.load(std::memory_order_relaxed)
-                  << " cap_overflow_refusals="
-                  << counters.capture_overflow_refusals.load(std::memory_order_relaxed)
-                  << " block_commit_fail=" << blocks.commitFailureCount()
-                  << " pool_exhausted=" << blocks.poolExhaustedCount()
-                  << " starvation=" << blocks.starvationCount()
-                  << " ready_high_water=" << blocks.readyHighWater()
-                  << " free_slots=" << blocks.freeCount()
-                  << " occupancy=" << counters.ring_occupancy_frames.load(std::memory_order_relaxed)
-                  << " asrc_ppm=" << counters.asrc_ratio_ppm.load(std::memory_order_relaxed)
-                  << " cap_period_us_max="
-                  << counters.capture_period_max_us.load(std::memory_order_relaxed)
-                  << " cap_work_us_max="
-                  << counters.capture_work_max_us.load(std::memory_order_relaxed)
-                  << " cap_deadline_misses="
-                  << counters.capture_deadline_misses.load(std::memory_order_relaxed)
-                  << " pb_write_us_max="
-                  << counters.playback_write_max_us.load(std::memory_order_relaxed)
-                  << " ctl_ticks=" << counters.control_ticks.load(std::memory_order_relaxed)
-                  << " ctl_applied="
-                  << counters.control_updates_applied.load(std::memory_order_relaxed)
-                  << " ctl_snapshot_age_us="
-                  << counters.control_snapshot_age_us.load(std::memory_order_relaxed)
-                  << " ctl_publish_drops=" << steering_channel.publishDrops()
-                  << " ctl_superseded=" << steering_channel.superseded()
-                  << " gate_gain_milli="
-                  << counters.suppressor_gain_milli.load(std::memory_order_relaxed)
-                  << " confidence_milli="
-                  << counters.steering_confidence_milli.load(std::memory_order_relaxed)
-                  << " state=" << static_cast<int>(counters.control_state.load(std::memory_order_relaxed))
-                  << '\n';
+        std::cout
+            << "telemetry:" << " cap_frames="
+            << counters.capture_frames.load(std::memory_order_relaxed)
+            << " pb_frames=" << counters.playback_frames.load(std::memory_order_relaxed)
+            << " cap_xruns=" << counters.capture_xruns.load(std::memory_order_relaxed)
+            << " pb_xruns=" << counters.playback_xruns.load(std::memory_order_relaxed)
+            << " pb_write_fail=" << counters.playback_write_failures.load(std::memory_order_relaxed)
+            << " cap_wait_timeouts="
+            << counters.capture_wait_timeouts.load(std::memory_order_relaxed)
+            << " cap_wait_errors=" << counters.capture_wait_errors.load(std::memory_order_relaxed)
+            << " cap_overflow_refusals="
+            << counters.capture_overflow_refusals.load(std::memory_order_relaxed)
+            << " block_commit_fail=" << blocks.commitFailureCount()
+            << " pool_exhausted=" << blocks.poolExhaustedCount()
+            << " starvation=" << blocks.starvationCount()
+            << " ready_high_water=" << blocks.readyHighWater()
+            << " free_slots=" << blocks.freeCount()
+            << " occupancy=" << counters.ring_occupancy_frames.load(std::memory_order_relaxed)
+            << " asrc_ppm=" << counters.asrc_ratio_ppm.load(std::memory_order_relaxed)
+            << " cap_period_us_max="
+            << counters.capture_period_max_us.load(std::memory_order_relaxed)
+            << " cap_work_us_max=" << counters.capture_work_max_us.load(std::memory_order_relaxed)
+            << " cap_deadline_misses="
+            << counters.capture_deadline_misses.load(std::memory_order_relaxed)
+            << " pb_write_us_max=" << counters.playback_write_max_us.load(std::memory_order_relaxed)
+            << " ctl_ticks=" << counters.control_ticks.load(std::memory_order_relaxed)
+            << " ctl_applied=" << counters.control_updates_applied.load(std::memory_order_relaxed)
+            << " ctl_snapshot_age_us="
+            << counters.control_snapshot_age_us.load(std::memory_order_relaxed)
+            << " ctl_publish_drops=" << steering_channel.publishDrops()
+            << " ctl_superseded=" << steering_channel.superseded()
+            << " gate_gain_milli=" << counters.suppressor_gain_milli.load(std::memory_order_relaxed)
+            << " confidence_milli="
+            << counters.steering_confidence_milli.load(std::memory_order_relaxed)
+            << " state=" << static_cast<int>(counters.control_state.load(std::memory_order_relaxed))
+            << '\n';
       }
     };
 
@@ -739,13 +723,13 @@ int main(int argc, char** argv)
     // verify what the kernel actually gave us, and only then release the
     // gate so any workload runs.
     // ------------------------------------------------------------------
-    const sonitude::rt::ThreadSpec capture_spec{.name = "snd-capture",
-                                                .sched_class = sonitude::rt::SchedClass::Realtime,
-                                                .priority = runtime_config.realtime.capture_priority,
-                                                .require_realtime =
-                                                    runtime_config.realtime.require_realtime,
-                                                .stack_bytes = rt_stack_bytes,
-                                                .prefault_bytes = rt_prefault_bytes};
+    const sonitude::rt::ThreadSpec capture_spec{
+        .name = "snd-capture",
+        .sched_class = sonitude::rt::SchedClass::Realtime,
+        .priority = runtime_config.realtime.capture_priority,
+        .require_realtime = runtime_config.realtime.require_realtime,
+        .stack_bytes = rt_stack_bytes,
+        .prefault_bytes = rt_prefault_bytes};
     const sonitude::rt::ThreadSpec playback_spec{
         .name = "snd-playback",
         .sched_class = sonitude::rt::SchedClass::Realtime,
@@ -756,13 +740,9 @@ int main(int argc, char** argv)
     const sonitude::rt::ThreadSpec control_spec{.name = "snd-control"};
     const sonitude::rt::ThreadSpec telemetry_spec{.name = "snd-telemetry"};
 
-    roles.push_back({"capture/DSP",
-                     &capture_thread,
-                     sonitude::rt::SchedClass::Realtime,
+    roles.push_back({"capture/DSP", &capture_thread, sonitude::rt::SchedClass::Realtime,
                      runtime_config.realtime.capture_priority});
-    roles.push_back({"playback",
-                     &playback_thread,
-                     sonitude::rt::SchedClass::Realtime,
+    roles.push_back({"playback", &playback_thread, sonitude::rt::SchedClass::Realtime,
                      runtime_config.realtime.playback_priority});
     roles.push_back({"telemetry", &telemetry_thread, sonitude::rt::SchedClass::Normal, 0});
     if (control_enabled)
@@ -794,7 +774,8 @@ int main(int argc, char** argv)
         if (role.thread != nullptr && !role.thread->joinable() &&
             role.thread->status().create_error != 0)
         {
-          std::cerr << "  " << role.role << ": error " << role.thread->status().create_error << '\n';
+          std::cerr << "  " << role.role << ": error " << role.thread->status().create_error
+                    << '\n';
         }
       }
       gate.abort();

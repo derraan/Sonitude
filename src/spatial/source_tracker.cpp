@@ -6,16 +6,14 @@ namespace sonitude::spatial
 {
 namespace
 {
-bool IsStale(const std::uint64_t now_ns,
-             const std::uint64_t last_update_ns,
+bool IsStale(const std::uint64_t now_ns, const std::uint64_t last_update_ns,
              const std::uint64_t stale_after_ns)
 {
   return now_ns >= last_update_ns && (now_ns - last_update_ns) > stale_after_ns;
 }
 
 bool BetterCandidate(const SourceObservation& candidate_obs,
-                     const std::uint64_t candidate_last_update_ns,
-                     const std::uint64_t candidate_id,
+                     const std::uint64_t candidate_last_update_ns, const std::uint64_t candidate_id,
                      const SourceObservation& current_best_obs,
                      const std::uint64_t current_best_last_update_ns,
                      const std::uint64_t current_best_id)
@@ -30,9 +28,10 @@ bool BetterCandidate(const SourceObservation& candidate_obs,
   }
   return candidate_id < current_best_id;
 }
-}  // namespace
+} // namespace
 
-void SourceTracker::ingest(const std::vector<SourceObservation>& observations, const std::uint64_t now_ns)
+void SourceTracker::ingest(const std::vector<SourceObservation>& observations,
+                           const std::uint64_t now_ns)
 {
   for (const SourceObservation& obs : observations)
   {
@@ -77,12 +76,8 @@ std::optional<SourceObservation> SourceTracker::best(const std::uint64_t now_ns)
       continue;
     }
     if (best_track == nullptr ||
-        BetterCandidate(track.obs,
-                        track.last_update_ns,
-                        id,
-                        best_track->obs,
-                        best_track->last_update_ns,
-                        best_id))
+        BetterCandidate(track.obs, track.last_update_ns, id, best_track->obs,
+                        best_track->last_update_ns, best_id))
     {
       best_track = &track;
       best_id = id;
@@ -95,9 +90,9 @@ std::optional<SourceObservation> SourceTracker::best(const std::uint64_t now_ns)
   return best_track->obs;
 }
 
-std::optional<SourceObservation> SourceTracker::strongestDistractor(
-    const std::uint64_t now_ns,
-    const std::uint64_t focus_source_id) const
+std::optional<SourceObservation>
+SourceTracker::strongestDistractor(const std::uint64_t now_ns,
+                                   const std::uint64_t focus_source_id) const
 {
   const Track* best_track = nullptr;
   std::uint64_t best_id = 0;
@@ -108,12 +103,8 @@ std::optional<SourceObservation> SourceTracker::strongestDistractor(
       continue;
     }
     if (best_track == nullptr ||
-        BetterCandidate(track.obs,
-                        track.last_update_ns,
-                        id,
-                        best_track->obs,
-                        best_track->last_update_ns,
-                        best_id))
+        BetterCandidate(track.obs, track.last_update_ns, id, best_track->obs,
+                        best_track->last_update_ns, best_id))
     {
       best_track = &track;
       best_id = id;
@@ -125,4 +116,4 @@ std::optional<SourceObservation> SourceTracker::strongestDistractor(
   }
   return best_track->obs;
 }
-}  // namespace sonitude::spatial
+} // namespace sonitude::spatial

@@ -90,8 +90,7 @@ void SelectiveSuppressor::process(const std::span<float> focus_signal,
       const float mu = config_.step_size / norm;
       for (std::size_t i = 0; i < weights_.size(); ++i)
       {
-        weights_[i] =
-            ((1.0F - config_.leakage) * weights_[i]) + (mu * error * history_[i]);
+        weights_[i] = ((1.0F - config_.leakage) * weights_[i]) + (mu * error * history_[i]);
       }
     }
     else
@@ -105,4 +104,4 @@ void SelectiveSuppressor::process(const std::span<float> focus_signal,
     focus_signal[n] = error;
   }
 }
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp

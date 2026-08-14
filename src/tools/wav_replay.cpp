@@ -23,7 +23,7 @@ void PrintUsage()
             << "                      [--enable-suppression] [--disable-limiter]\n";
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -91,7 +91,8 @@ int main(int argc, char** argv)
     {
       geometry_ids.push_back(mic.id);
     }
-    sonitude::app::ValidateCalibrationConfig(calibration, geometry_ids, runtime.capture.sample_rate_hz);
+    sonitude::app::ValidateCalibrationConfig(calibration, geometry_ids,
+                                             runtime.capture.sample_rate_hz);
 
     const auto input_wav = sonitude::audio::ReadWavFile(input_path);
     if (input_wav.channels < sonitude::audio::kMicChannels)
@@ -107,26 +108,26 @@ int main(int argc, char** argv)
     std::vector<sonitude::audio::MicFrame> mic =
         sonitude::tools::wav_replay::ExtractMappedMicFrames(input_wav, runtime.active_channel_map);
     std::vector<sonitude::audio::MicFrame> calibrated(frames);
-    sonitude::dsp::CalibrationApplier calibration_applier(
-        calibration.channels, geometry_ids, runtime.capture.sample_rate_hz, runtime.calibration_dc_block_hz);
+    sonitude::dsp::CalibrationApplier calibration_applier(calibration.channels, geometry_ids,
+                                                          runtime.capture.sample_rate_hz,
+                                                          runtime.calibration_dc_block_hz);
     calibration_applier.processBlock(
         std::span<const sonitude::audio::MicFrame>(mic.data(), mic.size()),
         std::span<sonitude::audio::MicFrame>(calibrated.data(), calibrated.size()));
 
-    const auto events = sonitude::tools::wav_replay::LoadSteeringScript(
-        script_path, input_wav.sample_rate_hz);
+    const auto events =
+        sonitude::tools::wav_replay::LoadSteeringScript(script_path, input_wav.sample_rate_hz);
     sonitude::dsp::DelaySumBeamformer beamformer;
-    beamformer.configure(
-        geometry, runtime.steering, calibration, input_wav.sample_rate_hz, runtime.capture.period_frames);
+    beamformer.configure(geometry, runtime.steering, calibration, input_wav.sample_rate_hz,
+                         runtime.capture.period_frames);
     constexpr sonitude::audio::BeamformerSteering kNeutralTarget{};
     beamformer.setTarget(kNeutralTarget);
     sonitude::dsp::ConservativeSuppressor suppressor;
-    suppressor.configure(
-        {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
-         .fade_ms = runtime.suppression.fade_ms,
-         .activity_threshold = runtime.suppression.activity_threshold,
-         .confidence_threshold = runtime.suppression.confidence_threshold},
-        input_wav.sample_rate_hz);
+    suppressor.configure({.ambient_floor_linear = runtime.steering.ambient_floor_linear,
+                          .fade_ms = runtime.suppression.fade_ms,
+                          .activity_threshold = runtime.suppression.activity_threshold,
+                          .confidence_threshold = runtime.suppression.confidence_threshold},
+                         input_wav.sample_rate_hz);
     sonitude::dsp::PeakLimiter limiter;
     // TODO(sonitude-limiter): Promote limiter defaults into replay/runtime config once
     // calibration-backed limiter tuning is available across target devices.
@@ -139,10 +140,9 @@ int main(int argc, char** argv)
     for (const auto& segment : segments)
     {
       beamformer.setTarget(segment.target);
-      beamformer.process(
-          std::span<const sonitude::audio::MicFrame>(calibrated.data() + segment.start_frame,
-                                                     segment.frame_count),
-          std::span<float>(mono.data() + segment.start_frame, segment.frame_count));
+      beamformer.process(std::span<const sonitude::audio::MicFrame>(
+                             calibrated.data() + segment.start_frame, segment.frame_count),
+                         std::span<float>(mono.data() + segment.start_frame, segment.frame_count));
       if (enable_suppression)
       {
         suppressor.setControl(true, 1.0F);

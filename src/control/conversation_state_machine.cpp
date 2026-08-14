@@ -13,11 +13,10 @@ std::size_t Idx(const ConversationState from, const ConversationState to)
   const std::size_t n = static_cast<std::size_t>(ConversationState::kCount);
   return static_cast<std::size_t>(from) * n + static_cast<std::size_t>(to);
 }
-}  // namespace
+} // namespace
 
 ConversationStateMachine::ConversationStateMachine(const app::StateMachineConfig config,
-                                                   const float ambient_floor_linear,
-                                                   ZoneMap zones)
+                                                   const float ambient_floor_linear, ZoneMap zones)
     : config_(config), ambient_floor_linear_(ambient_floor_linear), zones_(std::move(zones))
 {
 }
@@ -58,80 +57,81 @@ SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input
       input.has_track ? zones_.resolve(input.track.azimuth_deg) : std::nullopt;
   switch (state_)
   {
-    case ConversationState::Ambient:
-      if (input.has_track && speech && isFocusEligible(zone))
-      {
-        focus_target_ = input.track;
-        transitionTo(ConversationState::Candidate);
-        state_entry_ns_ = now_ns;
-      }
-      break;
-    case ConversationState::Candidate:
-      if (!(input.has_track && speech && isFocusEligible(zone)))
-      {
-        transitionTo(ConversationState::Ambient);
-        state_entry_ns_ = now_ns;
-      }
-      else if (now_ns - state_entry_ns_ >= (static_cast<std::uint64_t>(config_.activation_hold_ms) * 1'000'000ULL))
-      {
-        focus_target_ = input.track;
-        transitionTo(ConversationState::Focused);
-        state_entry_ns_ = now_ns;
-      }
-      break;
-    case ConversationState::Focused:
-      if (input.has_track && isAmbientZone(zone))
-      {
-        transitionTo(ConversationState::Releasing);
-        state_entry_ns_ = now_ns;
-      }
-      else if (input.has_track && speech && directionStable(input.track.azimuth_deg))
-      {
-        focus_target_ = input.track;
-      }
-      else if (!input.has_track)
-      {
-        transitionTo(ConversationState::Held);
-        state_entry_ns_ = now_ns;
-      }
-      else
-      {
-        transitionTo(ConversationState::Releasing);
-        state_entry_ns_ = now_ns;
-      }
-      break;
-    case ConversationState::Held:
-      if (input.has_track && speech && isFocusEligible(zone))
-      {
-        focus_target_ = input.track;
-        transitionTo(ConversationState::Focused);
-        state_entry_ns_ = now_ns;
-      }
-      else if (now_ns - state_entry_ns_ >=
-               (static_cast<std::uint64_t>(config_.hold_direction_ms) * 1'000'000ULL))
-      {
-        transitionTo(ConversationState::Releasing);
-        state_entry_ns_ = now_ns;
-      }
-      break;
-    case ConversationState::Releasing:
-      if (input.has_track && speech && isFocusEligible(zone) &&
-          (now_ns - state_entry_ns_ >=
-           (static_cast<std::uint64_t>(config_.confirmation_hold_ms) * 1'000'000ULL)))
-      {
-        focus_target_ = input.track;
-        transitionTo(ConversationState::Focused);
-        state_entry_ns_ = now_ns;
-      }
-      else if (now_ns - state_entry_ns_ >=
-               (static_cast<std::uint64_t>(config_.release_hold_ms) * 1'000'000ULL))
-      {
-        transitionTo(ConversationState::Ambient);
-        state_entry_ns_ = now_ns;
-      }
-      break;
-    default:
-      break;
+  case ConversationState::Ambient:
+    if (input.has_track && speech && isFocusEligible(zone))
+    {
+      focus_target_ = input.track;
+      transitionTo(ConversationState::Candidate);
+      state_entry_ns_ = now_ns;
+    }
+    break;
+  case ConversationState::Candidate:
+    if (!(input.has_track && speech && isFocusEligible(zone)))
+    {
+      transitionTo(ConversationState::Ambient);
+      state_entry_ns_ = now_ns;
+    }
+    else if (now_ns - state_entry_ns_ >=
+             (static_cast<std::uint64_t>(config_.activation_hold_ms) * 1'000'000ULL))
+    {
+      focus_target_ = input.track;
+      transitionTo(ConversationState::Focused);
+      state_entry_ns_ = now_ns;
+    }
+    break;
+  case ConversationState::Focused:
+    if (input.has_track && isAmbientZone(zone))
+    {
+      transitionTo(ConversationState::Releasing);
+      state_entry_ns_ = now_ns;
+    }
+    else if (input.has_track && speech && directionStable(input.track.azimuth_deg))
+    {
+      focus_target_ = input.track;
+    }
+    else if (!input.has_track)
+    {
+      transitionTo(ConversationState::Held);
+      state_entry_ns_ = now_ns;
+    }
+    else
+    {
+      transitionTo(ConversationState::Releasing);
+      state_entry_ns_ = now_ns;
+    }
+    break;
+  case ConversationState::Held:
+    if (input.has_track && speech && isFocusEligible(zone))
+    {
+      focus_target_ = input.track;
+      transitionTo(ConversationState::Focused);
+      state_entry_ns_ = now_ns;
+    }
+    else if (now_ns - state_entry_ns_ >=
+             (static_cast<std::uint64_t>(config_.hold_direction_ms) * 1'000'000ULL))
+    {
+      transitionTo(ConversationState::Releasing);
+      state_entry_ns_ = now_ns;
+    }
+    break;
+  case ConversationState::Releasing:
+    if (input.has_track && speech && isFocusEligible(zone) &&
+        (now_ns - state_entry_ns_ >=
+         (static_cast<std::uint64_t>(config_.confirmation_hold_ms) * 1'000'000ULL)))
+    {
+      focus_target_ = input.track;
+      transitionTo(ConversationState::Focused);
+      state_entry_ns_ = now_ns;
+    }
+    else if (now_ns - state_entry_ns_ >=
+             (static_cast<std::uint64_t>(config_.release_hold_ms) * 1'000'000ULL))
+    {
+      transitionTo(ConversationState::Ambient);
+      state_entry_ns_ = now_ns;
+    }
+    break;
+  default:
+    break;
   }
 
   SteeringSnapshot out{};
@@ -158,4 +158,4 @@ std::uint64_t ConversationStateMachine::transitionCount(const ConversationState 
 {
   return transitions_[Idx(from, to)];
 }
-}  // namespace sonitude::control
+} // namespace sonitude::control

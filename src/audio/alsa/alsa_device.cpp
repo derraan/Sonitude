@@ -25,19 +25,19 @@ PcmFormat ToPcmFormat(const snd_pcm_format_t format)
 {
   switch (format)
   {
-    case SND_PCM_FORMAT_S16_LE:
-      return PcmFormat::S16_LE;
-    case SND_PCM_FORMAT_S24_3LE:
-      return PcmFormat::S24_3LE;
-    case SND_PCM_FORMAT_S32_LE:
-      return PcmFormat::S32_LE;
-    case SND_PCM_FORMAT_FLOAT_LE:
-      return PcmFormat::FLOAT32_LE;
-    default:
-      throw std::runtime_error("Unsupported negotiated ALSA sample format");
+  case SND_PCM_FORMAT_S16_LE:
+    return PcmFormat::S16_LE;
+  case SND_PCM_FORMAT_S24_3LE:
+    return PcmFormat::S24_3LE;
+  case SND_PCM_FORMAT_S32_LE:
+    return PcmFormat::S32_LE;
+  case SND_PCM_FORMAT_FLOAT_LE:
+    return PcmFormat::FLOAT32_LE;
+  default:
+    throw std::runtime_error("Unsupported negotiated ALSA sample format");
   }
 }
-}  // namespace
+} // namespace
 #endif
 
 AlsaPcmDevice::~AlsaPcmDevice()
@@ -94,7 +94,8 @@ std::int64_t AlsaPcmDevice::readInterleaved(std::uint8_t* dst, const std::uint32
 #endif
 }
 
-std::int64_t AlsaPcmDevice::writeInterleaved(const std::uint8_t* src, const std::uint32_t frames) const
+std::int64_t AlsaPcmDevice::writeInterleaved(const std::uint8_t* src,
+                                             const std::uint32_t frames) const
 {
 #if defined(__linux__)
   if (pcm_ == nullptr)
@@ -157,8 +158,8 @@ bool AlsaPcmDevice::fillPollDescriptors(pollfd* const descriptors, const int cou
   {
     return false;
   }
-  return snd_pcm_poll_descriptors(
-             static_cast<snd_pcm_t*>(pcm_), descriptors, static_cast<unsigned int>(count)) == count;
+  return snd_pcm_poll_descriptors(static_cast<snd_pcm_t*>(pcm_), descriptors,
+                                  static_cast<unsigned int>(count)) == count;
 #else
   (void)descriptors;
   (void)count;
@@ -166,8 +167,7 @@ bool AlsaPcmDevice::fillPollDescriptors(pollfd* const descriptors, const int cou
 #endif
 }
 
-bool AlsaPcmDevice::pollRevents(pollfd* const descriptors,
-                                const int count,
+bool AlsaPcmDevice::pollRevents(pollfd* const descriptors, const int count,
                                 unsigned short* const revents) const
 {
 #if defined(__linux__)
@@ -175,10 +175,8 @@ bool AlsaPcmDevice::pollRevents(pollfd* const descriptors,
   {
     return false;
   }
-  return snd_pcm_poll_descriptors_revents(static_cast<snd_pcm_t*>(pcm_),
-                                          descriptors,
-                                          static_cast<unsigned int>(count),
-                                          revents) == 0;
+  return snd_pcm_poll_descriptors_revents(static_cast<snd_pcm_t*>(pcm_), descriptors,
+                                          static_cast<unsigned int>(count), revents) == 0;
 #else
   (void)descriptors;
   (void)count;
@@ -232,8 +230,8 @@ void AlsaPcmDevice::configure(const app::DeviceConfig& config, const bool is_cap
   const int open_rc = snd_pcm_open(&pcm, config.alsa_device.c_str(), stream, 0);
   if (open_rc < 0)
   {
-    throw std::runtime_error(
-        "Failed to open ALSA device: " + config.alsa_device + ": " + snd_strerror(open_rc));
+    throw std::runtime_error("Failed to open ALSA device: " + config.alsa_device + ": " +
+                             snd_strerror(open_rc));
   }
   std::unique_ptr<snd_pcm_t, decltype(&snd_pcm_close)> pcm_guard(pcm, &snd_pcm_close);
   snd_pcm_hw_params_t* hw = nullptr;
@@ -248,8 +246,9 @@ void AlsaPcmDevice::configure(const app::DeviceConfig& config, const bool is_cap
                                         : snd_pcm_hw_params_set_channels(pcm, hw, channels);
   if (channel_result < 0)
   {
-    throw std::runtime_error(std::string(is_capture ? "Capture device channel negotiation failed: "
-                                                    : "Playback device channel configuration failed: ") +
+    throw std::runtime_error(std::string(is_capture
+                                             ? "Capture device channel negotiation failed: "
+                                             : "Playback device channel configuration failed: ") +
                              snd_strerror(channel_result));
   }
   if (!is_capture && channels != 2U)
@@ -257,7 +256,8 @@ void AlsaPcmDevice::configure(const app::DeviceConfig& config, const bool is_cap
     throw std::runtime_error("Playback device does not support required stereo output");
   }
   snd_pcm_uframes_t period = config.period_frames;
-  RequireAlsa(snd_pcm_hw_params_set_period_size_near(pcm, hw, &period, nullptr), "set_period_size_near");
+  RequireAlsa(snd_pcm_hw_params_set_period_size_near(pcm, hw, &period, nullptr),
+              "set_period_size_near");
   snd_pcm_uframes_t buffer = static_cast<snd_pcm_uframes_t>(config.period_frames * config.periods);
   RequireAlsa(snd_pcm_hw_params_set_buffer_size_near(pcm, hw, &buffer), "set_buffer_size_near");
   RequireAlsa(snd_pcm_hw_params(pcm, hw), "snd_pcm_hw_params");
@@ -271,7 +271,8 @@ void AlsaPcmDevice::configure(const app::DeviceConfig& config, const bool is_cap
   RequireAlsa(snd_pcm_hw_params_get_channels(hw, &applied_channels), "get_channels");
   snd_pcm_uframes_t applied_period = 0;
   int period_dir = 0;
-  RequireAlsa(snd_pcm_hw_params_get_period_size(hw, &applied_period, &period_dir), "get_period_size");
+  RequireAlsa(snd_pcm_hw_params_get_period_size(hw, &applied_period, &period_dir),
+              "get_period_size");
   snd_pcm_uframes_t applied_buffer = 0;
   RequireAlsa(snd_pcm_hw_params_get_buffer_size(hw, &applied_buffer), "get_buffer_size");
 
@@ -296,4 +297,4 @@ void AlsaPcmDevice::configure(const app::DeviceConfig& config, const bool is_cap
   throw std::runtime_error("ALSA is not available on this platform");
 #endif
 }
-}  // namespace sonitude::audio::alsa
+} // namespace sonitude::audio::alsa

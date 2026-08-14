@@ -28,9 +28,7 @@ void TestControlLoopTracksAndFailsafe()
   sonitude::control::SteeringChannel channel;
 
   sonitude::control::ControlLoop loop(
-      &provider,
-      &channel,
-      {.failsafe_timeout_ns = 300'000'000ULL, .ambient_floor_linear = 0.25F});
+      &provider, &channel, {.failsafe_timeout_ns = 300'000'000ULL, .ambient_floor_linear = 0.25F});
 
   // The constructor seeds a failsafe publication, so drain it before asserting
   // on what each tick produces.
@@ -69,7 +67,7 @@ void TestControlLoopTracksAndFailsafe()
           "publishFailsafe must recentre the beam");
   Require(!s.has_distractor, "publishFailsafe must clear the distractor");
 }
-}  // namespace
+} // namespace
 
 void RunControlLoopTests()
 {

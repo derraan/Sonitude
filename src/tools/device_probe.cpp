@@ -20,13 +20,16 @@ int main(int argc, char** argv)
 #if SONITUDE_HAS_ALSA
     const auto cap = sonitude::audio::alsa::ProbeSingleCaptureDevice(config.capture);
     const auto pb = sonitude::audio::alsa::ProbeSinglePlaybackDevice(config.playback);
-    auto print_device = [](const sonitude::audio::alsa::DeviceProbeResult& d, const std::string& label) {
+    auto print_device =
+        [](const sonitude::audio::alsa::DeviceProbeResult& d, const std::string& label)
+    {
       std::cout << "\n[" << label << "] " << d.pcm_name << "\n";
       std::cout << "  channels: " << d.channels_min << " .. " << d.channels_max << "\n";
       std::cout << "  rates:\n";
       for (const auto& r : d.rates)
       {
-        std::cout << "    " << std::setw(6) << r.rate_hz << " Hz : " << (r.supported ? "yes" : "no") << "\n";
+        std::cout << "    " << std::setw(6) << r.rate_hz << " Hz : " << (r.supported ? "yes" : "no")
+                  << "\n";
       }
     };
     print_device(cap, "capture");
@@ -34,7 +37,8 @@ int main(int argc, char** argv)
     std::cout << "\nExpected active map: [";
     for (std::size_t i = 0; i < config.active_channel_map.size(); ++i)
     {
-      std::cout << config.active_channel_map[i] << (i + 1 < config.active_channel_map.size() ? ", " : "");
+      std::cout << config.active_channel_map[i]
+                << (i + 1 < config.active_channel_map.size() ? ", " : "");
     }
     std::cout << "]\n";
     return 0;

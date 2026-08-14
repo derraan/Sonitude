@@ -29,7 +29,7 @@ void
 TouchStackFrame(const std::size_t remaining) noexcept
 {
   constexpr std::size_t kFrameBytes = 4096;
-  constexpr std::size_t kStrideBytes = 512;  // <= any supported page size
+  constexpr std::size_t kStrideBytes = 512; // <= any supported page size
   volatile unsigned char frame[kFrameBytes];
   unsigned char sink = 0;
   for (std::size_t offset = 0; offset < kFrameBytes; offset += kStrideBytes)
@@ -44,7 +44,7 @@ TouchStackFrame(const std::size_t remaining) noexcept
     TouchStackFrame(remaining - kFrameBytes);
   }
 }
-}  // namespace
+} // namespace
 
 const char* SchedClassName(const SchedClass sched_class) noexcept
 {
@@ -141,4 +141,4 @@ void PrefaultStack(const std::size_t bytes) noexcept
   }
   TouchStackFrame(bytes);
 }
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

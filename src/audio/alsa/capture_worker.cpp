@@ -8,8 +8,7 @@
 
 namespace sonitude::audio::alsa
 {
-CaptureWorker::CaptureWorker(AlsaPcmDevice* device,
-                             const app::RuntimeConfig* config,
+CaptureWorker::CaptureWorker(AlsaPcmDevice* device, const app::RuntimeConfig* config,
                              rt::TelemetryCounters* counters)
     : device_(device), config_(config), counters_(counters)
 {
@@ -85,9 +84,8 @@ CaptureWait CaptureWorker::waitForData(const int wake_fd, const int timeout_ms)
 
   for (;;)
   {
-    const int rc = ::poll(poll_descriptors_.data(),
-                          static_cast<nfds_t>(poll_descriptors_.size()),
-                          timeout_ms);
+    const int rc =
+        ::poll(poll_descriptors_.data(), static_cast<nfds_t>(poll_descriptors_.size()), timeout_ms);
     if (rc < 0)
     {
       if (errno == EINTR)
@@ -127,7 +125,8 @@ CaptureWait CaptureWorker::waitForData(const int wake_fd, const int timeout_ms)
 bool CaptureWorker::readBlock(std::span<audio::MicFrame> out_frames, std::size_t* frames_read)
 {
   const auto negotiated = device_->negotiated();
-  const std::int64_t frame_count = device_->readInterleaved(interleaved_.data(), negotiated.period_frames);
+  const std::int64_t frame_count =
+      device_->readInterleaved(interleaved_.data(), negotiated.period_frames);
   if (frame_count < 0)
   {
     (void)device_->recoverXrun(static_cast<int>(frame_count));
@@ -145,13 +144,10 @@ bool CaptureWorker::readBlock(std::span<audio::MicFrame> out_frames, std::size_t
     return false;
   }
 
-  audio::ExtractActiveMicFrames(interleaved_.data(),
-                                produced,
-                                negotiated.channels,
-                                config_->active_channel_map,
-                                negotiated.format,
-                                out_frames);
-  counters_->capture_frames.fetch_add(static_cast<std::uint64_t>(produced), std::memory_order_relaxed);
+  audio::ExtractActiveMicFrames(interleaved_.data(), produced, negotiated.channels,
+                                config_->active_channel_map, negotiated.format, out_frames);
+  counters_->capture_frames.fetch_add(static_cast<std::uint64_t>(produced),
+                                      std::memory_order_relaxed);
   if (frames_read != nullptr)
   {
     *frames_read = produced;
@@ -170,4 +166,4 @@ bool CaptureWorker::readBlock(std::vector<audio::MicFrame>& out_frames)
   out_frames.resize(produced);
   return true;
 }
-}  // namespace sonitude::audio::alsa
+} // namespace sonitude::audio::alsa

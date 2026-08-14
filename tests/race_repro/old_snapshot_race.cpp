@@ -33,10 +33,9 @@ struct SteeringSnapshot
   bool has_distractor = false;
 };
 
-template <typename T>
-class SnapshotBuffer
+template <typename T> class SnapshotBuffer
 {
- public:
+public:
   explicit SnapshotBuffer(const T& initial) : slots_{initial, initial} {}
 
   void publish(const T& value)
@@ -67,11 +66,11 @@ class SnapshotBuffer
     }
   }
 
- private:
+private:
   mutable std::atomic<std::uint64_t> sequence_{0};
   std::array<T, 2> slots_{};
 };
-}  // namespace old_code
+} // namespace old_code
 
 int main()
 {
@@ -79,31 +78,35 @@ int main()
   std::atomic<bool> done{false};
 
   // Control-thread role: publish steering updates.
-  std::thread writer([&] {
-    for (std::uint64_t i = 1; i <= 200000; ++i)
-    {
-      old_code::SteeringSnapshot snapshot;
-      snapshot.generation = i;
-      snapshot.target.azimuth_deg = static_cast<float>(i % 360U);
-      snapshot.confidence = static_cast<float>(i % 360U);
-      // The field existed on the realtime-facing snapshot; a non-empty value is
-      // what the runtime would have carried once zones were wired up.
-      snapshot.zone_name = "zone-" + std::to_string(i % 8U);
-      buffer.publish(snapshot);
-    }
-    done.store(true, std::memory_order_release);
-  });
+  std::thread writer(
+      [&]
+      {
+        for (std::uint64_t i = 1; i <= 200000; ++i)
+        {
+          old_code::SteeringSnapshot snapshot;
+          snapshot.generation = i;
+          snapshot.target.azimuth_deg = static_cast<float>(i % 360U);
+          snapshot.confidence = static_cast<float>(i % 360U);
+          // The field existed on the realtime-facing snapshot; a non-empty value is
+          // what the runtime would have carried once zones were wired up.
+          snapshot.zone_name = "zone-" + std::to_string(i % 8U);
+          buffer.publish(snapshot);
+        }
+        done.store(true, std::memory_order_release);
+      });
 
   // Audio-thread role: acquire the snapshot every period.
-  std::thread reader([&] {
-    std::uint64_t observed = 0;
-    while (!done.load(std::memory_order_acquire))
-    {
-      const old_code::SteeringSnapshot snapshot = buffer.acquire();
-      observed += snapshot.generation;
-    }
-    std::cout << "reader observed checksum " << observed << '\n';
-  });
+  std::thread reader(
+      [&]
+      {
+        std::uint64_t observed = 0;
+        while (!done.load(std::memory_order_acquire))
+        {
+          const old_code::SteeringSnapshot snapshot = buffer.acquire();
+          observed += snapshot.generation;
+        }
+        std::cout << "reader observed checksum " << observed << '\n';
+      });
 
   writer.join();
   reader.join();

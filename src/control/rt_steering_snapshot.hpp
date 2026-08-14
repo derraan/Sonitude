@@ -39,4 +39,4 @@ static_assert(std::is_trivially_destructible_v<RtSteeringSnapshot>,
               "RtSteeringSnapshot must not run a destructor on the realtime thread");
 static_assert(std::is_standard_layout_v<RtSteeringSnapshot>,
               "RtSteeringSnapshot must stay a flat aggregate of scalars");
-}  // namespace sonitude::control
+} // namespace sonitude::control

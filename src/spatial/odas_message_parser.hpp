@@ -12,15 +12,18 @@ namespace sonitude::spatial
 {
 class OdasMessageParser
 {
- public:
+public:
   explicit OdasMessageParser(std::size_t max_buffer_bytes = 256U * 1024U)
       : max_buffer_bytes_(max_buffer_bytes)
   {
   }
   std::vector<SourceObservation> feed(std::string_view bytes);
-  std::uint64_t overflowResyncCount() const { return overflow_resync_count_; }
+  std::uint64_t overflowResyncCount() const
+  {
+    return overflow_resync_count_;
+  }
 
- private:
+private:
   std::vector<SourceObservation> parseOneObject(const std::string& json_object) const;
   static bool extractNumber(const std::string& json, const std::string& key, double& out);
   static bool extractUnsigned(const std::string& json, const std::string& key, std::uint64_t& out);
@@ -30,4 +33,4 @@ class OdasMessageParser
   std::size_t max_buffer_bytes_ = 256U * 1024U;
   std::uint64_t overflow_resync_count_ = 0;
 };
-}  // namespace sonitude::spatial
+} // namespace sonitude::spatial

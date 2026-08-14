@@ -19,17 +19,21 @@ namespace sonitude::audio::alsa
 {
 enum class CaptureWait : std::uint8_t
 {
-  Ready = 0,        // the device has a period available
-  Interrupted = 1,  // the shutdown descriptor fired
-  Timeout = 2,      // no data within the bound; caller decides whether that is fatal
+  Ready = 0,       // the device has a period available
+  Interrupted = 1, // the shutdown descriptor fired
+  Timeout = 2,     // no data within the bound; caller decides whether that is fatal
   Error = 3,
 };
 
 class CaptureWorker
 {
- public:
-  CaptureWorker(AlsaPcmDevice* device, const app::RuntimeConfig* config, rt::TelemetryCounters* counters);
-  std::size_t periodFrames() const { return period_frames_; }
+public:
+  CaptureWorker(AlsaPcmDevice* device, const app::RuntimeConfig* config,
+                rt::TelemetryCounters* counters);
+  std::size_t periodFrames() const
+  {
+    return period_frames_;
+  }
 
   bool readBlock(std::span<audio::MicFrame> out_frames, std::size_t* frames_read);
   bool readBlock(std::vector<audio::MicFrame>& out_frames);
@@ -39,7 +43,10 @@ class CaptureWorker
   // the realtime loop, because it allocates. Returns false when the device
   // cannot be polled, in which case waitForData() must not be used.
   bool prepareWaiting();
-  bool waitingSupported() const { return alsa_descriptor_count_ > 0; }
+  bool waitingSupported() const
+  {
+    return alsa_descriptor_count_ > 0;
+  }
 
   // Blocks until a capture period is available or `wake_fd` becomes readable.
   // This is how a blocked capture is interrupted: the shutdown descriptor is
@@ -48,7 +55,7 @@ class CaptureWorker
   CaptureWait waitForData(int wake_fd, int timeout_ms);
 #endif
 
- private:
+private:
   AlsaPcmDevice* device_ = nullptr;
   const app::RuntimeConfig* config_ = nullptr;
   rt::TelemetryCounters* counters_ = nullptr;
@@ -61,4 +68,4 @@ class CaptureWorker
   int alsa_descriptor_count_ = 0;
 #endif
 };
-}  // namespace sonitude::audio::alsa
+} // namespace sonitude::audio::alsa

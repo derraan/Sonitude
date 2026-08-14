@@ -1,8 +1,8 @@
 #include "tools/calibration_estimate_support.hpp"
 
 #include <algorithm>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -27,8 +27,7 @@ std::vector<float> Demean(std::span<const float> input, const float mean)
 }
 
 double NormalizedCorrelationAtLag(const std::vector<float>& reference,
-                                  const std::vector<float>& channel,
-                                  const int lag)
+                                  const std::vector<float>& channel, const int lag)
 {
   const std::int64_t n = static_cast<std::int64_t>(reference.size());
   const std::int64_t i_start = std::max<std::int64_t>(0, -static_cast<std::int64_t>(lag));
@@ -57,7 +56,7 @@ double NormalizedCorrelationAtLag(const std::vector<float>& reference,
   }
   return dot / denom;
 }
-}  // namespace
+} // namespace
 
 ChannelMoments ComputeChannelMoments(const std::span<const float> samples)
 {
@@ -84,10 +83,12 @@ ChannelMoments ComputeChannelMoments(const std::span<const float> samples)
     squared_sum += centered * centered;
   }
 
-  const float rms = static_cast<float>(std::sqrt(squared_sum / static_cast<double>(samples.size())));
+  const float rms =
+      static_cast<float>(std::sqrt(squared_sum / static_cast<double>(samples.size())));
   if (!(rms >= kMinRms))
   {
-    throw std::runtime_error("calibration_estimate channel energy is too low for stable estimation");
+    throw std::runtime_error(
+        "calibration_estimate channel energy is too low for stable estimation");
   }
   return {.mean = mean, .rms = rms};
 }
@@ -171,16 +172,14 @@ float ParseMinimumCorrelation(const std::string& value)
   {
     throw std::runtime_error("--min-correlation must be a finite number in [0, 1]");
   }
-  if (consumed != value.size() || !std::isfinite(threshold) || threshold < 0.0F ||
-      threshold > 1.0F)
+  if (consumed != value.size() || !std::isfinite(threshold) || threshold < 0.0F || threshold > 1.0F)
   {
     throw std::runtime_error("--min-correlation must be a finite number in [0, 1]");
   }
   return threshold;
 }
 
-void RequireMinimumCorrelation(const std::string& channel_id,
-                               const float measured_correlation,
+void RequireMinimumCorrelation(const std::string& channel_id, const float measured_correlation,
                                const float required_correlation)
 {
   if (!std::isfinite(measured_correlation) || !std::isfinite(required_correlation) ||
@@ -196,4 +195,4 @@ void RequireMinimumCorrelation(const std::string& channel_id,
     throw std::runtime_error(message.str());
   }
 }
-}  // namespace sonitude::tools::calibration
+} // namespace sonitude::tools::calibration

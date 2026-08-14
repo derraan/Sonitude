@@ -45,7 +45,8 @@ void TestRuntimeConfigValid()
   Require(config.active_channel_map.size() == sonitude::audio::kMicChannels,
           "valid runtime config did not load six channels");
   Require(config.suppression.fade_ms > 0.0F, "suppression config should parse from runtime YAML");
-  Require(config.calibration_dc_block_hz > 0.0F, "calibration_dc_block_hz should parse from runtime YAML");
+  Require(config.calibration_dc_block_hz > 0.0F,
+          "calibration_dc_block_hz should parse from runtime YAML");
   Require(config.realtime.capture_priority > 0, "realtime config should parse from runtime YAML");
   Require(!config.realtime.require_memory_lock,
           "missing require_memory_lock must retain the backward-compatible false default");
@@ -260,9 +261,8 @@ void TestRuntimeAudioContractHeadroom()
   {
     threw = true;
   }
-  Require(
-      threw,
-      "playback period smaller than capture period should fail when scratch capacity is insufficient");
+  Require(threw, "playback period smaller than capture period should fail when scratch capacity is "
+                 "insufficient");
 
   threw = false;
   try
@@ -323,7 +323,7 @@ void TestAudioTypeInvariants()
   sonitude::audio::MicFrame frame{};
   Require(frame.size() == sonitude::audio::kMicChannels, "MicFrame width must match channel count");
 }
-}  // namespace
+} // namespace
 
 int main()
 {

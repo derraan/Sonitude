@@ -13,6 +13,15 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 
+selection="${1:-all}"
+if [[ "${selection}" == "thread" || "${selection}" == "address" || "${selection}" == "all" ]]; then
+  if (($# > 0)); then
+    shift
+  fi
+else
+  echo "Usage: $0 [thread|address|all] [extra CMake arguments...]" >&2
+  exit 2
+fi
 extra_cmake_args=("$@")
 
 # ThreadSanitizer aborts with "unexpected memory mapping" when the kernel uses
@@ -26,7 +35,12 @@ run_no_aslr() {
   fi
 }
 
-for sanitizer in thread address; do
+sanitizers=(thread address)
+if [[ "${selection}" != "all" ]]; then
+  sanitizers=("${selection}")
+fi
+
+for sanitizer in "${sanitizers[@]}"; do
   build_dir="build-${sanitizer}"
   echo "=== configuring ${sanitizer} ==="
   cmake -S . -B "${build_dir}" \
@@ -35,14 +49,19 @@ for sanitizer in thread address; do
     -DSONITUDE_WITH_ALSA=OFF \
     "${extra_cmake_args[@]}"
   echo "=== building ${sanitizer} ==="
-  cmake --build "${build_dir}" --target sonitude_unit_tests -j "$(nproc)"
+  if [[ "${sanitizer}" == "thread" ]]; then
+    cmake --build "${build_dir}" --target sonitude_concurrency_tests -j "$(nproc)"
+  else
+    cmake --build "${build_dir}" -j "$(nproc)"
+  fi
   echo "=== running ${sanitizer} ==="
   if [[ "${sanitizer}" == "thread" ]]; then
-    TSAN_OPTIONS="halt_on_error=1" run_no_aslr "./${build_dir}/sonitude_unit_tests"
+    TSAN_OPTIONS="halt_on_error=1" run_no_aslr \
+      ctest --test-dir "${build_dir}" --output-on-failure -L concurrency
   else
     ASAN_OPTIONS="detect_leaks=1:abort_on_error=1" \
       UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" \
-      run_no_aslr "./${build_dir}/sonitude_unit_tests"
+      run_no_aslr ctest --test-dir "${build_dir}" --output-on-failure
   fi
   echo "=== ${sanitizer} passed ==="
 done

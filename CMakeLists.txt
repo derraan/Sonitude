@@ -8,6 +8,7 @@ project(
 )
 
 option(SONITUDE_BUILD_TESTS "Build Sonitude unit tests" ON)
+option(SONITUDE_BUILD_FUZZERS "Build Sonitude libFuzzer harnesses" OFF)
 option(SONITUDE_FETCH_DEPS "Fetch dependencies when not found locally" ON)
 option(SONITUDE_WITH_LIBSAMPLERATE "Enable libsamplerate-backed resampler" ON)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -331,4 +332,73 @@ if(SONITUDE_BUILD_TESTS)
     NAME sonitude_unit_tests
     COMMAND sonitude_unit_tests
   )
+  set_tests_properties(sonitude_unit_tests PROPERTIES LABELS "unit")
+
+  add_executable(
+    sonitude_concurrency_tests
+    tests/unit/concurrency_tests.cpp
+    tests/unit/rt_tests.cpp
+    tests/unit/lifecycle_tests.cpp
+    tests/unit/thread_safety_tests.cpp
+  )
+  target_link_libraries(
+    sonitude_concurrency_tests
+    PRIVATE
+      sonitude_core
+      Threads::Threads
+  )
+  add_test(
+    NAME sonitude_concurrency_tests
+    COMMAND sonitude_concurrency_tests
+  )
+  set_tests_properties(sonitude_concurrency_tests PROPERTIES LABELS "concurrency")
+
+  add_executable(
+    sonitude_integration_smoke_tests
+    tests/integration/integration_smoke_tests.cpp
+  )
+  target_link_libraries(
+    sonitude_integration_smoke_tests
+    PRIVATE
+      sonitude_core
+  )
+  target_compile_definitions(
+    sonitude_integration_smoke_tests
+    PRIVATE
+      SONITUDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  add_test(
+    NAME sonitude_integration_smoke_tests
+    COMMAND sonitude_integration_smoke_tests
+  )
+  set_tests_properties(sonitude_integration_smoke_tests PROPERTIES LABELS "smoke")
+endif()
+
+if(SONITUDE_BUILD_FUZZERS)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "SONITUDE_BUILD_FUZZERS requires clang/clang++")
+  endif()
+
+  foreach(fuzz_target IN ITEMS odas_parser wav_io)
+    add_executable(
+      fuzz_${fuzz_target}
+      tests/fuzz/${fuzz_target}_fuzz.cpp
+    )
+    target_link_libraries(
+      fuzz_${fuzz_target}
+      PRIVATE
+        sonitude_core
+    )
+    target_compile_options(
+      fuzz_${fuzz_target}
+      PRIVATE
+        -fsanitize=fuzzer,address,undefined
+        -fno-omit-frame-pointer
+    )
+    target_link_options(
+      fuzz_${fuzz_target}
+      PRIVATE
+        -fsanitize=fuzzer,address,undefined
+    )
+  endforeach()
 endif()

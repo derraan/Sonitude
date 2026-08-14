@@ -20,11 +20,11 @@ const char* SchedClassName(SchedClass sched_class) noexcept;
 struct SchedObservation
 {
   bool valid = false;
-  int policy = -1;             // raw SCHED_* value
-  std::int32_t priority = 0;   // static priority (0 for SCHED_OTHER)
-  bool realtime = false;       // policy is SCHED_FIFO or SCHED_RR
-  std::uint64_t tid = 0;       // gettid(), for correlating with the kernel
-  int error = 0;               // errno when valid == false
+  int policy = -1;           // raw SCHED_* value
+  std::int32_t priority = 0; // static priority (0 for SCHED_OTHER)
+  bool realtime = false;     // policy is SCHED_FIFO or SCHED_RR
+  std::uint64_t tid = 0;     // gettid(), for correlating with the kernel
+  int error = 0;             // errno when valid == false
 };
 
 // Reads the calling thread's live scheduling parameters from the kernel.
@@ -54,4 +54,4 @@ bool TryEnableMemoryLocking(int* out_error) noexcept;
 // write-faulted before any deadline applies. Call from the thread itself, once,
 // before its first period. Does nothing when bytes == 0.
 void PrefaultStack(std::size_t bytes) noexcept;
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

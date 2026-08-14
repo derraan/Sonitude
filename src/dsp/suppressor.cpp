@@ -12,7 +12,7 @@ float Clamp01(const float x)
 {
   return std::clamp(x, 0.0F, 1.0F);
 }
-}  // namespace
+} // namespace
 
 void OutputGainGate::configure(const SuppressorConfig& config, const std::uint32_t sample_rate_hz)
 {
@@ -69,9 +69,8 @@ void OutputGainGate::process(const std::span<float> mono)
       envelope_ += envelope_release_coeff_ * (magnitude - envelope_);
     }
 
-    const bool allow_attenuation =
-        focus_active_ && (confidence_ >= config_.confidence_threshold) &&
-        (envelope_ >= config_.activity_threshold);
+    const bool allow_attenuation = focus_active_ && (confidence_ >= config_.confidence_threshold) &&
+                                   (envelope_ >= config_.activity_threshold);
     const float target_gain = allow_attenuation ? config_.ambient_floor_linear : 1.0F;
 
     if (current_gain_ < target_gain)
@@ -86,4 +85,4 @@ void OutputGainGate::process(const std::span<float> mono)
     sample *= current_gain_;
   }
 }
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp

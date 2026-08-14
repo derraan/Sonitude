@@ -44,7 +44,7 @@ class Lifecycle
   static_assert(std::atomic<std::uint8_t>::is_always_lock_free,
                 "the stop reason is set from a signal handler and must be lock-free");
 
- public:
+public:
   Lifecycle() = default;
   Lifecycle(const Lifecycle&) = delete;
   Lifecycle& operator=(const Lifecycle&) = delete;
@@ -52,7 +52,10 @@ class Lifecycle
   // Idempotent. Async-signal-safe on Linux.
   void requestStop(StopReason reason) noexcept;
 
-  bool stopRequested() const noexcept { return stop_.load(std::memory_order_acquire); }
+  bool stopRequested() const noexcept
+  {
+    return stop_.load(std::memory_order_acquire);
+  }
   StopReason reason() const noexcept
   {
     return static_cast<StopReason>(reason_.load(std::memory_order_acquire));
@@ -65,10 +68,16 @@ class Lifecycle
 
   // Pollable descriptor that becomes readable on shutdown, for threads that
   // must block on shutdown together with another descriptor (e.g. ALSA).
-  int wakeFd() const noexcept { return wake_.fd(); }
-  WakeEvent& wakeEvent() noexcept { return wake_; }
+  int wakeFd() const noexcept
+  {
+    return wake_.fd();
+  }
+  WakeEvent& wakeEvent() noexcept
+  {
+    return wake_;
+  }
 
- private:
+private:
   std::atomic<bool> stop_{false};
   std::atomic<std::uint8_t> reason_{static_cast<std::uint8_t>(StopReason::None)};
   WakeEvent wake_;
@@ -83,7 +92,7 @@ static_assert(std::atomic<Lifecycle*>::is_always_lock_free,
 // before the Lifecycle can be destroyed.
 class SignalHandlerInstallation
 {
- public:
+public:
   explicit SignalHandlerInstallation(Lifecycle& lifecycle) noexcept;
   ~SignalHandlerInstallation();
 
@@ -92,9 +101,12 @@ class SignalHandlerInstallation
   SignalHandlerInstallation(SignalHandlerInstallation&&) = delete;
   SignalHandlerInstallation& operator=(SignalHandlerInstallation&&) = delete;
 
-  bool installed() const noexcept { return installed_; }
+  bool installed() const noexcept
+  {
+    return installed_;
+  }
 
- private:
+private:
 #if defined(__linux__)
   struct sigaction previous_int_
   {
@@ -105,4 +117,4 @@ class SignalHandlerInstallation
 #endif
   bool installed_ = false;
 };
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

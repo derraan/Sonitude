@@ -1,6 +1,9 @@
 # Build outputs
 /build/
+/build-*/
 /out/
+/mic-array-pico2w-usb6ch/build/
+/mic-array-pico2w-usb6ch/build-*/
 
 # IDE and editor files
 /.idea/
@@ -10,3 +13,6 @@
 # OS files
 Thumbs.db
 .DS_Store
+
+# Firmware local capture artifacts
+/mic-array-pico2w-usb6ch/inmp441_test_capture.wav

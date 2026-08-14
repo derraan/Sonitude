@@ -16,16 +16,16 @@ const char* FormatName(const snd_pcm_format_t format)
 {
   switch (format)
   {
-    case SND_PCM_FORMAT_S16_LE:
-      return "S16_LE";
-    case SND_PCM_FORMAT_S24_3LE:
-      return "S24_3LE";
-    case SND_PCM_FORMAT_S32_LE:
-      return "S32_LE";
-    case SND_PCM_FORMAT_FLOAT_LE:
-      return "FLOAT_LE";
-    default:
-      return "UNKNOWN";
+  case SND_PCM_FORMAT_S16_LE:
+    return "S16_LE";
+  case SND_PCM_FORMAT_S24_3LE:
+    return "S24_3LE";
+  case SND_PCM_FORMAT_S32_LE:
+    return "S32_LE";
+  case SND_PCM_FORMAT_FLOAT_LE:
+    return "FLOAT_LE";
+  default:
+    return "UNKNOWN";
   }
 }
 
@@ -49,8 +49,8 @@ DeviceProbeResult ProbePcm(const std::string& pcm_name, const snd_pcm_stream_t s
   out.pcm_name = pcm_name;
   out.channels_min = min_channels;
   out.channels_max = max_channels;
-  for (const snd_pcm_format_t candidate :
-       {SND_PCM_FORMAT_S16_LE, SND_PCM_FORMAT_S24_3LE, SND_PCM_FORMAT_S32_LE, SND_PCM_FORMAT_FLOAT_LE})
+  for (const snd_pcm_format_t candidate : {SND_PCM_FORMAT_S16_LE, SND_PCM_FORMAT_S24_3LE,
+                                           SND_PCM_FORMAT_S32_LE, SND_PCM_FORMAT_FLOAT_LE})
   {
     const int rc = snd_pcm_hw_params_test_format(pcm, params, candidate);
     if (rc == 0)
@@ -66,7 +66,7 @@ DeviceProbeResult ProbePcm(const std::string& pcm_name, const snd_pcm_stream_t s
   snd_pcm_close(pcm);
   return out;
 }
-}  // namespace
+} // namespace
 #endif
 
 std::vector<DeviceProbeResult> ProbeAllCapturePcms()
@@ -119,4 +119,4 @@ DeviceProbeResult ProbeSinglePlaybackDevice(const app::DeviceConfig& config)
   return {};
 #endif
 }
-}  // namespace sonitude::audio::alsa
+} // namespace sonitude::audio::alsa

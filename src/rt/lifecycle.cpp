@@ -29,26 +29,26 @@ sigset_t StopSignalSet() noexcept
   return signals;
 }
 #endif
-}  // namespace
+} // namespace
 
 const char* StopReasonName(const StopReason reason) noexcept
 {
   switch (reason)
   {
-    case StopReason::None:
-      return "none";
-    case StopReason::Signal:
-      return "signal";
-    case StopReason::StartupFailure:
-      return "startup-failure";
-    case StopReason::CaptureFailure:
-      return "capture-failure";
-    case StopReason::PlaybackFailure:
-      return "playback-failure";
-    case StopReason::ControlFailure:
-      return "control-failure";
-    case StopReason::CaptureStreamEnded:
-      return "capture-stream-ended";
+  case StopReason::None:
+    return "none";
+  case StopReason::Signal:
+    return "signal";
+  case StopReason::StartupFailure:
+    return "startup-failure";
+  case StopReason::CaptureFailure:
+    return "capture-failure";
+  case StopReason::PlaybackFailure:
+    return "playback-failure";
+  case StopReason::ControlFailure:
+    return "control-failure";
+  case StopReason::CaptureStreamEnded:
+    return "capture-stream-ended";
   }
   return "unknown";
 }
@@ -57,10 +57,8 @@ void Lifecycle::requestStop(const StopReason reason) noexcept
 {
   std::uint8_t expected = static_cast<std::uint8_t>(StopReason::None);
   // First reason wins; a losing racer still falls through to signal the event.
-  (void)reason_.compare_exchange_strong(expected,
-                                        static_cast<std::uint8_t>(reason),
-                                        std::memory_order_acq_rel,
-                                        std::memory_order_acquire);
+  (void)reason_.compare_exchange_strong(expected, static_cast<std::uint8_t>(reason),
+                                        std::memory_order_acq_rel, std::memory_order_acquire);
   stop_.store(true, std::memory_order_release);
   wake_.signal();
 }
@@ -86,8 +84,8 @@ SignalHandlerInstallation::SignalHandlerInstallation(Lifecycle& lifecycle) noexc
   }
 
   Lifecycle* expected = nullptr;
-  if (!g_signal_target.compare_exchange_strong(
-          expected, &lifecycle, std::memory_order_release, std::memory_order_relaxed))
+  if (!g_signal_target.compare_exchange_strong(expected, &lifecycle, std::memory_order_release,
+                                               std::memory_order_relaxed))
   {
     (void)::pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr);
     return;
@@ -101,8 +99,7 @@ SignalHandlerInstallation::SignalHandlerInstallation(Lifecycle& lifecycle) noexc
   action.sa_flags = SA_RESTART;
 
   const bool int_installed = ::sigaction(SIGINT, &action, &previous_int_) == 0;
-  const bool term_installed =
-      int_installed && ::sigaction(SIGTERM, &action, &previous_term_) == 0;
+  const bool term_installed = int_installed && ::sigaction(SIGTERM, &action, &previous_term_) == 0;
   if (!term_installed)
   {
     if (int_installed)
@@ -147,4 +144,4 @@ SignalHandlerInstallation::~SignalHandlerInstallation()
   }
 #endif
 }
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

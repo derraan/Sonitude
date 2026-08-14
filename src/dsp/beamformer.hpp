@@ -15,12 +15,11 @@ namespace sonitude::dsp
 {
 class IBeamformer
 {
- public:
+public:
   virtual ~IBeamformer() = default;
   virtual void configure(const app::GeometryConfig& geometry,
                          const app::SteeringConfig& steering_config,
-                         const app::CalibrationConfig& calibration,
-                         std::uint32_t sample_rate_hz,
+                         const app::CalibrationConfig& calibration, std::uint32_t sample_rate_hz,
                          std::size_t max_block_frames) = 0;
   virtual void setTarget(audio::BeamformerSteering target) = 0;
   virtual void process(std::span<const audio::MicFrame> input, std::span<float> mono_out) = 0;
@@ -28,26 +27,22 @@ class IBeamformer
 
 class DelaySumBeamformer final : public IBeamformer
 {
- public:
-  void configure(const app::GeometryConfig& geometry,
-                 const app::SteeringConfig& steering_config,
-                 const app::CalibrationConfig& calibration,
-                 std::uint32_t sample_rate_hz,
+public:
+  void configure(const app::GeometryConfig& geometry, const app::SteeringConfig& steering_config,
+                 const app::CalibrationConfig& calibration, std::uint32_t sample_rate_hz,
                  std::size_t max_block_frames) override;
   void setTarget(audio::BeamformerSteering target) override;
   void process(std::span<const audio::MicFrame> input, std::span<float> mono_out) override;
-  void processWithReference(std::span<const audio::MicFrame> input,
-                            std::span<float> focus_out,
+  void processWithReference(std::span<const audio::MicFrame> input, std::span<float> focus_out,
                             audio::BeamformerSteering distractor_target,
                             std::span<float> reference_out);
 
- private:
+private:
   using DelayArray = std::array<double, audio::kMicChannels>;
   using MicPosArray = std::array<std::array<double, 3>, audio::kMicChannels>;
 
   DelayArray computeDelaysForTarget(audio::BeamformerSteering target) const;
-  float renderOne(const audio::MicFrame& frame,
-                  const DelayArray& delays,
+  float renderOne(const audio::MicFrame& frame, const DelayArray& delays,
                   std::array<FractionalDelayLine, audio::kMicChannels>& lines) const;
 
   bool configured_ = false;
@@ -70,4 +65,4 @@ class DelaySumBeamformer final : public IBeamformer
   std::array<FractionalDelayLine, audio::kMicChannels> pending_lines_{};
   std::array<FractionalDelayLine, audio::kMicChannels> reference_lines_{};
 };
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp

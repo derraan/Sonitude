@@ -40,8 +40,7 @@ void TestWakeEventSignalAndConsume()
   Require(event.waitFor(std::chrono::milliseconds(0)), "a signalled event must report ready");
   Require(event.consume(), "consume must report the pending wakeup");
   Require(!event.consume(), "consume must clear the wakeup");
-  Require(!event.waitFor(std::chrono::milliseconds(0)),
-          "a consumed event must not report ready");
+  Require(!event.waitFor(std::chrono::milliseconds(0)), "a consumed event must not report ready");
 }
 
 void TestWakeEventReleasesBlockedWaiter()
@@ -50,12 +49,14 @@ void TestWakeEventReleasesBlockedWaiter()
   std::latch waiter_ready(1);
   std::atomic<bool> woke{false};
 
-  std::thread waiter([&] {
-    waiter_ready.count_down();
-    // Generous bound: the assertion is that signal() releases it, and the test
-    // fails if it only returns because the bound expired.
-    woke.store(event.waitFor(std::chrono::milliseconds(5000)), std::memory_order_release);
-  });
+  std::thread waiter(
+      [&]
+      {
+        waiter_ready.count_down();
+        // Generous bound: the assertion is that signal() releases it, and the test
+        // fails if it only returns because the bound expired.
+        woke.store(event.waitFor(std::chrono::milliseconds(5000)), std::memory_order_release);
+      });
 
   waiter_ready.wait();
   event.signal();
@@ -99,13 +100,15 @@ void TestStopReleasesConcurrentWaiters()
   waiters.reserve(kWaiters);
   for (int i = 0; i < kWaiters; ++i)
   {
-    waiters.emplace_back([&] {
-      ready.count_down();
-      if (lifecycle.waitForStopOr(std::chrono::milliseconds(5000)))
-      {
-        observed.fetch_add(1, std::memory_order_relaxed);
-      }
-    });
+    waiters.emplace_back(
+        [&]
+        {
+          ready.count_down();
+          if (lifecycle.waitForStopOr(std::chrono::milliseconds(5000)))
+          {
+            observed.fetch_add(1, std::memory_order_relaxed);
+          }
+        });
   }
 
   ready.wait();
@@ -138,10 +141,8 @@ void TestSignalInstallationDeliveryTeardownAndRestoration()
   previous.sa_handler = PreviousSignalHandler;
   (void)::sigemptyset(&previous.sa_mask);
   previous.sa_flags = 0;
-  Require(::sigaction(SIGINT, &previous, nullptr) == 0,
-          "the test SIGINT handler must install");
-  Require(::sigaction(SIGTERM, &previous, nullptr) == 0,
-          "the test SIGTERM handler must install");
+  Require(::sigaction(SIGINT, &previous, nullptr) == 0, "the test SIGINT handler must install");
+  Require(::sigaction(SIGTERM, &previous, nullptr) == 0, "the test SIGTERM handler must install");
 
   {
     sonitude::rt::Lifecycle lifecycle;
@@ -198,8 +199,7 @@ void TestStartGateHoldsWorkUntilRelease()
   Require(second.start(spec, &gate, [&] { ran.fetch_add(1, std::memory_order_relaxed); }),
           "gate test thread two must start");
 
-  Require(gate.waitForAll(std::chrono::milliseconds(5000)),
-          "both threads must reach the gate");
+  Require(gate.waitForAll(std::chrono::milliseconds(5000)), "both threads must reach the gate");
   // Both threads are parked at the gate and have published their status. Neither
   // body may have run yet.
   Require(ran.load(std::memory_order_relaxed) == 0,
@@ -224,8 +224,7 @@ void TestStartGateAbortSkipsWork()
   Require(gate.waitForAll(std::chrono::milliseconds(5000)), "thread must reach the gate");
   gate.abort();
   thread.join();
-  Require(!ran.load(std::memory_order_relaxed),
-          "an aborted startup must not run the workload");
+  Require(!ran.load(std::memory_order_relaxed), "an aborted startup must not run the workload");
 }
 
 void TestSlowThreadIsNeverRealtime()
@@ -261,7 +260,7 @@ void TestRealtimeRequestFallbackIsExplicit()
       sonitude::rt::PriorityRangeFor(sonitude::rt::SchedClass::Realtime);
   if (range.max <= 0)
   {
-    return;  // no realtime policy on this platform
+    return; // no realtime policy on this platform
   }
 
   const sonitude::rt::ThreadSpec spec{.name = "rt-check",
@@ -277,8 +276,7 @@ void TestRealtimeRequestFallbackIsExplicit()
   Require(status.observed.valid, "realtime thread must report its policy");
   if (status.degraded)
   {
-    Require(!status.observed.realtime,
-            "a degraded thread must actually be running SCHED_OTHER");
+    Require(!status.observed.realtime, "a degraded thread must actually be running SCHED_OTHER");
     Require(status.create_error != 0, "a degraded start must record why realtime was refused");
   }
   else
@@ -325,9 +323,8 @@ void TestInvalidRealtimePriorityIsRejected()
 {
   sonitude::rt::StartGate gate(1);
   sonitude::rt::ManagedThread thread;
-  const sonitude::rt::ThreadSpec spec{.name = "rt-bad-prio",
-                                      .sched_class = sonitude::rt::SchedClass::Realtime,
-                                      .priority = 100000};
+  const sonitude::rt::ThreadSpec spec{
+      .name = "rt-bad-prio", .sched_class = sonitude::rt::SchedClass::Realtime, .priority = 100000};
   Require(!thread.start(spec, &gate, [] {}),
           "an out-of-range realtime priority must be rejected, not clamped");
   Require(!thread.joinable(), "a rejected start must not create a thread");
@@ -359,7 +356,7 @@ void TestPrefaultStackIsHarmless()
   sonitude::rt::PrefaultStack(0);
   sonitude::rt::PrefaultStack(64U * 1024U);
 }
-}  // namespace
+} // namespace
 
 void RunLifecycleTests()
 {

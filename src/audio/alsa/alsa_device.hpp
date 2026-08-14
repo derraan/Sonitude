@@ -21,7 +21,7 @@ struct NegotiatedParams
 
 class AlsaPcmDevice
 {
- public:
+public:
   AlsaPcmDevice() = default;
   ~AlsaPcmDevice();
   AlsaPcmDevice(const AlsaPcmDevice&) = delete;
@@ -31,7 +31,10 @@ class AlsaPcmDevice
   void openPlayback(const app::DeviceConfig& config);
   void close();
 
-  NegotiatedParams negotiated() const { return negotiated_; }
+  NegotiatedParams negotiated() const
+  {
+    return negotiated_;
+  }
   int recoverXrun(int error_code) const;
   std::int64_t readInterleaved(std::uint8_t* dst, std::uint32_t frames) const;
   std::int64_t writeInterleaved(const std::uint8_t* src, std::uint32_t frames) const;
@@ -51,9 +54,9 @@ class AlsaPcmDevice
   int prepare() const;
   int start() const;
 
- private:
+private:
   void configure(const app::DeviceConfig& config, bool is_capture);
   void* pcm_ = nullptr;
   NegotiatedParams negotiated_{};
 };
-}  // namespace sonitude::audio::alsa
+} // namespace sonitude::audio::alsa

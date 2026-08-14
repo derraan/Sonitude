@@ -31,7 +31,7 @@ void TestZoneBoundariesWrap()
   Require(resolved->policy == sonitude::app::ZonePolicy::Ambient,
           "resolved zone must preserve its policy");
 }
-}  // namespace
+} // namespace
 
 void RunZoneTests()
 {

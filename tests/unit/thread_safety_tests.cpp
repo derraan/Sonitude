@@ -173,22 +173,24 @@ void TestAbandonDoesNotRaceConsumerRelease()
   std::atomic<bool> go{false};
   std::atomic<std::size_t> released{0};
 
-  std::thread consumer([&] {
-    while (!go.load(std::memory_order_acquire))
-    {
-    }
-    std::size_t seen = 0;
-    while (seen < kIterations)
-    {
-      sonitude::rt::BlockRef ref{};
-      if (channel.take(ref))
+  std::thread consumer(
+      [&]
       {
-        Require(channel.release(ref), "release must succeed");
-        ++seen;
-      }
-    }
-    released.store(seen, std::memory_order_release);
-  });
+        while (!go.load(std::memory_order_acquire))
+        {
+        }
+        std::size_t seen = 0;
+        while (seen < kIterations)
+        {
+          sonitude::rt::BlockRef ref{};
+          if (channel.take(ref))
+          {
+            Require(channel.release(ref), "release must succeed");
+            ++seen;
+          }
+        }
+        released.store(seen, std::memory_order_release);
+      });
 
   go.store(true, std::memory_order_release);
   std::size_t committed = 0;
@@ -307,66 +309,70 @@ void TestConcurrentOwnershipUnderWrapAround()
   std::atomic<std::uint64_t> consumed{0};
   std::latch start(2);
 
-  std::thread producer([&] {
-    start.arrive_and_wait();
-    for (std::uint64_t i = 1; i <= kBlocks; ++i)
-    {
-      std::uint32_t slot = 0;
-      while (!channel.acquire(slot))
+  std::thread producer(
+      [&]
       {
-        std::this_thread::yield();
-      }
-      const std::span<TestFrame> frames = channel.writable(slot);
-      // Stamp every frame with the same tag; a torn block shows up as a frame
-      // that disagrees with its neighbours.
-      for (std::size_t f = 0; f < kFrames; ++f)
-      {
-        frames[f].tag = i;
-      }
-      while (!channel.commit(slot, kFrames))
-      {
-        std::this_thread::yield();
-      }
-    }
-  });
-
-  std::thread consumer([&] {
-    start.arrive_and_wait();
-    std::uint64_t previous_tag = 0;
-    while (consumed.load(std::memory_order_relaxed) < kBlocks)
-    {
-      sonitude::rt::BlockRef ref{};
-      if (!channel.take(ref))
-      {
-        std::this_thread::yield();
-        continue;
-      }
-      const std::span<const TestFrame> frames = channel.readable(ref);
-      const std::uint64_t tag = frames[0].tag;
-      for (const TestFrame& frame : frames)
-      {
-        if (frame.tag != tag)
+        start.arrive_and_wait();
+        for (std::uint64_t i = 1; i <= kBlocks; ++i)
         {
-          corruption.store(true, std::memory_order_relaxed);
+          std::uint32_t slot = 0;
+          while (!channel.acquire(slot))
+          {
+            std::this_thread::yield();
+          }
+          const std::span<TestFrame> frames = channel.writable(slot);
+          // Stamp every frame with the same tag; a torn block shows up as a frame
+          // that disagrees with its neighbours.
+          for (std::size_t f = 0; f < kFrames; ++f)
+          {
+            frames[f].tag = i;
+          }
+          while (!channel.commit(slot, kFrames))
+          {
+            std::this_thread::yield();
+          }
         }
-      }
-      if (tag <= previous_tag)
+      });
+
+  std::thread consumer(
+      [&]
       {
-        corruption.store(true, std::memory_order_relaxed);
-      }
-      previous_tag = tag;
-      // Occupancy is derived, and must never wrap even under contention.
-      if (channel.pendingFrames() > kSlots * kFrames)
-      {
-        corruption.store(true, std::memory_order_relaxed);
-      }
-      if (!channel.release(ref))
-      {
-        corruption.store(true, std::memory_order_relaxed);
-      }
-      consumed.fetch_add(1, std::memory_order_relaxed);
-    }
-  });
+        start.arrive_and_wait();
+        std::uint64_t previous_tag = 0;
+        while (consumed.load(std::memory_order_relaxed) < kBlocks)
+        {
+          sonitude::rt::BlockRef ref{};
+          if (!channel.take(ref))
+          {
+            std::this_thread::yield();
+            continue;
+          }
+          const std::span<const TestFrame> frames = channel.readable(ref);
+          const std::uint64_t tag = frames[0].tag;
+          for (const TestFrame& frame : frames)
+          {
+            if (frame.tag != tag)
+            {
+              corruption.store(true, std::memory_order_relaxed);
+            }
+          }
+          if (tag <= previous_tag)
+          {
+            corruption.store(true, std::memory_order_relaxed);
+          }
+          previous_tag = tag;
+          // Occupancy is derived, and must never wrap even under contention.
+          if (channel.pendingFrames() > kSlots * kFrames)
+          {
+            corruption.store(true, std::memory_order_relaxed);
+          }
+          if (!channel.release(ref))
+          {
+            corruption.store(true, std::memory_order_relaxed);
+          }
+          consumed.fetch_add(1, std::memory_order_relaxed);
+        }
+      });
 
   producer.join();
   consumer.join();
@@ -399,70 +405,74 @@ void TestStressWithDelayedConsumer()
   std::atomic<std::uint64_t> dropped{0};
   std::latch start(2);
 
-  std::thread producer([&] {
-    start.arrive_and_wait();
-    for (std::uint64_t i = 1; i <= kAttempts; ++i)
-    {
-      std::uint32_t slot = 0;
-      if (!channel.acquire(slot))
+  std::thread producer(
+      [&]
       {
-        // This is the correct degradation: drop the block.
-        dropped.fetch_add(1, std::memory_order_relaxed);
-        continue;
-      }
-      const std::span<TestFrame> frames = channel.writable(slot);
-      for (std::size_t f = 0; f < kFrames; ++f)
-      {
-        frames[f].tag = i;
-      }
-      if (channel.commit(slot, kFrames))
-      {
-        committed.fetch_add(1, std::memory_order_relaxed);
-      }
-      else
-      {
-        corruption.store(true, std::memory_order_relaxed);
-      }
-    }
-    producer_done.store(true, std::memory_order_release);
-  });
+        start.arrive_and_wait();
+        for (std::uint64_t i = 1; i <= kAttempts; ++i)
+        {
+          std::uint32_t slot = 0;
+          if (!channel.acquire(slot))
+          {
+            // This is the correct degradation: drop the block.
+            dropped.fetch_add(1, std::memory_order_relaxed);
+            continue;
+          }
+          const std::span<TestFrame> frames = channel.writable(slot);
+          for (std::size_t f = 0; f < kFrames; ++f)
+          {
+            frames[f].tag = i;
+          }
+          if (channel.commit(slot, kFrames))
+          {
+            committed.fetch_add(1, std::memory_order_relaxed);
+          }
+          else
+          {
+            corruption.store(true, std::memory_order_relaxed);
+          }
+        }
+        producer_done.store(true, std::memory_order_release);
+      });
 
-  std::thread consumer([&] {
-    start.arrive_and_wait();
-    std::uint64_t taken = 0;
-    for (;;)
-    {
-      sonitude::rt::BlockRef ref{};
-      if (!channel.take(ref))
+  std::thread consumer(
+      [&]
       {
-        if (producer_done.load(std::memory_order_acquire) && channel.readyCount() == 0U)
+        start.arrive_and_wait();
+        std::uint64_t taken = 0;
+        for (;;)
         {
-          break;
+          sonitude::rt::BlockRef ref{};
+          if (!channel.take(ref))
+          {
+            if (producer_done.load(std::memory_order_acquire) && channel.readyCount() == 0U)
+            {
+              break;
+            }
+            std::this_thread::yield();
+            continue;
+          }
+          const std::span<const TestFrame> frames = channel.readable(ref);
+          const std::uint64_t tag = frames[0].tag;
+          for (const TestFrame& frame : frames)
+          {
+            if (frame.tag != tag)
+            {
+              corruption.store(true, std::memory_order_relaxed);
+            }
+          }
+          if (!channel.release(ref))
+          {
+            corruption.store(true, std::memory_order_relaxed);
+          }
+          ++taken;
+          // Hold the block long enough that the producer really does run ahead.
+          if ((taken % 64U) == 0U)
+          {
+            std::this_thread::yield();
+          }
         }
-        std::this_thread::yield();
-        continue;
-      }
-      const std::span<const TestFrame> frames = channel.readable(ref);
-      const std::uint64_t tag = frames[0].tag;
-      for (const TestFrame& frame : frames)
-      {
-        if (frame.tag != tag)
-        {
-          corruption.store(true, std::memory_order_relaxed);
-        }
-      }
-      if (!channel.release(ref))
-      {
-        corruption.store(true, std::memory_order_relaxed);
-      }
-      ++taken;
-      // Hold the block long enough that the producer really does run ahead.
-      if ((taken % 64U) == 0U)
-      {
-        std::this_thread::yield();
-      }
-    }
-  });
+      });
 
   producer.join();
   consumer.join();
@@ -532,67 +542,71 @@ void TestConcurrentControlPublication()
   std::atomic<bool> producer_done{false};
   std::latch start(2);
 
-  std::thread control([&] {
-    start.arrive_and_wait();
-    for (std::uint64_t generation = 1; generation <= kUpdates; ++generation)
-    {
-      sonitude::control::RtSteeringSnapshot message{};
-      message.generation = generation;
-      // Two fields derived from the same value: a torn message would disagree.
-      message.target.azimuth_deg = static_cast<float>(generation % 360U);
-      message.confidence = static_cast<float>(generation % 360U);
-      message.failsafe = (generation % 2U) == 0U;
-      message.has_distractor = (generation % 2U) == 0U;
-      while (!channel.publish(message))
+  std::thread control(
+      [&]
       {
-        std::this_thread::yield();
-      }
-    }
-    producer_done.store(true, std::memory_order_release);
-  });
+        start.arrive_and_wait();
+        for (std::uint64_t generation = 1; generation <= kUpdates; ++generation)
+        {
+          sonitude::control::RtSteeringSnapshot message{};
+          message.generation = generation;
+          // Two fields derived from the same value: a torn message would disagree.
+          message.target.azimuth_deg = static_cast<float>(generation % 360U);
+          message.confidence = static_cast<float>(generation % 360U);
+          message.failsafe = (generation % 2U) == 0U;
+          message.has_distractor = (generation % 2U) == 0U;
+          while (!channel.publish(message))
+          {
+            std::this_thread::yield();
+          }
+        }
+        producer_done.store(true, std::memory_order_release);
+      });
 
-  std::thread audio([&] {
-    start.arrive_and_wait();
-    sonitude::control::RtSteeringSnapshot current{};
-    std::uint64_t last_generation = 0;
-    for (;;)
-    {
-      const bool updated = channel.drainLatest(current);
-      if (updated)
+  std::thread audio(
+      [&]
       {
-        if (current.target.azimuth_deg != current.confidence ||
-            current.failsafe != current.has_distractor)
+        start.arrive_and_wait();
+        sonitude::control::RtSteeringSnapshot current{};
+        std::uint64_t last_generation = 0;
+        for (;;)
+        {
+          const bool updated = channel.drainLatest(current);
+          if (updated)
+          {
+            if (current.target.azimuth_deg != current.confidence ||
+                current.failsafe != current.has_distractor)
+            {
+              corruption.store(true, std::memory_order_relaxed);
+            }
+            if (current.generation <= last_generation)
+            {
+              corruption.store(true, std::memory_order_relaxed);
+            }
+            last_generation = current.generation;
+          }
+          if (producer_done.load(std::memory_order_acquire) && !updated)
+          {
+            // One last drain to pick up anything published just before the flag.
+            if (!channel.drainLatest(current))
+            {
+              break;
+            }
+            last_generation = current.generation;
+          }
+        }
+        if (last_generation != kUpdates)
         {
           corruption.store(true, std::memory_order_relaxed);
         }
-        if (current.generation <= last_generation)
-        {
-          corruption.store(true, std::memory_order_relaxed);
-        }
-        last_generation = current.generation;
-      }
-      if (producer_done.load(std::memory_order_acquire) && !updated)
-      {
-        // One last drain to pick up anything published just before the flag.
-        if (!channel.drainLatest(current))
-        {
-          break;
-        }
-        last_generation = current.generation;
-      }
-    }
-    if (last_generation != kUpdates)
-    {
-      corruption.store(true, std::memory_order_relaxed);
-    }
-  });
+      });
 
   control.join();
   audio.join();
   Require(!corruption.load(std::memory_order_relaxed),
           "control publication must never be observed torn or out of order");
 }
-}  // namespace
+} // namespace
 
 void RunThreadSafetyTests()
 {

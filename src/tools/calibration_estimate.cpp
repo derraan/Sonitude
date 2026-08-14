@@ -27,10 +27,11 @@ struct Options
 
 void PrintUsage()
 {
-  std::cout << "Usage:\n"
-            << "  sonitude_calibration_estimate --input <capture.wav> --output <calibration.yaml>\n"
-            << "      --min-correlation <0..1> [--config <runtime.yaml>] [--geometry <geometry.yaml>]\n"
-            << "      [--synthetic]\n";
+  std::cout
+      << "Usage:\n"
+      << "  sonitude_calibration_estimate --input <capture.wav> --output <calibration.yaml>\n"
+      << "      --min-correlation <0..1> [--config <runtime.yaml>] [--geometry <geometry.yaml>]\n"
+      << "      [--synthetic]\n";
 }
 
 Options ParseArgs(const int argc, char** argv)
@@ -57,8 +58,7 @@ Options ParseArgs(const int argc, char** argv)
     }
     else if (arg == "--min-correlation" && i + 1 < argc)
     {
-      options.min_correlation =
-          sonitude::tools::calibration::ParseMinimumCorrelation(argv[++i]);
+      options.min_correlation = sonitude::tools::calibration::ParseMinimumCorrelation(argv[++i]);
     }
     else if (arg == "--synthetic")
     {
@@ -97,7 +97,7 @@ std::string EvidenceOutputPath(const Options& options)
   return path.string();
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -157,10 +157,9 @@ int main(int argc, char** argv)
     {
       const auto& sig = channels[ch];
       const auto moments = sonitude::tools::calibration::ComputeChannelMoments(sig);
-      const auto corr = (ch == 0U)
-                            ? sonitude::tools::calibration::DelayPolarityEstimate{}
-                            : sonitude::tools::calibration::EstimateDelayAndPolarity(
-                                  reference, sig, kMaxLagSamples);
+      const auto corr = (ch == 0U) ? sonitude::tools::calibration::DelayPolarityEstimate{}
+                                   : sonitude::tools::calibration::EstimateDelayAndPolarity(
+                                         reference, sig, kMaxLagSamples);
       auto& out = cal.channels[ch];
       out.id = geometry_ids[ch];
       out.polarity = (ch == 0U) ? 1 : corr.polarity;
@@ -172,8 +171,8 @@ int main(int argc, char** argv)
                 << " gain=" << out.gain_linear << " corr=" << corr.peak_correlation << "\n";
       if (ch != 0U)
       {
-        sonitude::tools::calibration::RequireMinimumCorrelation(
-            out.id, corr.peak_correlation, *options.min_correlation);
+        sonitude::tools::calibration::RequireMinimumCorrelation(out.id, corr.peak_correlation,
+                                                                *options.min_correlation);
       }
     }
     sonitude::app::ValidateCalibrationConfig(cal, geometry_ids, runtime.capture.sample_rate_hz);

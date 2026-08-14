@@ -22,10 +22,8 @@ struct ControlLoopConfig
 // RtSteeringSnapshot pushed into a bounded queue.
 class ControlLoop
 {
- public:
-  ControlLoop(spatial::IDoaProvider* provider,
-              SteeringChannel* channel,
-              ControlLoopConfig config,
+public:
+  ControlLoop(spatial::IDoaProvider* provider, SteeringChannel* channel, ControlLoopConfig config,
               ConversationStateMachine* conversation = nullptr);
   void tick(std::uint64_t now_ns);
 
@@ -34,7 +32,7 @@ class ControlLoop
   // is never left steering on stale data after control stops progressing.
   void publishFailsafe(std::uint64_t now_ns);
 
- private:
+private:
   void publish(const SteeringSnapshot& snapshot, std::uint64_t now_ns);
 
   spatial::IDoaProvider* provider_ = nullptr;
@@ -47,4 +45,4 @@ class ControlLoop
   SteeringSnapshot last_snapshot_{};
   std::vector<spatial::SourceObservation> observations_;
 };
-}  // namespace sonitude::control
+} // namespace sonitude::control

@@ -82,6 +82,7 @@ target_include_directories(pico_9822 INTERFACE
 )
 
 pico_generate_pio_header(pico_9822 ${CMAKE_CURRENT_LIST_DIR}/src/sk9822.pio)
+add_dependencies(pico_9822 pico_9822_sk9822_pio_h)
 
 target_link_libraries(pico_9822 INTERFACE pico_stdlib hardware_dma hardware_pio)
 ###################################################

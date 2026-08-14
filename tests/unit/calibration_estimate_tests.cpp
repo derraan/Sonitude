@@ -51,17 +51,16 @@ float SampleLinear(const std::vector<float>& signal, const float index)
 }
 
 std::vector<float> MakeDerivedChannel(const std::vector<float>& reference,
-                                      const float delay_samples,
-                                      const int polarity,
-                                      const float gain,
-                                      const float dc_offset,
+                                      const float delay_samples, const int polarity,
+                                      const float gain, const float dc_offset,
                                       const float noise_gain)
 {
   std::vector<float> out(reference.size(), 0.0F);
   for (std::size_t i = 0; i < reference.size(); ++i)
   {
     const float delayed = SampleLinear(reference, static_cast<float>(i) + delay_samples);
-    out[i] = static_cast<float>(polarity) * gain * delayed + dc_offset + (noise_gain * DeterministicNoise(i + 7U));
+    out[i] = static_cast<float>(polarity) * gain * delayed + dc_offset +
+             (noise_gain * DeterministicNoise(i + 7U));
   }
   return out;
 }
@@ -73,7 +72,8 @@ void TestPositiveDelayWithDcAndGain()
 
   const auto estimate = sonitude::tools::calibration::EstimateDelayAndPolarity(ref, ch, 128);
   Require(std::fabs(estimate.delay_samples - 12.50F) < 0.75F,
-          "positive delay estimate outside tolerance (got " + std::to_string(estimate.delay_samples) + ")");
+          "positive delay estimate outside tolerance (got " +
+              std::to_string(estimate.delay_samples) + ")");
   Require(estimate.polarity == 1, "polarity should remain positive");
 }
 
@@ -101,7 +101,8 @@ void TestNegativeDelayAndPolarityInversion()
 
   const auto estimate = sonitude::tools::calibration::EstimateDelayAndPolarity(ref, ch, 128);
   Require(std::fabs(estimate.delay_samples - (-9.25F)) < 0.85F,
-          "negative delay estimate outside tolerance (got " + std::to_string(estimate.delay_samples) + ")");
+          "negative delay estimate outside tolerance (got " +
+              std::to_string(estimate.delay_samples) + ")");
   Require(estimate.polarity == -1, "polarity inversion should be detected");
 }
 
@@ -149,8 +150,8 @@ void TestMinimumCorrelationRejectionReportsValues()
 
 void TestInvalidMinimumCorrelationsRejected()
 {
-  const std::vector<std::string> invalid = {
-      "-0.01", "1.01", "nan", "NaN", "inf", "-inf", "0.5trailing", ""};
+  const std::vector<std::string> invalid = {"-0.01", "1.01", "nan",         "NaN",
+                                            "inf",   "-inf", "0.5trailing", ""};
   for (const auto& value : invalid)
   {
     bool threw = false;
@@ -177,7 +178,7 @@ void TestInvalidMinimumCorrelationsRejected()
   }
   Require(threw, "non-finite measured correlation should be rejected");
 }
-}  // namespace
+} // namespace
 
 void RunCalibrationEstimateTests()
 {

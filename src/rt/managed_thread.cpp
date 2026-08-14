@@ -53,8 +53,7 @@ bool StartGate::waitForAll(const std::chrono::milliseconds timeout)
     {
       return arrived_.load(std::memory_order_acquire) >= expected_;
     }
-    const auto remaining =
-        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
     (void)arrival_event_.waitFor(remaining);
     // Auto-reset: clear the token so the next arrival is observed as a new edge.
     (void)arrival_event_.consume();
@@ -237,4 +236,4 @@ void ManagedThread::join()
   started_ = false;
 }
 #endif
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

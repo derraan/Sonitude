@@ -1,9 +1,9 @@
 #include "spatial/odas_message_parser.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <charconv>
-#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -40,9 +40,7 @@ struct ParsedNumber
   std::size_t token_end = 0;
 };
 
-bool ParseNumberForKey(const std::string& json,
-                       const std::string& key,
-                       ParsedNumber& parsed)
+bool ParseNumberForKey(const std::string& json, const std::string& key, ParsedNumber& parsed)
 {
   const std::size_t key_pos = json.find("\"" + key + "\"");
   if (key_pos == std::string::npos)
@@ -74,11 +72,9 @@ bool ParseNumberForKey(const std::string& json,
     return false;
   }
 
-  const std::size_t token_end =
-      static_cast<std::size_t>(end_ptr - json.c_str());
+  const std::size_t token_end = static_cast<std::size_t>(end_ptr - json.c_str());
   std::size_t delimiter = token_end;
-  while (delimiter < json.size() &&
-         std::isspace(static_cast<unsigned char>(json[delimiter])) != 0)
+  while (delimiter < json.size() && std::isspace(static_cast<unsigned char>(json[delimiter])) != 0)
   {
     ++delimiter;
   }
@@ -90,7 +86,7 @@ bool ParseNumberForKey(const std::string& json,
   parsed = {.value = value, .token_begin = begin, .token_end = token_end};
   return true;
 }
-}  // namespace
+} // namespace
 
 bool OdasMessageParser::extractNumber(const std::string& json, const std::string& key, double& out)
 {
@@ -103,8 +99,7 @@ bool OdasMessageParser::extractNumber(const std::string& json, const std::string
   return true;
 }
 
-bool OdasMessageParser::extractUnsigned(const std::string& json,
-                                        const std::string& key,
+bool OdasMessageParser::extractUnsigned(const std::string& json, const std::string& key,
                                         std::uint64_t& out)
 {
   ParsedNumber parsed;
@@ -118,17 +113,14 @@ bool OdasMessageParser::extractUnsigned(const std::string& json,
   {
     return false;
   }
-  if (!std::all_of(token.begin(), token.end(), [](const char value)
-      {
-        return value >= '0' && value <= '9';
-      }))
+  if (!std::all_of(token.begin(), token.end(),
+                   [](const char value) { return value >= '0' && value <= '9'; }))
   {
     return false;
   }
 
   std::uint64_t parsed_id = 0;
-  const auto result =
-      std::from_chars(token.data(), token.data() + token.size(), parsed_id, 10);
+  const auto result = std::from_chars(token.data(), token.data() + token.size(), parsed_id, 10);
   if (result.ec != std::errc{} || result.ptr != token.data() + token.size())
   {
     return false;
@@ -137,7 +129,8 @@ bool OdasMessageParser::extractUnsigned(const std::string& json,
   return true;
 }
 
-std::size_t OdasMessageParser::findMatchingBrace(const std::string& json, const std::size_t open_pos)
+std::size_t OdasMessageParser::findMatchingBrace(const std::string& json,
+                                                 const std::size_t open_pos)
 {
   std::size_t depth = 0;
   for (std::size_t i = open_pos; i < json.size(); ++i)
@@ -162,7 +155,8 @@ std::size_t OdasMessageParser::findMatchingBrace(const std::string& json, const 
   return std::string::npos;
 }
 
-std::vector<SourceObservation> OdasMessageParser::parseOneObject(const std::string& json_object) const
+std::vector<SourceObservation>
+OdasMessageParser::parseOneObject(const std::string& json_object) const
 {
   std::vector<SourceObservation> out;
   double ts_sec = 0.0;
@@ -292,4 +286,4 @@ std::vector<SourceObservation> OdasMessageParser::feed(const std::string_view by
   }
   return out;
 }
-}  // namespace sonitude::spatial
+} // namespace sonitude::spatial

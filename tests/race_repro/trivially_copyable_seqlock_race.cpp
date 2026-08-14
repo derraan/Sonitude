@@ -45,10 +45,9 @@ struct SteeringSnapshot
 // sufficient: it constrains the payload, not the handoff.
 static_assert(std::is_trivially_copyable_v<SteeringSnapshot>);
 
-template <typename T>
-class SnapshotBuffer
+template <typename T> class SnapshotBuffer
 {
- public:
+public:
   explicit SnapshotBuffer(const T& initial) : slots_{initial, initial} {}
 
   void publish(const T& value)
@@ -56,7 +55,7 @@ class SnapshotBuffer
     const std::uint64_t seq0 = sequence_.load(std::memory_order_relaxed);
     sequence_.store(seq0 + 1U, std::memory_order_release);
     const std::size_t slot = static_cast<std::size_t>(((seq0 / 2U) + 1U) % 2U);
-    slots_[slot] = value;  // non-atomic write
+    slots_[slot] = value; // non-atomic write
     sequence_.store(seq0 + 2U, std::memory_order_release);
   }
 
@@ -70,7 +69,7 @@ class SnapshotBuffer
         continue;
       }
       const std::size_t slot = static_cast<std::size_t>((seq1 / 2U) % 2U);
-      const T value = slots_[slot];  // non-atomic read, concurrent with the write
+      const T value = slots_[slot]; // non-atomic read, concurrent with the write
       const std::uint64_t seq2 = sequence_.load(std::memory_order_acquire);
       if (seq1 == seq2)
       {
@@ -79,39 +78,43 @@ class SnapshotBuffer
     }
   }
 
- private:
+private:
   mutable std::atomic<std::uint64_t> sequence_{0};
   std::array<T, 2> slots_{};
 };
-}  // namespace pr23_tip
+} // namespace pr23_tip
 
 int main()
 {
   pr23_tip::SnapshotBuffer<pr23_tip::SteeringSnapshot> buffer({});
   std::atomic<bool> done{false};
 
-  std::thread writer([&] {
-    for (std::uint64_t i = 1; i <= 400000; ++i)
-    {
-      pr23_tip::SteeringSnapshot snapshot;
-      snapshot.generation = i;
-      snapshot.target.azimuth_deg = static_cast<float>(i % 360U);
-      snapshot.confidence = static_cast<float>(i % 100U) / 100.0F;
-      snapshot.failsafe = (i % 2U) == 0U;
-      buffer.publish(snapshot);
-    }
-    done.store(true, std::memory_order_release);
-  });
+  std::thread writer(
+      [&]
+      {
+        for (std::uint64_t i = 1; i <= 400000; ++i)
+        {
+          pr23_tip::SteeringSnapshot snapshot;
+          snapshot.generation = i;
+          snapshot.target.azimuth_deg = static_cast<float>(i % 360U);
+          snapshot.confidence = static_cast<float>(i % 100U) / 100.0F;
+          snapshot.failsafe = (i % 2U) == 0U;
+          buffer.publish(snapshot);
+        }
+        done.store(true, std::memory_order_release);
+      });
 
-  std::thread reader([&] {
-    std::uint64_t checksum = 0;
-    while (!done.load(std::memory_order_acquire))
-    {
-      const pr23_tip::SteeringSnapshot snapshot = buffer.acquire();
-      checksum += snapshot.generation;
-    }
-    std::cout << "reader checksum " << checksum << '\n';
-  });
+  std::thread reader(
+      [&]
+      {
+        std::uint64_t checksum = 0;
+        while (!done.load(std::memory_order_acquire))
+        {
+          const pr23_tip::SteeringSnapshot snapshot = buffer.acquire();
+          checksum += snapshot.generation;
+        }
+        std::cout << "reader checksum " << checksum << '\n';
+      });
 
   writer.join();
   reader.join();

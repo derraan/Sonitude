@@ -17,23 +17,23 @@ enum class BlockOwner : std::uint8_t
   // Not checked out by either side, so nobody may touch the samples. The slot is
   // either in the shared free queue or in the producer's private reserve.
   Free = 0,
-  Producer = 1,  // checked out by capture/DSP, which is writing it
-  Ready = 2,     // in the ready queue; nobody may touch the samples
-  Consumer = 3,  // checked out by playback, which is reading it
+  Producer = 1, // checked out by capture/DSP, which is writing it
+  Ready = 2,    // in the ready queue; nobody may touch the samples
+  Consumer = 3, // checked out by playback, which is reading it
 };
 
 inline const char* BlockOwnerName(const BlockOwner owner) noexcept
 {
   switch (owner)
   {
-    case BlockOwner::Free:
-      return "free";
-    case BlockOwner::Producer:
-      return "producer";
-    case BlockOwner::Ready:
-      return "ready";
-    case BlockOwner::Consumer:
-      return "consumer";
+  case BlockOwner::Free:
+    return "free";
+  case BlockOwner::Producer:
+    return "producer";
+  case BlockOwner::Ready:
+    return "ready";
+  case BlockOwner::Consumer:
+    return "consumer";
   }
   return "unknown";
 }
@@ -67,21 +67,17 @@ static_assert(std::is_trivially_copyable_v<BlockRef>);
 // Nothing on the producer side may therefore push to the free queue, which is
 // why a slot the producer gives up (see abandon()) is retained in a
 // producer-private reserve instead of being returned through the queue.
-template <typename Frame>
-class BlockChannel
+template <typename Frame> class BlockChannel
 {
   static_assert(std::is_trivially_copyable_v<Frame>,
                 "audio frames are moved between threads by slot handoff and must be trivially "
                 "copyable");
 
- public:
+public:
   BlockChannel(const std::size_t slot_count, const std::size_t frames_per_slot)
-      : slot_count_(Validated(slot_count, frames_per_slot)),
-        frames_per_slot_(frames_per_slot),
-        storage_(slot_count * frames_per_slot),
-        owners_(slot_count),
-        free_slots_(RingCapacityFor(slot_count)),
-        ready_blocks_(RingCapacityFor(slot_count))
+      : slot_count_(Validated(slot_count, frames_per_slot)), frames_per_slot_(frames_per_slot),
+        storage_(slot_count * frames_per_slot), owners_(slot_count),
+        free_slots_(RingCapacityFor(slot_count)), ready_blocks_(RingCapacityFor(slot_count))
   {
     for (std::size_t i = 0; i < slot_count_; ++i)
     {
@@ -93,8 +89,14 @@ class BlockChannel
     }
   }
 
-  std::size_t slotCount() const noexcept { return slot_count_; }
-  std::size_t framesPerSlot() const noexcept { return frames_per_slot_; }
+  std::size_t slotCount() const noexcept
+  {
+    return slot_count_;
+  }
+  std::size_t framesPerSlot() const noexcept
+  {
+    return frames_per_slot_;
+  }
 
   // ---- producer side -----------------------------------------------------
 
@@ -143,9 +145,9 @@ class BlockChannel
     {
       return false;
     }
-    frames_committed_.store(
-        frames_committed_.load(std::memory_order_relaxed) + static_cast<std::uint64_t>(frames),
-        std::memory_order_relaxed);
+    frames_committed_.store(frames_committed_.load(std::memory_order_relaxed) +
+                                static_cast<std::uint64_t>(frames),
+                            std::memory_order_relaxed);
     owners_[slot].store(BlockOwner::Ready, std::memory_order_relaxed);
     const BlockRef ref{slot, static_cast<std::uint32_t>(frames)};
     if (!ready_blocks_.push(ref))
@@ -154,9 +156,9 @@ class BlockChannel
       // producer can hold at most one uncommitted slot. Restore ownership rather
       // than leak the slot if the invariant is ever broken.
       owners_[slot].store(BlockOwner::Producer, std::memory_order_relaxed);
-      frames_committed_.store(
-          frames_committed_.load(std::memory_order_relaxed) - static_cast<std::uint64_t>(frames),
-          std::memory_order_relaxed);
+      frames_committed_.store(frames_committed_.load(std::memory_order_relaxed) -
+                                  static_cast<std::uint64_t>(frames),
+                              std::memory_order_relaxed);
       commit_failures_.fetch_add(1, std::memory_order_relaxed);
       return false;
     }
@@ -198,9 +200,9 @@ class BlockChannel
       return false;
     }
     owners_[ref.slot].store(BlockOwner::Consumer, std::memory_order_relaxed);
-    frames_taken_.store(
-        frames_taken_.load(std::memory_order_relaxed) + static_cast<std::uint64_t>(ref.frames),
-        std::memory_order_relaxed);
+    frames_taken_.store(frames_taken_.load(std::memory_order_relaxed) +
+                            static_cast<std::uint64_t>(ref.frames),
+                        std::memory_order_relaxed);
     out = ref;
     return true;
   }
@@ -238,7 +240,10 @@ class BlockChannel
            frames_taken_.load(std::memory_order_relaxed);
   }
 
-  std::size_t readyCount() const noexcept { return ready_blocks_.size(); }
+  std::size_t readyCount() const noexcept
+  {
+    return ready_blocks_.size();
+  }
   std::size_t freeCount() const noexcept
   {
     const bool reserved = producer_reserve_.load(std::memory_order_relaxed) != kNoSlot;
@@ -274,7 +279,7 @@ class BlockChannel
     return ready_high_water_.load(std::memory_order_relaxed);
   }
 
- private:
+private:
   static constexpr std::uint32_t kNoSlot = ~static_cast<std::uint32_t>(0);
 
   static std::size_t Validated(const std::size_t slot_count, const std::size_t frames_per_slot)
@@ -322,4 +327,4 @@ class BlockChannel
   static_assert(std::atomic<BlockOwner>::is_always_lock_free,
                 "slot ownership state is updated by realtime threads and must be lock-free");
 };
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

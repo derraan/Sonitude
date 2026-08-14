@@ -48,7 +48,7 @@ void TestDeterministicSelectionAndDistractor()
   Require(distractor.has_value() && distractor->source_id == 100,
           "equal distractors must use the lower source ID tie-break");
 }
-}  // namespace
+} // namespace
 
 void RunSourceTrackerTests()
 {

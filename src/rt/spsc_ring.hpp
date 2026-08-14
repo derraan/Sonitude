@@ -29,8 +29,7 @@ namespace sonitude::rt
 //
 // One element is always left unused so that "full" and "empty" are
 // distinguishable without a third shared variable, hence capacityUsable().
-template <typename T>
-class SpscRing
+template <typename T> class SpscRing
 {
   static_assert(std::is_trivially_copyable_v<T>,
                 "SpscRing elements cross a realtime boundary: they must be trivially copyable so a "
@@ -38,17 +37,21 @@ class SpscRing
   static_assert(std::atomic<std::size_t>::is_always_lock_free,
                 "SpscRing indices are touched by realtime threads and must be lock-free");
 
- public:
+public:
   explicit SpscRing(const std::size_t capacity_pow2)
-      : capacity_(ValidatedCapacity(capacity_pow2)),
-        mask_(capacity_ - 1U),
-        storage_(capacity_)
+      : capacity_(ValidatedCapacity(capacity_pow2)), mask_(capacity_ - 1U), storage_(capacity_)
   {
   }
 
   // Total slot count. One slot is reserved, so capacityUsable() elements fit.
-  std::size_t capacity() const noexcept { return capacity_; }
-  std::size_t capacityUsable() const noexcept { return capacity_ - 1U; }
+  std::size_t capacity() const noexcept
+  {
+    return capacity_;
+  }
+  std::size_t capacityUsable() const noexcept
+  {
+    return capacity_ - 1U;
+  }
 
   // Producer only.
   bool push(const T& value) noexcept
@@ -88,9 +91,12 @@ class SpscRing
     return (head + capacity_ - tail) & mask_;
   }
 
-  bool empty() const noexcept { return size() == 0U; }
+  bool empty() const noexcept
+  {
+    return size() == 0U;
+  }
 
- private:
+private:
   static std::size_t ValidatedCapacity(const std::size_t capacity_pow2)
   {
     if (capacity_pow2 < 2U || (capacity_pow2 & (capacity_pow2 - 1U)) != 0U)
@@ -108,4 +114,4 @@ class SpscRing
   alignas(kCacheLine) std::atomic<std::size_t> head_{0};
   alignas(kCacheLine) std::atomic<std::size_t> tail_{0};
 };
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

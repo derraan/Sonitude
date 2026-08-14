@@ -41,13 +41,15 @@ void TestTransitionPathAndHysteresis()
   in.speech_probability = 0.9F;
 
   auto out = sm.update(in, 10'000'000ULL);
-  Require(sm.state() == sonitude::control::ConversationState::Candidate, "ambient->candidate expected");
+  Require(sm.state() == sonitude::control::ConversationState::Candidate,
+          "ambient->candidate expected");
   Require(out.failsafe == false, "candidate should be non-failsafe");
   Require(out.zone_id == 0, "the first configured zone should use index zero");
   Require(out.confidence == in.confidence, "source confidence should propagate");
 
   out = sm.update(in, 120'000'000ULL);
-  Require(sm.state() == sonitude::control::ConversationState::Focused, "candidate->focused expected");
+  Require(sm.state() == sonitude::control::ConversationState::Focused,
+          "candidate->focused expected");
 
   in.has_track = false;
   in.speech_probability = 0.0F;
@@ -55,10 +57,12 @@ void TestTransitionPathAndHysteresis()
   Require(sm.state() == sonitude::control::ConversationState::Held, "focused->held expected");
 
   out = sm.update(in, 260'000'000ULL);
-  Require(sm.state() == sonitude::control::ConversationState::Releasing, "held->releasing expected");
+  Require(sm.state() == sonitude::control::ConversationState::Releasing,
+          "held->releasing expected");
 
   out = sm.update(in, 500'000'000ULL);
-  Require(sm.state() == sonitude::control::ConversationState::Ambient, "releasing->ambient expected");
+  Require(sm.state() == sonitude::control::ConversationState::Ambient,
+          "releasing->ambient expected");
   Require(out.failsafe, "ambient should be failsafe");
 }
 
@@ -163,21 +167,20 @@ void TestTransitionCoverageSanity()
     }
   }
   std::uint64_t total_transitions = 0;
-  for (std::size_t from = 0; from < static_cast<std::size_t>(sonitude::control::ConversationState::kCount);
-       ++from)
+  for (std::size_t from = 0;
+       from < static_cast<std::size_t>(sonitude::control::ConversationState::kCount); ++from)
   {
     for (std::size_t to = 0;
-         to < static_cast<std::size_t>(sonitude::control::ConversationState::kCount);
-         ++to)
+         to < static_cast<std::size_t>(sonitude::control::ConversationState::kCount); ++to)
     {
-      total_transitions += sm.transitionCount(
-          static_cast<sonitude::control::ConversationState>(from),
-          static_cast<sonitude::control::ConversationState>(to));
+      total_transitions +=
+          sm.transitionCount(static_cast<sonitude::control::ConversationState>(from),
+                             static_cast<sonitude::control::ConversationState>(to));
     }
   }
   Require(total_transitions > 0, "expected transition coverage entries");
 }
-}  // namespace
+} // namespace
 
 void RunStateMachineTests()
 {

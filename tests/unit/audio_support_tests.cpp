@@ -1,10 +1,10 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <functional>
-#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -72,7 +72,8 @@ void WriteBytesToFile(const std::string& path, const std::vector<std::uint8_t>& 
 {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   Require(out.good(), "failed to create WAV fixture");
-  out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  out.write(reinterpret_cast<const char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
   Require(out.good(), "failed to write WAV fixture");
 }
 
@@ -81,8 +82,8 @@ void TestS16RoundTrip()
   const std::vector<float> input = {-1.0F, -0.5F, 0.0F, 0.5F, 1.0F};
   const std::vector<std::uint8_t> bytes =
       sonitude::audio::FloatToInterleaved(input, sonitude::audio::PcmFormat::S16_LE);
-  const std::vector<float> decoded =
-      sonitude::audio::InterleavedToFloat(bytes.data(), input.size(), 1, sonitude::audio::PcmFormat::S16_LE);
+  const std::vector<float> decoded = sonitude::audio::InterleavedToFloat(
+      bytes.data(), input.size(), 1, sonitude::audio::PcmFormat::S16_LE);
   for (std::size_t i = 0; i < input.size(); ++i)
   {
     Require(std::fabs(decoded[i] - input[i]) < 0.001F, "S16 roundtrip error too large");
@@ -97,8 +98,8 @@ void TestChannelExtract()
   std::vector<std::uint8_t> bytes(src.size() * sizeof(std::int16_t), 0);
   std::memcpy(bytes.data(), src.data(), bytes.size());
   const std::vector<std::size_t> active = {0, 1, 2, 3, 4, 5};
-  const auto frames = sonitude::audio::ExtractActiveMicFrames(
-      bytes.data(), 2, 8, active, sonitude::audio::PcmFormat::S16_LE);
+  const auto frames = sonitude::audio::ExtractActiveMicFrames(bytes.data(), 2, 8, active,
+                                                              sonitude::audio::PcmFormat::S16_LE);
   Require(frames.size() == 2, "Channel extract frame count mismatch");
   Require(std::fabs(frames[0][0] - (100.0F / 32768.0F)) < 1e-6F, "channel 0 sample mismatch");
   Require(std::fabs(frames[1][5] - (6000.0F / 32768.0F)) < 1e-6F, "channel 5 sample mismatch");
@@ -166,7 +167,7 @@ void TestWavOddChunkPaddingIsHandled()
   AppendTag(bytes, {'J', 'U', 'N', 'K'});
   AppendLe32(bytes, 1);
   bytes.push_back(static_cast<std::uint8_t>('x'));
-  bytes.push_back(0);  // RIFF pad byte for odd-sized chunk.
+  bytes.push_back(0); // RIFF pad byte for odd-sized chunk.
 
   AppendTag(bytes, {'f', 'm', 't', ' '});
   AppendLe32(bytes, 16);
@@ -186,10 +187,83 @@ void TestWavOddChunkPaddingIsHandled()
   const std::string path = "unit_wav_with_odd_chunk.wav";
   WriteBytesToFile(path, bytes);
   const auto wav = sonitude::audio::ReadWavFile(path);
-  Require(wav.sample_rate_hz == 16000, "WAV reader should parse sample rate after odd chunk padding");
+  Require(wav.sample_rate_hz == 16000,
+          "WAV reader should parse sample rate after odd chunk padding");
   Require(wav.channels == 1, "WAV reader should parse channel count after odd chunk padding");
-  Require(wav.interleaved.size() == 1, "WAV reader should decode one sample after odd chunk padding");
+  Require(wav.interleaved.size() == 1,
+          "WAV reader should decode one sample after odd chunk padding");
   (void)std::remove(path.c_str());
+}
+
+std::vector<std::uint8_t> MakeMinimalPcmWav()
+{
+  std::vector<std::uint8_t> bytes;
+  AppendTag(bytes, {'R', 'I', 'F', 'F'});
+  AppendLe32(bytes, 0);
+  AppendTag(bytes, {'W', 'A', 'V', 'E'});
+  AppendTag(bytes, {'f', 'm', 't', ' '});
+  AppendLe32(bytes, 16);
+  AppendLe16(bytes, 1);
+  AppendLe16(bytes, 1);
+  AppendLe32(bytes, 16000);
+  AppendLe32(bytes, 32000);
+  AppendLe16(bytes, 2);
+  AppendLe16(bytes, 16);
+  AppendTag(bytes, {'d', 'a', 't', 'a'});
+  AppendLe32(bytes, 2);
+  AppendLe16(bytes, 0);
+  FinalizeRiffSize(bytes);
+  return bytes;
+}
+
+void TestWavMemoryApiAcceptsExactValidBoundary()
+{
+  const std::vector<std::uint8_t> bytes = MakeMinimalPcmWav();
+  const auto wav = sonitude::audio::ReadWavBytes(bytes.data(), bytes.size());
+  Require(wav.sample_rate_hz == 16000, "memory WAV reader should preserve sample rate");
+  Require(wav.channels == 1, "memory WAV reader should preserve channel count");
+  Require(wav.interleaved.size() == 1, "exact RIFF boundary should decode one frame");
+}
+
+void TestWavRejectsInvalidRiffSizes()
+{
+  {
+    std::vector<std::uint8_t> bytes = {'R', 'I', 'F', 'F'};
+    AppendLe32(bytes, 0xFFFFFFFFU);
+    AppendTag(bytes, {'W', 'A', 'V', 'E'});
+    ExpectThrows([&bytes]() { (void)sonitude::audio::ReadWavBytes(bytes.data(), bytes.size()); },
+                 "0xFFFFFFFF RIFF size must be rejected before chunk parsing");
+  }
+
+  {
+    std::vector<std::uint8_t> bytes = MakeMinimalPcmWav();
+    bytes.pop_back();
+    ExpectThrows([&bytes]() { (void)sonitude::audio::ReadWavBytes(bytes.data(), bytes.size()); },
+                 "RIFF size larger than available input must be rejected");
+  }
+}
+
+void TestWavRejectsOverflowingMetadata()
+{
+  std::vector<std::uint8_t> bytes;
+  AppendTag(bytes, {'R', 'I', 'F', 'F'});
+  AppendLe32(bytes, 0);
+  AppendTag(bytes, {'W', 'A', 'V', 'E'});
+  AppendTag(bytes, {'f', 'm', 't', ' '});
+  AppendLe32(bytes, 16);
+  AppendLe16(bytes, 1);
+  AppendLe16(bytes, 0xFFFFU);
+  AppendLe32(bytes, 0xFFFFFFFFU);
+  AppendLe32(bytes, 0);
+  AppendLe16(bytes, 0);
+  AppendLe16(bytes, 32);
+  AppendTag(bytes, {'d', 'a', 't', 'a'});
+  AppendLe32(bytes, 4);
+  AppendLe32(bytes, 0);
+  FinalizeRiffSize(bytes);
+
+  ExpectThrows([&bytes]() { (void)sonitude::audio::ReadWavBytes(bytes.data(), bytes.size()); },
+               "overflowing channel/sample/frame metadata must be rejected");
 }
 
 void TestWavRejectsOversizedChunkDeclaration()
@@ -209,7 +283,7 @@ void TestWavRejectsOversizedChunkDeclaration()
   AppendLe16(bytes, 16);
 
   AppendTag(bytes, {'d', 'a', 't', 'a'});
-  AppendLe32(bytes, 0x70000000U);
+  AppendLe32(bytes, 0xFFFFFFFFU);
   AppendLe16(bytes, 0);
 
   FinalizeRiffSize(bytes);
@@ -282,7 +356,7 @@ void TestWavRejectsMalformedPayloads()
     (void)std::remove(path.c_str());
   }
 }
-}  // namespace
+} // namespace
 
 void RunAudioSupportTests()
 {
@@ -291,6 +365,9 @@ void RunAudioSupportTests()
   TestWavRoundTrip();
   TestWavRejectsShortFmtChunk();
   TestWavOddChunkPaddingIsHandled();
+  TestWavMemoryApiAcceptsExactValidBoundary();
+  TestWavRejectsInvalidRiffSizes();
+  TestWavRejectsOverflowingMetadata();
   TestWavRejectsOversizedChunkDeclaration();
   TestWavRejectsMalformedPayloads();
 }

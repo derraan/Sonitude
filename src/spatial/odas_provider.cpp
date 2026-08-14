@@ -26,7 +26,7 @@ namespace
 {
 class OdasProviderImpl final : public IDoaProvider
 {
- public:
+public:
   explicit OdasProviderImpl(std::string endpoint) : endpoint_(std::move(endpoint)) {}
   ~OdasProviderImpl() override
   {
@@ -81,7 +81,7 @@ class OdasProviderImpl final : public IDoaProvider
     return healthy_;
   }
 
- private:
+private:
 #if defined(__linux__)
   static constexpr int kConnectTimeoutMs = 250;
   static constexpr int kBackoffMinMs = 100;
@@ -93,9 +93,7 @@ class OdasProviderImpl final : public IDoaProvider
     return flags >= 0 && ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
   }
 
-  static bool connectWithTimeout(const int fd,
-                                 const sockaddr* addr,
-                                 const socklen_t addr_len)
+  static bool connectWithTimeout(const int fd, const sockaddr* addr, const socklen_t addr_len)
   {
     if (!setNonBlocking(fd))
     {
@@ -121,8 +119,7 @@ class OdasProviderImpl final : public IDoaProvider
 
     int socket_error = 0;
     socklen_t length = sizeof(socket_error);
-    return ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &length) == 0 &&
-           socket_error == 0;
+    return ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &length) == 0 && socket_error == 0;
   }
 
   void armReconnectBackoff()
@@ -171,8 +168,7 @@ class OdasProviderImpl final : public IDoaProvider
         return false;
       }
       std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path.c_str());
-      if (!connectWithTimeout(
-              socket_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)))
+      if (!connectWithTimeout(socket_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)))
       {
         ::close(socket_fd);
         armReconnectBackoff();
@@ -244,10 +240,10 @@ class OdasProviderImpl final : public IDoaProvider
       std::chrono::steady_clock::time_point::min()};
 #endif
 };
-}  // namespace
+} // namespace
 
 std::unique_ptr<IDoaProvider> CreateOdasProvider(const std::string& endpoint)
 {
   return std::make_unique<OdasProviderImpl>(endpoint);
 }
-}  // namespace sonitude::spatial
+} // namespace sonitude::spatial

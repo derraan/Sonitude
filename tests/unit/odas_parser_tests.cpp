@@ -1,5 +1,5 @@
-#include <cmath>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -68,8 +68,7 @@ void TestOdasParserOverflowCapResync()
   Require(recovered.size() == 1, "parser must recover after bounded overflow resync");
 }
 
-std::string NumericPayload(const std::string& id,
-                           const std::string& x,
+std::string NumericPayload(const std::string& id, const std::string& x,
                            const std::string& timestamp = "1.0",
                            const std::string& activity = "0.8")
 {
@@ -106,10 +105,8 @@ void TestOdasParserAcceptsUnsignedBoundaries()
   Require(zero.size() == 1 && zero[0].source_id == 0,
           "zero must be accepted as the lower unsigned ID boundary");
 
-  const auto maximum =
-      parser.feed(NumericPayload("18446744073709551615", "1.0", "18446744073"));
-  Require(maximum.size() == 1 &&
-              maximum[0].source_id == std::numeric_limits<std::uint64_t>::max(),
+  const auto maximum = parser.feed(NumericPayload("18446744073709551615", "1.0", "18446744073"));
+  Require(maximum.size() == 1 && maximum[0].source_id == std::numeric_limits<std::uint64_t>::max(),
           "uint64_t max must be accepted without a floating-point cast");
 }
 
@@ -134,9 +131,8 @@ void TestMockDoaProviderScript()
 void TestOdasProviderReconnectsAfterBackoff()
 {
 #if defined(__linux__)
-  const std::string path =
-      "/tmp/sonitude-odas-reconnect-" + std::to_string(static_cast<long long>(::getpid())) +
-      ".sock";
+  const std::string path = "/tmp/sonitude-odas-reconnect-" +
+                           std::to_string(static_cast<long long>(::getpid())) + ".sock";
   (void)::unlink(path.c_str());
   auto provider = sonitude::spatial::CreateOdasProvider("unix://" + path);
   std::vector<sonitude::spatial::SourceObservation> observations;
@@ -158,8 +154,7 @@ void TestOdasProviderReconnectsAfterBackoff()
   Require(peer >= 0, "ODAS provider must reconnect after its initial backoff");
   const std::string payload =
       R"({"timeStamp":3.0,"src":[{"id":9,"x":1.0,"y":0.0,"z":0.0,"activity":0.9}]})";
-  Require(::write(peer, payload.data(), payload.size()) ==
-              static_cast<ssize_t>(payload.size()),
+  Require(::write(peer, payload.data(), payload.size()) == static_cast<ssize_t>(payload.size()),
           "ODAS reconnect test payload must be written");
   Require(provider->poll(observations) && observations.size() == 1,
           "ODAS provider must parse data after reconnect");
@@ -170,7 +165,7 @@ void TestOdasProviderReconnectsAfterBackoff()
   (void)::unlink(path.c_str());
 #endif
 }
-}  // namespace
+} // namespace
 
 void RunOdasParserTests()
 {

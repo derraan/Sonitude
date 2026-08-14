@@ -27,9 +27,10 @@ struct Options
 
 void PrintUsage()
 {
-  std::cout << "Usage:\n"
-            << "  sonitude_calibration_capture [--config <runtime_yaml>] [--seconds <duration>] \\\n"
-            << "      [--output <wav>] [--synthetic]\n";
+  std::cout
+      << "Usage:\n"
+      << "  sonitude_calibration_capture [--config <runtime_yaml>] [--seconds <duration>] \\\n"
+      << "      [--output <wav>] [--synthetic]\n";
 }
 
 Options ParseArgs(const int argc, char** argv)
@@ -86,12 +87,13 @@ sonitude::audio::WavData GenerateSyntheticCapture(const std::uint32_t sample_rat
     for (std::size_t ch = 0; ch < wav.channels; ++ch)
     {
       const float base_hz = 400.0F + (70.0F * static_cast<float>(ch));
-      wav.interleaved[(i * wav.channels) + ch] = 0.08F * std::sin(2.0F * 3.1415926535F * base_hz * t);
+      wav.interleaved[(i * wav.channels) + ch] =
+          0.08F * std::sin(2.0F * 3.1415926535F * base_hz * t);
     }
   }
   return wav;
 }
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -100,24 +102,28 @@ int main(int argc, char** argv)
     const Options options = ParseArgs(argc, argv);
     if (options.synthetic)
     {
-      std::cout << "WARNING: --synthetic selected. Output is deterministic synthetic audio and is NOT "
-                   "valid calibration evidence.\n";
+      std::cout
+          << "WARNING: --synthetic selected. Output is deterministic synthetic audio and is NOT "
+             "valid calibration evidence.\n";
       const std::uint32_t sample_rate_hz = 44100;
       const std::size_t frames = static_cast<std::size_t>(options.seconds * sample_rate_hz);
       auto wav = GenerateSyntheticCapture(sample_rate_hz, frames);
       std::filesystem::path synthetic_path(options.output_path);
       if (synthetic_path.filename().string().find("synthetic") == std::string::npos)
       {
-        synthetic_path = synthetic_path.parent_path() /
-                         (synthetic_path.stem().string() + ".synthetic" + synthetic_path.extension().string());
+        synthetic_path =
+            synthetic_path.parent_path() /
+            (synthetic_path.stem().string() + ".synthetic" + synthetic_path.extension().string());
       }
       sonitude::audio::WriteWavFile(synthetic_path.string(), wav);
-      std::cout << "Wrote synthetic capture WAV (NOT HARDWARE EVIDENCE): " << synthetic_path.string() << '\n';
+      std::cout << "Wrote synthetic capture WAV (NOT HARDWARE EVIDENCE): "
+                << synthetic_path.string() << '\n';
       return 0;
     }
 
 #if !SONITUDE_HAS_ALSA
-    std::cerr << "calibration_capture failed: built without ALSA support; use --synthetic on this build.\n";
+    std::cerr << "calibration_capture failed: built without ALSA support; use --synthetic on this "
+                 "build.\n";
     return 1;
 #else
     const auto config = sonitude::app::LoadRuntimeConfigFromFile(options.config_path);

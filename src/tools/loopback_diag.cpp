@@ -37,13 +37,12 @@ int main(int argc, char** argv)
     const auto cap_params = cap.negotiated();
     const auto pb_params = pb.negotiated();
     sonitude::app::ValidateRuntimeAudioContract(
-        config,
-        {.capture_sample_rate_hz = cap_params.sample_rate_hz,
-         .playback_sample_rate_hz = pb_params.sample_rate_hz,
-         .capture_channels = cap_params.channels,
-         .playback_buffer_frames = pb_params.buffer_frames,
-         .software_queue_frames = 0,
-         .minimum_asrc_headroom_frames = cap_params.period_frames});
+        config, {.capture_sample_rate_hz = cap_params.sample_rate_hz,
+                 .playback_sample_rate_hz = pb_params.sample_rate_hz,
+                 .capture_channels = cap_params.channels,
+                 .playback_buffer_frames = pb_params.buffer_frames,
+                 .software_queue_frames = 0,
+                 .minimum_asrc_headroom_frames = cap_params.period_frames});
 
     sonitude::rt::TelemetryCounters counters;
     sonitude::audio::alsa::CaptureWorker cap_worker(&cap, &config, &counters);
@@ -56,16 +55,10 @@ int main(int argc, char** argv)
         .target_buffer_frames = static_cast<double>(config.asrc.target_buffer_frames),
         .max_ratio_step = 0.00005,
     });
-    const bool asrc_enabled =
-        config.asrc.enabled && !config.asrc.allow_bypass_for_locked_bench;
-    sonitude::audio::alsa::PlaybackWorker pb_worker(
-        &pb,
-        resampler.get(),
-        &ctl,
-        &counters,
-        asrc_enabled,
-        cap_params.period_frames,
-        config.asrc.max_ratio);
+    const bool asrc_enabled = config.asrc.enabled && !config.asrc.allow_bypass_for_locked_bench;
+    sonitude::audio::alsa::PlaybackWorker pb_worker(&pb, resampler.get(), &ctl, &counters,
+                                                    asrc_enabled, cap_params.period_frames,
+                                                    config.asrc.max_ratio);
 
     const std::size_t period_frames = cap_worker.periodFrames();
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
@@ -98,8 +91,8 @@ int main(int argc, char** argv)
       }
     }
 
-    std::cout << "Loopback diagnostic complete: "
-              << "capture_xruns=" << counters.capture_xruns.load()
+    std::cout << "Loopback diagnostic complete: " << "capture_xruns="
+              << counters.capture_xruns.load()
               << " playback_xruns=" << counters.playback_xruns.load()
               << " playback_write_failures=" << playback_write_failures
               << " asrc_ppm=" << counters.asrc_ratio_ppm.load() << "\n";

@@ -34,8 +34,8 @@ struct TelemetryCounters
   std::atomic<std::uint64_t> capture_overflow_refusals{0};
 
   // Block ownership pipeline.
-  std::atomic<std::uint64_t> ring_overruns{0};       // producer had no free slot
-  std::atomic<std::uint64_t> ring_underruns{0};      // playback had no ready block
+  std::atomic<std::uint64_t> ring_overruns{0};  // producer had no free slot
+  std::atomic<std::uint64_t> ring_underruns{0}; // playback had no ready block
   std::atomic<std::uint64_t> block_commit_failures{0};
 
   // ASRC.
@@ -68,10 +68,9 @@ struct TelemetryCounters
 inline void StoreMaxRelaxed(std::atomic<std::uint64_t>& target, const std::uint64_t value) noexcept
 {
   std::uint64_t current = target.load(std::memory_order_relaxed);
-  while (value > current &&
-         !target.compare_exchange_weak(
-             current, value, std::memory_order_relaxed, std::memory_order_relaxed))
+  while (value > current && !target.compare_exchange_weak(current, value, std::memory_order_relaxed,
+                                                          std::memory_order_relaxed))
   {
   }
 }
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

@@ -11,8 +11,7 @@ namespace sonitude::app
 {
 namespace
 {
-template <typename T>
-T RequireScalar(const YAML::Node& node, const char* key)
+template <typename T> T RequireScalar(const YAML::Node& node, const char* key)
 {
   if (!node[key])
   {
@@ -23,8 +22,7 @@ T RequireScalar(const YAML::Node& node, const char* key)
 
 // Used for keys added after the first configuration files shipped, so existing
 // configs keep loading with the documented default.
-template <typename T>
-T OptionalScalar(const YAML::Node& node, const char* key, const T& fallback)
+template <typename T> T OptionalScalar(const YAML::Node& node, const char* key, const T& fallback)
 {
   if (!node || !node[key])
   {
@@ -112,7 +110,7 @@ std::string ResolvePath(const std::string& base_file, const std::string& candida
   const std::filesystem::path base_path(base_file);
   return (base_path.parent_path() / candidate_path).lexically_normal().string();
 }
-}  // namespace
+} // namespace
 
 RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
 {
@@ -139,8 +137,7 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
 
   const YAML::Node steering = root["steering"];
   config.steering.speed_of_sound_mps = RequireScalar<float>(steering, "speed_of_sound_mps");
-  config.steering.reference_mic_index =
-      RequireScalar<std::size_t>(steering, "reference_mic_index");
+  config.steering.reference_mic_index = RequireScalar<std::size_t>(steering, "reference_mic_index");
   config.steering.steering_ramp_ms = RequireScalar<float>(steering, "steering_ramp_ms");
   config.steering.ambient_floor_linear = RequireScalar<float>(steering, "ambient_floor_linear");
 
@@ -179,7 +176,8 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
       OptionalScalar<bool>(realtime, "require_memory_lock", false);
   config.realtime.require_realtime = OptionalScalar<bool>(realtime, "require_realtime", false);
   config.realtime.rt_stack_kib = OptionalScalar<std::uint32_t>(realtime, "rt_stack_kib", 512U);
-  config.realtime.rt_prefault_kib = OptionalScalar<std::uint32_t>(realtime, "rt_prefault_kib", 128U);
+  config.realtime.rt_prefault_kib =
+      OptionalScalar<std::uint32_t>(realtime, "rt_prefault_kib", 128U);
   config.realtime.startup_timeout_ms =
       OptionalScalar<std::uint32_t>(realtime, "startup_timeout_ms", 2000U);
 
@@ -306,7 +304,8 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     throw std::runtime_error("suppression.confidence_threshold must be in [0, 1]");
   }
 
-  if (config.state_machine.activation_hold_ms == 0 || config.state_machine.confirmation_hold_ms == 0)
+  if (config.state_machine.activation_hold_ms == 0 ||
+      config.state_machine.confirmation_hold_ms == 0)
   {
     throw std::runtime_error("state machine activation and confirmation holds must be non-zero");
   }
@@ -318,8 +317,8 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   }
   if (!config.odas.enabled && !config.odas.use_mock_provider)
   {
-    throw std::runtime_error(
-        "odas.enabled=false requires odas.use_mock_provider=true to avoid contradictory provider settings");
+    throw std::runtime_error("odas.enabled=false requires odas.use_mock_provider=true to avoid "
+                             "contradictory provider settings");
   }
   if (config.realtime.capture_priority < 1 || config.realtime.capture_priority > 99)
   {
@@ -358,11 +357,13 @@ void ValidateRuntimeAudioContract(const RuntimeConfig& config, const RuntimeAudi
 {
   if (contract.capture_sample_rate_hz != config.capture.sample_rate_hz)
   {
-    throw std::runtime_error("negotiated capture sample rate does not match the configured DSP rate");
+    throw std::runtime_error(
+        "negotiated capture sample rate does not match the configured DSP rate");
   }
   if (contract.playback_sample_rate_hz != config.playback.sample_rate_hz)
   {
-    throw std::runtime_error("negotiated playback sample rate does not match the configured DSP rate");
+    throw std::runtime_error(
+        "negotiated playback sample rate does not match the configured DSP rate");
   }
   if (contract.capture_channels == 0)
   {
@@ -389,8 +390,7 @@ void ValidateRuntimeAudioContract(const RuntimeConfig& config, const RuntimeAudi
   {
     if (channel >= contract.capture_channels)
     {
-      throw std::runtime_error(
-          "active channel map index exceeds negotiated capture channel count");
+      throw std::runtime_error("active channel map index exceeds negotiated capture channel count");
     }
   }
   if (!config.asrc.enabled)
@@ -404,8 +404,8 @@ void ValidateRuntimeAudioContract(const RuntimeConfig& config, const RuntimeAudi
   const std::size_t target = config.asrc.target_buffer_frames;
   const std::size_t headroom = contract.minimum_asrc_headroom_frames;
   if (contract.playback_buffer_frames == 0 || max_occupancy < min_occupancy || headroom == 0 ||
-      target < min_occupancy || target > max_occupancy ||
-      (target - min_occupancy) < headroom || (max_occupancy - target) < headroom)
+      target < min_occupancy || target > max_occupancy || (target - min_occupancy) < headroom ||
+      (max_occupancy - target) < headroom)
   {
     throw std::runtime_error(
         "ASRC target_buffer_frames must sit at least one negotiated block above the retained "
@@ -438,4 +438,4 @@ void ValidateGeometryConfig(const GeometryConfig& geometry)
     }
   }
 }
-}  // namespace sonitude::app
+} // namespace sonitude::app

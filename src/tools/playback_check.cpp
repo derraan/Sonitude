@@ -46,7 +46,8 @@ int main(int argc, char** argv)
       const std::size_t remaining = frames - written_total;
       const auto* cursor = bytes.data() + (written_total * frame_bytes);
       const std::int64_t written = dev.writeInterleaved(
-          cursor, static_cast<std::uint32_t>(std::min<std::size_t>(remaining, negotiated.period_frames)));
+          cursor,
+          static_cast<std::uint32_t>(std::min<std::size_t>(remaining, negotiated.period_frames)));
       if (written < 0)
       {
         const int recovered = dev.recoverXrun(static_cast<int>(written));
@@ -71,7 +72,8 @@ int main(int argc, char** argv)
       stall_count = 0;
       written_total += static_cast<std::size_t>(written);
     }
-    std::cout << "Playback check wrote " << written_total << " frames (recoveries=" << recoveries << ").\n";
+    std::cout << "Playback check wrote " << written_total << " frames (recoveries=" << recoveries
+              << ").\n";
     return 0;
   }
   catch (const std::exception& ex)

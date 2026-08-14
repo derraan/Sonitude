@@ -17,7 +17,7 @@ struct ResolvedZone
 
 class ZoneMap
 {
- public:
+public:
   explicit ZoneMap(std::vector<app::ZoneConfig> zones);
 
   std::optional<std::string> zoneFor(float azimuth_deg) const;
@@ -28,10 +28,13 @@ class ZoneMap
   // realtime boundary.
   std::optional<std::size_t> zoneIndexFor(float azimuth_deg) const;
   std::optional<ResolvedZone> resolve(float azimuth_deg) const;
-  std::size_t zoneCount() const { return zones_.size(); }
+  std::size_t zoneCount() const
+  {
+    return zones_.size();
+  }
   const std::string& zoneName(std::size_t index) const;
 
- private:
+private:
   std::vector<app::ZoneConfig> zones_;
 };
-}  // namespace sonitude::control
+} // namespace sonitude::control

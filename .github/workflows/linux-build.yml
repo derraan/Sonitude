@@ -13,9 +13,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        libsamplerate: [ON, OFF]
+        include:
+          - name: libsamplerate-on
+            libsamplerate: ON
+            alsa: ON
+          - name: libsamplerate-off
+            libsamplerate: OFF
+            alsa: ON
+          - name: alsa-off
+            libsamplerate: OFF
+            alsa: OFF
+    name: Build and test (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -25,9 +37,137 @@ jobs:
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DSONITUDE_FETCH_DEPS=OFF
-          -DSONITUDE_WITH_ALSA=ON
+          -DSONITUDE_WITH_ALSA=${{ matrix.alsa }}
           -DSONITUDE_WITH_LIBSAMPLERATE=${{ matrix.libsamplerate }}
       - name: Build
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  address-undefined-sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install sanitizer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config clang-18 libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
+      - name: Run ASan and UBSan full suite
+        run: >
+          bash scripts/run_sanitizer_tests.sh address
+          -G Ninja
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DSONITUDE_FETCH_DEPS=OFF
+          -DSONITUDE_WITH_LIBSAMPLERATE=ON
+
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install sanitizer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config clang-18 libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
+      - name: Run integrated concurrency and lifecycle tests under TSan
+        run: >
+          bash scripts/run_sanitizer_tests.sh thread
+          -G Ninja
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DSONITUDE_FETCH_DEPS=OFF
+          -DSONITUDE_WITH_LIBSAMPLERATE=ON
+
+  clang-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install clang-format 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-18
+      - name: Check changed first-party sources
+        env:
+          FORMAT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 scripts/check_format.sh "${FORMAT_BASE_SHA}"
+
+  clang-tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install clang-tidy dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config clang-18 clang-tidy-18 libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
+      - name: Configure compile database
+        run: >
+          cmake -S . -B build-tidy -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DSONITUDE_FETCH_DEPS=OFF
+          -DSONITUDE_WITH_ALSA=OFF
+          -DSONITUDE_WITH_LIBSAMPLERATE=ON
+      - name: Run clang-tidy
+        run: >
+          clang-tidy-18 -p build-tidy
+          --checks=-*,clang-analyzer-*,bugprone-*
+          --warnings-as-errors=*
+          src/audio/wav_io.cpp
+          src/spatial/odas_message_parser.cpp
+
+  fuzz-targets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install fuzzing dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config clang-18 libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
+      - name: Configure fuzzers
+        run: >
+          cmake -S . -B build-fuzz -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DSONITUDE_BUILD_TESTS=OFF
+          -DSONITUDE_BUILD_FUZZERS=ON
+          -DSONITUDE_FETCH_DEPS=OFF
+          -DSONITUDE_WITH_ALSA=OFF
+          -DSONITUDE_WITH_LIBSAMPLERATE=ON
+      - name: Build fuzz targets
+        run: cmake --build build-fuzz --target fuzz_odas_parser fuzz_wav_io
+      - name: Run ODAS fuzz target (bounded)
+        run: ./build-fuzz/fuzz_odas_parser -max_total_time=20 -timeout=5 -rss_limit_mb=1024 tests/fuzz/corpus/odas
+      - name: Run WAV fuzz target (bounded)
+        run: ./build-fuzz/fuzz_wav_io -max_total_time=20 -timeout=5 -rss_limit_mb=1024 tests/fuzz/corpus/wav
+
+  firmware-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Pico toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi
+      - name: Fetch Pico SDK
+        run: |
+          git clone --depth 1 --branch 2.1.0 https://github.com/raspberrypi/pico-sdk.git "${{ github.workspace }}/pico-sdk"
+          git -C "${{ github.workspace }}/pico-sdk" submodule update --init --depth 1
+      - name: Configure firmware
+        working-directory: mic-array-pico2w-usb6ch
+        env:
+          PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+      - name: Build firmware
+        working-directory: mic-array-pico2w-usb6ch
+        run: cmake --build build

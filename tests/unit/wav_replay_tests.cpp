@@ -108,7 +108,7 @@ void TestNonIdentityChannelMap()
   wav.channels = 8;
   wav.format = sonitude::audio::PcmFormat::FLOAT32_LE;
   wav.interleaved = {
-      0.0F, 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F,
+      0.0F,  1.0F,  2.0F,  3.0F,  4.0F,  5.0F,  6.0F,  7.0F,
       10.0F, 11.0F, 12.0F, 13.0F, 14.0F, 15.0F, 16.0F, 17.0F,
   };
   const std::vector<std::size_t> map = {5, 4, 3, 2, 1, 0};
@@ -148,7 +148,7 @@ void TestZeroSampleRateRejected()
   (void)std::remove(path.c_str());
   Require(threw, "zero sample rate should throw");
 }
-}  // namespace
+} // namespace
 
 void RunWavReplayTests()
 {

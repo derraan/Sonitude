@@ -59,7 +59,8 @@ double ParseDoubleExact(const std::string& value, const std::size_t line_number,
   }
   catch (const std::exception&)
   {
-    throw std::runtime_error("line " + std::to_string(line_number) + ": invalid " + name + " field");
+    throw std::runtime_error("line " + std::to_string(line_number) + ": invalid " + name +
+                             " field");
   }
 }
 
@@ -78,19 +79,19 @@ float ParseFloatExact(const std::string& value, const std::size_t line_number, c
   }
   catch (const std::exception&)
   {
-    throw std::runtime_error("line " + std::to_string(line_number) + ": invalid " + name + " field");
+    throw std::runtime_error("line " + std::to_string(line_number) + ": invalid " + name +
+                             " field");
   }
 }
 
 bool LooksLikeHeaderTimeField(const std::string& value)
 {
   std::string lower(value);
-  std::transform(lower.begin(), lower.end(), lower.begin(), [](const unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return lower == "t" || lower == "time" || lower == "time_s" || lower == "seconds";
 }
-}  // namespace
+} // namespace
 
 std::vector<SteeringEvent> LoadSteeringScript(const std::string& path,
                                               const std::uint32_t sample_rate_hz)
@@ -122,8 +123,9 @@ std::vector<SteeringEvent> LoadSteeringScript(const std::string& path,
     const auto fields = SplitCsvLine(trimmed);
     if (fields.size() != 3U)
     {
-      throw std::runtime_error("line " + std::to_string(line_number) +
-                               ": expected exactly 3 CSV columns (time_s,azimuth_deg,elevation_deg)");
+      throw std::runtime_error(
+          "line " + std::to_string(line_number) +
+          ": expected exactly 3 CSV columns (time_s,azimuth_deg,elevation_deg)");
     }
     if (fields[0].empty() || fields[1].empty() || fields[2].empty())
     {
@@ -160,9 +162,8 @@ std::vector<SteeringEvent> LoadSteeringScript(const std::string& path,
     events.push_back({static_cast<std::size_t>(frame_index_d), {azimuth_deg, elevation_deg}});
   }
 
-  std::sort(events.begin(), events.end(), [](const SteeringEvent& a, const SteeringEvent& b) {
-    return a.frame_index < b.frame_index;
-  });
+  std::sort(events.begin(), events.end(), [](const SteeringEvent& a, const SteeringEvent& b)
+            { return a.frame_index < b.frame_index; });
   return events;
 }
 
@@ -186,9 +187,9 @@ std::vector<audio::MicFrame> ExtractMappedMicFrames(const audio::WavData& wav,
   {
     if (channel_map[logical_channel] >= wav.channels)
     {
-      throw std::runtime_error("active_channel_map index " + std::to_string(channel_map[logical_channel]) +
-                               " is out of range for input WAV with " +
-                               std::to_string(wav.channels) + " channels");
+      throw std::runtime_error(
+          "active_channel_map index " + std::to_string(channel_map[logical_channel]) +
+          " is out of range for input WAV with " + std::to_string(wav.channels) + " channels");
     }
   }
 
@@ -199,8 +200,7 @@ std::vector<audio::MicFrame> ExtractMappedMicFrames(const audio::WavData& wav,
     audio::MicFrame frame{};
     for (std::size_t mic_channel = 0; mic_channel < audio::kMicChannels; ++mic_channel)
     {
-      frame[mic_channel] =
-          wav.interleaved[(frame_index * wav.channels) + channel_map[mic_channel]];
+      frame[mic_channel] = wav.interleaved[(frame_index * wav.channels) + channel_map[mic_channel]];
     }
     out[frame_index] = frame;
   }
@@ -258,4 +258,4 @@ std::vector<ReplaySegment> BuildReplaySegments(const std::size_t total_frames,
 
   return segments;
 }
-}  // namespace sonitude::tools::wav_replay
+} // namespace sonitude::tools::wav_replay

@@ -151,6 +151,7 @@ struct RuntimeAudioContract
 RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path);
 GeometryConfig LoadGeometryFromFile(const std::string& path);
 void ValidateRuntimeConfig(const RuntimeConfig& config);
-void ValidateRuntimeAudioContract(const RuntimeConfig& config, const RuntimeAudioContract& contract);
+void ValidateRuntimeAudioContract(const RuntimeConfig& config,
+                                  const RuntimeAudioContract& contract);
 void ValidateGeometryConfig(const GeometryConfig& geometry);
-}  // namespace sonitude::app
+} // namespace sonitude::app

@@ -9,25 +9,17 @@ namespace sonitude::control
 {
 namespace
 {
-bool TimeoutElapsed(const std::uint64_t now_ns,
-                    const std::uint64_t start_ns,
+bool TimeoutElapsed(const std::uint64_t now_ns, const std::uint64_t start_ns,
                     const std::uint64_t timeout_ns)
 {
   return now_ns >= start_ns && (now_ns - start_ns) >= timeout_ns;
 }
-}  // namespace
+} // namespace
 
-ControlLoop::ControlLoop(spatial::IDoaProvider* provider,
-                         SteeringChannel* channel,
-                         const ControlLoopConfig config,
-                         ConversationStateMachine* conversation)
-    : provider_(provider),
-      channel_(channel),
-      config_(config),
-      conversation_(conversation),
-      tracker_(config.failsafe_timeout_ns),
-      last_observation_ns_(0),
-      generation_(0)
+ControlLoop::ControlLoop(spatial::IDoaProvider* provider, SteeringChannel* channel,
+                         const ControlLoopConfig config, ConversationStateMachine* conversation)
+    : provider_(provider), channel_(channel), config_(config), conversation_(conversation),
+      tracker_(config.failsafe_timeout_ns), last_observation_ns_(0), generation_(0)
 {
   observations_.reserve(16);
   last_snapshot_.ambient_mix = config_.ambient_floor_linear;
@@ -78,8 +70,11 @@ void ControlLoop::tick(const std::uint64_t now_ns)
   const bool provider_healthy = provider_->isHealthy();
   const bool stale_observations =
       TimeoutElapsed(now_ns, last_observation_ns_, config_.failsafe_timeout_ns);
-  const std::optional<spatial::SourceObservation> active =
-      (!provider_healthy || stale_observations) ? std::nullopt : tracker_.best(now_ns);
+  std::optional<spatial::SourceObservation> active;
+  if (provider_healthy && !stale_observations)
+  {
+    active = tracker_.best(now_ns);
+  }
   SteeringSnapshot next{};
   if (conversation_ != nullptr)
   {
@@ -157,4 +152,4 @@ void ControlLoop::tick(const std::uint64_t now_ns)
   last_snapshot_ = next;
   publish(next, now_ns);
 }
-}  // namespace sonitude::control
+} // namespace sonitude::control

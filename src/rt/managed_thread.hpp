@@ -41,7 +41,7 @@ namespace sonitude::rt
 // rather than waiting out a timeout.
 class StartGate
 {
- public:
+public:
   explicit StartGate(std::size_t expected_threads);
 
   // Worker side. Returns true when the workload should run, false when startup
@@ -56,7 +56,7 @@ class StartGate
 
   std::size_t arrived() const;
 
- private:
+private:
   enum class State : std::uint8_t
   {
     Waiting = 0,
@@ -72,8 +72,8 @@ class StartGate
   std::size_t expected_ = 0;
   std::atomic<std::size_t> arrived_{0};
   std::atomic<std::uint8_t> state_{static_cast<std::uint8_t>(State::Waiting)};
-  WakeEvent arrival_event_;  // worker -> supervisor, auto-reset
-  WakeEvent release_event_;  // supervisor -> workers, sticky broadcast
+  WakeEvent arrival_event_; // worker -> supervisor, auto-reset
+  WakeEvent release_event_; // supervisor -> workers, sticky broadcast
 };
 
 struct ThreadSpec
@@ -108,7 +108,7 @@ struct ThreadStatus
 // which the body runs under an inherited policy.
 class ManagedThread
 {
- public:
+public:
   using Body = std::function<void()>;
 
   ManagedThread() = default;
@@ -123,12 +123,18 @@ class ManagedThread
   bool start(const ThreadSpec& spec, StartGate* gate, Body body);
 
   void join();
-  bool joinable() const noexcept { return started_; }
+  bool joinable() const noexcept
+  {
+    return started_;
+  }
 
   // Valid once the thread has arrived at the gate.
-  const ThreadStatus& status() const noexcept { return status_; }
+  const ThreadStatus& status() const noexcept
+  {
+    return status_;
+  }
 
- private:
+private:
   static void* Trampoline(void* self) noexcept;
   void run() noexcept;
   int createWith(SchedClass sched_class, std::int32_t priority) noexcept;
@@ -144,4 +150,4 @@ class ManagedThread
   std::thread fallback_;
 #endif
 };
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

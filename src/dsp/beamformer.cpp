@@ -104,8 +104,8 @@ void DelaySumBeamformer::configure(const app::GeometryConfig& geometry,
   configured_ = true;
 }
 
-DelaySumBeamformer::DelayArray DelaySumBeamformer::computeDelaysForTarget(
-    const audio::BeamformerSteering target) const
+DelaySumBeamformer::DelayArray
+DelaySumBeamformer::computeDelaysForTarget(const audio::BeamformerSteering target) const
 {
   const auto u = spatial::UnitVectorFromAzElDeg(target.azimuth_deg, target.elevation_deg);
   const std::size_t ref = steering_config_.reference_mic_index;
@@ -138,8 +138,7 @@ void DelaySumBeamformer::setTarget(const audio::BeamformerSteering target)
 }
 
 float DelaySumBeamformer::renderOne(
-    const audio::MicFrame& frame,
-    const DelayArray& delays,
+    const audio::MicFrame& frame, const DelayArray& delays,
     std::array<FractionalDelayLine, audio::kMicChannels>& lines) const
 {
   float sum = 0.0F;
@@ -173,8 +172,8 @@ void DelaySumBeamformer::process(const std::span<const audio::MicFrame> input,
     }
 
     const float pending_y = renderOne(input[i], pending_delays_, pending_lines_);
-    const float alpha =
-        static_cast<float>(fade_cursor_) / static_cast<float>(std::max<std::size_t>(1U, ramp_samples_));
+    const float alpha = static_cast<float>(fade_cursor_) /
+                        static_cast<float>(std::max<std::size_t>(1U, ramp_samples_));
     mono_out[i] = ((1.0F - alpha) * current_y) + (alpha * pending_y);
 
     ++fade_cursor_;
@@ -204,4 +203,4 @@ void DelaySumBeamformer::processWithReference(const std::span<const audio::MicFr
     reference_out[i] = renderOne(input[i], distractor_delays, reference_lines_);
   }
 }
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp

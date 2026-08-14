@@ -31,8 +31,8 @@ struct SteeringSnapshot
 // supplied by the control thread so the audio thread can measure snapshot age
 // and telemetry can report the state machine without touching control memory.
 inline RtSteeringSnapshot ToRtSnapshot(const SteeringSnapshot& snapshot,
-                                      const std::uint64_t published_ns,
-                                      const std::uint8_t control_state) noexcept
+                                       const std::uint64_t published_ns,
+                                       const std::uint8_t control_state) noexcept
 {
   RtSteeringSnapshot out{};
   out.target = snapshot.target;
@@ -48,4 +48,4 @@ inline RtSteeringSnapshot ToRtSnapshot(const SteeringSnapshot& snapshot,
   out.has_distractor = snapshot.has_distractor;
   return out;
 }
-}  // namespace sonitude::control
+} // namespace sonitude::control

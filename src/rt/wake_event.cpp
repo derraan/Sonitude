@@ -34,7 +34,7 @@ int PollTimeoutMs(const std::chrono::milliseconds timeout) noexcept
   return static_cast<int>(count);
 }
 #endif
-}  // namespace
+} // namespace
 
 #if defined(__linux__)
 WakeEvent::WakeEvent()
@@ -87,8 +87,7 @@ bool WakeEvent::waitFor(const std::chrono::milliseconds timeout) noexcept
   }
 }
 
-WaitOutcome WaitAnyOf(const WakeEvent& first,
-                      const WakeEvent& second,
+WaitOutcome WaitAnyOf(const WakeEvent& first, const WakeEvent& second,
                       const std::chrono::milliseconds timeout) noexcept
 {
   pollfd pfds[2]{};
@@ -155,8 +154,7 @@ bool WakeEvent::waitFor(const std::chrono::milliseconds timeout) noexcept
 // this samples both in short slices. That is polling, and it is acceptable here
 // precisely because nothing on this platform has an audio deadline; it must not
 // be reused on Linux, where the eventfd path above blocks on both at once.
-WaitOutcome WaitAnyOf(const WakeEvent& first,
-                      const WakeEvent& second,
+WaitOutcome WaitAnyOf(const WakeEvent& first, const WakeEvent& second,
                       const std::chrono::milliseconds timeout) noexcept
 {
   constexpr std::chrono::milliseconds kSlice{1};
@@ -185,4 +183,4 @@ WaitOutcome WaitAnyOf(const WakeEvent& first,
   }
 }
 #endif
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

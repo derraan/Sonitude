@@ -12,23 +12,22 @@ namespace sonitude::audio::alsa
 {
 class PlaybackWorker
 {
- public:
-  PlaybackWorker(AlsaPcmDevice* device,
-                 dsp::IStereoResampler* resampler,
-                 dsp::AsrcController* controller,
-                 rt::TelemetryCounters* counters,
-                 bool asrc_enabled,
-                 std::size_t capture_period_frames,
-                 double asrc_max_ratio);
+public:
+  PlaybackWorker(AlsaPcmDevice* device, dsp::IStereoResampler* resampler,
+                 dsp::AsrcController* controller, rt::TelemetryCounters* counters,
+                 bool asrc_enabled, std::size_t capture_period_frames, double asrc_max_ratio);
 
   bool writeStereo(std::span<const dsp::StereoSample> input, std::size_t occupancy_frames);
   bool writeStereo(const std::vector<dsp::StereoSample>& input, std::size_t occupancy_frames);
   static std::size_t CalculateRequiredScratchFrames(std::size_t capture_period_frames,
                                                     std::size_t playback_period_frames,
                                                     double asrc_max_ratio);
-  std::size_t scratchCapacityFrames() const { return pending_.size(); }
+  std::size_t scratchCapacityFrames() const
+  {
+    return pending_.size();
+  }
 
- private:
+private:
   AlsaPcmDevice* device_ = nullptr;
   dsp::IStereoResampler* resampler_ = nullptr;
   dsp::AsrcController* controller_ = nullptr;
@@ -40,4 +39,4 @@ class PlaybackWorker
   std::vector<float> interleaved_float_;
   std::vector<std::uint8_t> interleaved_bytes_;
 };
-}  // namespace sonitude::audio::alsa
+} // namespace sonitude::audio::alsa

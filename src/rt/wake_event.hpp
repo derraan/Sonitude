@@ -23,7 +23,7 @@ namespace sonitude::rt
 // used on any realtime path and fd() reports -1 there.
 class WakeEvent
 {
- public:
+public:
   WakeEvent();
   ~WakeEvent();
   WakeEvent(const WakeEvent&) = delete;
@@ -41,9 +41,12 @@ class WakeEvent
   bool waitFor(std::chrono::milliseconds timeout) noexcept;
 
   // Pollable descriptor, or -1 when this build has no descriptor backing.
-  int fd() const noexcept { return fd_; }
+  int fd() const noexcept
+  {
+    return fd_;
+  }
 
- private:
+private:
   int fd_ = -1;
 #if !defined(__linux__)
   std::mutex mutex_;
@@ -64,7 +67,6 @@ enum class WaitOutcome : std::uint8_t
 // syscall. `second` wins when both are ready, which is what callers want: the
 // second argument is the shutdown event, and shutdown takes precedence over
 // more work. Neither event is consumed.
-WaitOutcome WaitAnyOf(const WakeEvent& first,
-                      const WakeEvent& second,
+WaitOutcome WaitAnyOf(const WakeEvent& first, const WakeEvent& second,
                       std::chrono::milliseconds timeout) noexcept;
-}  // namespace sonitude::rt
+} // namespace sonitude::rt

@@ -17,12 +17,12 @@ struct SelectiveSuppressorConfig
 
 class SelectiveSuppressor
 {
- public:
+public:
   void configure(const SelectiveSuppressorConfig& config, std::uint32_t sample_rate_hz);
   void setControl(bool enabled, bool has_distractor);
   void process(std::span<float> focus_signal, std::span<const float> distractor_reference);
 
- private:
+private:
   static float Clamp(float value, float min_value, float max_value);
 
   bool configured_ = false;
@@ -32,4 +32,4 @@ class SelectiveSuppressor
   std::vector<float> weights_{};
   std::vector<float> history_{};
 };
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp

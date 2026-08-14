@@ -16,7 +16,7 @@ struct SuppressorConfig
 
 class ISuppressor
 {
- public:
+public:
   virtual ~ISuppressor() = default;
   virtual void configure(const SuppressorConfig& config, std::uint32_t sample_rate_hz) = 0;
   virtual void setControl(bool focus_active, float confidence) = 0;
@@ -26,13 +26,16 @@ class ISuppressor
 
 class OutputGainGate final : public ISuppressor
 {
- public:
+public:
   void configure(const SuppressorConfig& config, std::uint32_t sample_rate_hz) override;
   void setControl(bool focus_active, float confidence) override;
   void process(std::span<float> mono) override;
-  float currentGain() const override { return current_gain_; }
+  float currentGain() const override
+  {
+    return current_gain_;
+  }
 
- private:
+private:
   SuppressorConfig config_{};
   bool configured_ = false;
   bool focus_active_ = false;
@@ -46,4 +49,4 @@ class OutputGainGate final : public ISuppressor
 
 // TODO(sonitude-suppression): Remove legacy alias once all downstream references are migrated.
 using ConservativeSuppressor = OutputGainGate;
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp

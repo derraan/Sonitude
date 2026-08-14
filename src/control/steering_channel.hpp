@@ -26,7 +26,7 @@ namespace sonitude::control
 // state, not a delta.
 class SteeringChannel
 {
- public:
+public:
   static constexpr std::size_t kDefaultCapacity = 16;
 
   explicit SteeringChannel(std::size_t capacity_pow2 = kDefaultCapacity) : ring_(capacity_pow2) {}
@@ -70,23 +70,35 @@ class SteeringChannel
   }
 
   // Test/diagnostic accessor: takes exactly one message.
-  bool tryPop(RtSteeringSnapshot& out) noexcept { return ring_.pop(out); }
+  bool tryPop(RtSteeringSnapshot& out) noexcept
+  {
+    return ring_.pop(out);
+  }
 
-  std::size_t capacityUsable() const noexcept { return ring_.capacityUsable(); }
+  std::size_t capacityUsable() const noexcept
+  {
+    return ring_.capacityUsable();
+  }
 
   // Telemetry only; relaxed is sufficient because nothing is ordered against
   // these counters.
-  std::uint64_t published() const noexcept { return published_.load(std::memory_order_relaxed); }
+  std::uint64_t published() const noexcept
+  {
+    return published_.load(std::memory_order_relaxed);
+  }
   std::uint64_t publishDrops() const noexcept
   {
     return publish_drops_.load(std::memory_order_relaxed);
   }
-  std::uint64_t superseded() const noexcept { return superseded_.load(std::memory_order_relaxed); }
+  std::uint64_t superseded() const noexcept
+  {
+    return superseded_.load(std::memory_order_relaxed);
+  }
 
- private:
+private:
   rt::SpscRing<RtSteeringSnapshot> ring_;
   std::atomic<std::uint64_t> published_{0};
   std::atomic<std::uint64_t> publish_drops_{0};
   std::atomic<std::uint64_t> superseded_{0};
 };
-}  // namespace sonitude::control
+} // namespace sonitude::control
