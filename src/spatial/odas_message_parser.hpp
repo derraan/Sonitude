@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,7 +13,12 @@ namespace sonitude::spatial
 class OdasMessageParser
 {
  public:
+  explicit OdasMessageParser(std::size_t max_buffer_bytes = 256U * 1024U)
+      : max_buffer_bytes_(max_buffer_bytes)
+  {
+  }
   std::vector<SourceObservation> feed(std::string_view bytes);
+  std::uint64_t overflowResyncCount() const { return overflow_resync_count_; }
 
  private:
   std::vector<SourceObservation> parseOneObject(const std::string& json_object) const;
@@ -20,5 +27,7 @@ class OdasMessageParser
   static std::size_t findMatchingBrace(const std::string& json, std::size_t open_pos);
 
   std::string buffer_;
+  std::size_t max_buffer_bytes_ = 256U * 1024U;
+  std::uint64_t overflow_resync_count_ = 0;
 };
 }  // namespace sonitude::spatial

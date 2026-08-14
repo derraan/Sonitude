@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
@@ -8,6 +9,12 @@
 
 namespace sonitude::control
 {
+struct ResolvedZone
+{
+  std::size_t index = 0;
+  app::ZonePolicy policy = app::ZonePolicy::Focus;
+};
+
 class ZoneMap
 {
  public:
@@ -20,6 +27,7 @@ class ZoneMap
   // zone identity, never a zone name, so nothing string-shaped crosses the
   // realtime boundary.
   std::optional<std::size_t> zoneIndexFor(float azimuth_deg) const;
+  std::optional<ResolvedZone> resolve(float azimuth_deg) const;
   std::size_t zoneCount() const { return zones_.size(); }
   const std::string& zoneName(std::size_t index) const;
 

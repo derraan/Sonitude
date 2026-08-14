@@ -35,6 +35,16 @@ std::optional<std::size_t> ZoneMap::zoneIndexFor(const float azimuth_deg) const
   return std::nullopt;
 }
 
+std::optional<ResolvedZone> ZoneMap::resolve(const float azimuth_deg) const
+{
+  const std::optional<std::size_t> index = zoneIndexFor(azimuth_deg);
+  if (!index.has_value())
+  {
+    return std::nullopt;
+  }
+  return ResolvedZone{*index, zones_[*index].policy};
+}
+
 const std::string& ZoneMap::zoneName(const std::size_t index) const
 {
   static const std::string kUnknown = "unknown";

@@ -16,6 +16,8 @@ class SourceTracker
 
   void ingest(const std::vector<SourceObservation>& observations, std::uint64_t now_ns);
   std::optional<SourceObservation> best(std::uint64_t now_ns) const;
+  std::optional<SourceObservation> strongestDistractor(std::uint64_t now_ns,
+                                                       std::uint64_t focus_source_id) const;
 
  private:
   struct Track

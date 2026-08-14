@@ -1,5 +1,8 @@
 #include "spatial/odas_provider.hpp"
 
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -11,6 +14,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -56,11 +60,14 @@ class OdasProviderImpl final : public IDoaProvider
     }
     if (n == 0)
     {
-      healthy_ = false;
-      ::close(fd_);
-      fd_ = -1;
+      closeAndArmReconnect();
       return false;
     }
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+    {
+      return false;
+    }
+    closeAndArmReconnect();
     return false;
 #else
     (void)out;
@@ -76,36 +83,104 @@ class OdasProviderImpl final : public IDoaProvider
 
  private:
 #if defined(__linux__)
+  static constexpr int kConnectTimeoutMs = 250;
+  static constexpr int kBackoffMinMs = 100;
+  static constexpr int kBackoffMaxMs = 5000;
+
+  static bool setNonBlocking(const int fd)
+  {
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    return flags >= 0 && ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+  }
+
+  static bool connectWithTimeout(const int fd,
+                                 const sockaddr* addr,
+                                 const socklen_t addr_len)
+  {
+    if (!setNonBlocking(fd))
+    {
+      return false;
+    }
+    if (::connect(fd, addr, addr_len) == 0)
+    {
+      return true;
+    }
+    if (errno != EINPROGRESS)
+    {
+      return false;
+    }
+
+    pollfd descriptor{};
+    descriptor.fd = fd;
+    descriptor.events = POLLOUT;
+    const int poll_result = ::poll(&descriptor, 1, kConnectTimeoutMs);
+    if (poll_result <= 0)
+    {
+      return false;
+    }
+
+    int socket_error = 0;
+    socklen_t length = sizeof(socket_error);
+    return ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &length) == 0 &&
+           socket_error == 0;
+  }
+
+  void armReconnectBackoff()
+  {
+    next_reconnect_tp_ =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(reconnect_backoff_ms_);
+    reconnect_backoff_ms_ = std::min(reconnect_backoff_ms_ * 2, kBackoffMaxMs);
+  }
+
+  void closeAndArmReconnect()
+  {
+    healthy_ = false;
+    if (fd_ >= 0)
+    {
+      ::close(fd_);
+      fd_ = -1;
+    }
+    armReconnectBackoff();
+  }
+
   bool ensureConnected()
   {
     if (fd_ >= 0)
     {
       return true;
     }
+    if (std::chrono::steady_clock::now() < next_reconnect_tp_)
+    {
+      return false;
+    }
     if (endpoint_.rfind("unix://", 0) == 0)
     {
       const std::string path = endpoint_.substr(7);
-      fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
-      if (fd_ < 0)
+      const int socket_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+      if (socket_fd < 0)
       {
+        armReconnectBackoff();
         return false;
       }
       sockaddr_un addr{};
       addr.sun_family = AF_UNIX;
       if (path.size() >= sizeof(addr.sun_path))
       {
-        ::close(fd_);
-        fd_ = -1;
+        ::close(socket_fd);
+        armReconnectBackoff();
         return false;
       }
       std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path.c_str());
-      if (::connect(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0)
+      if (!connectWithTimeout(
+              socket_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)))
       {
-        ::close(fd_);
-        fd_ = -1;
+        ::close(socket_fd);
+        armReconnectBackoff();
         return false;
       }
-      setNonBlocking();
+      fd_ = socket_fd;
+      reconnect_backoff_ms_ = kBackoffMinMs;
+      next_reconnect_tp_ = std::chrono::steady_clock::time_point::min();
       return true;
     }
     if (endpoint_.rfind("tcp://", 0) == 0)
@@ -114,6 +189,7 @@ class OdasProviderImpl final : public IDoaProvider
       const auto colon = host_port.rfind(':');
       if (colon == std::string::npos)
       {
+        armReconnectBackoff();
         return false;
       }
       const std::string host = host_port.substr(0, colon);
@@ -125,17 +201,18 @@ class OdasProviderImpl final : public IDoaProvider
       addrinfo* res = nullptr;
       if (::getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0)
       {
+        armReconnectBackoff();
         return false;
       }
 
       for (addrinfo* p = res; p != nullptr; p = p->ai_next)
       {
-        int s = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        const int s = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (s < 0)
         {
           continue;
         }
-        if (::connect(s, p->ai_addr, p->ai_addrlen) == 0)
+        if (connectWithTimeout(s, p->ai_addr, static_cast<socklen_t>(p->ai_addrlen)))
         {
           fd_ = s;
           break;
@@ -145,21 +222,15 @@ class OdasProviderImpl final : public IDoaProvider
       ::freeaddrinfo(res);
       if (fd_ < 0)
       {
+        armReconnectBackoff();
         return false;
       }
-      setNonBlocking();
+      reconnect_backoff_ms_ = kBackoffMinMs;
+      next_reconnect_tp_ = std::chrono::steady_clock::time_point::min();
       return true;
     }
+    armReconnectBackoff();
     return false;
-  }
-
-  void setNonBlocking() const
-  {
-    const int flags = ::fcntl(fd_, F_GETFL, 0);
-    if (flags >= 0)
-    {
-      (void)::fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
-    }
   }
 #endif
 
@@ -168,6 +239,9 @@ class OdasProviderImpl final : public IDoaProvider
   OdasMessageParser parser_{};
 #if defined(__linux__)
   int fd_ = -1;
+  int reconnect_backoff_ms_ = kBackoffMinMs;
+  std::chrono::steady_clock::time_point next_reconnect_tp_{
+      std::chrono::steady_clock::time_point::min()};
 #endif
 };
 }  // namespace

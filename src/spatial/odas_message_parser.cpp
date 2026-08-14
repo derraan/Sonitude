@@ -1,10 +1,13 @@
 #include "spatial/odas_message_parser.hpp"
 
 #include <algorithm>
+#include <cerrno>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
-#include <stdexcept>
+#include <limits>
+#include <system_error>
 
 #include "spatial/angles.hpp"
 
@@ -24,37 +27,79 @@ double Clamp01(const double v)
   }
   return v;
 }
-}  // namespace
 
-bool OdasMessageParser::extractNumber(const std::string& json, const std::string& key, double& out)
+bool IsJsonNumberDelimiter(const char value)
 {
-  const auto key_pos = json.find("\"" + key + "\"");
+  return value == ',' || value == '}' || value == ']';
+}
+
+struct ParsedNumber
+{
+  double value = 0.0;
+  std::size_t token_begin = 0;
+  std::size_t token_end = 0;
+};
+
+bool ParseNumberForKey(const std::string& json,
+                       const std::string& key,
+                       ParsedNumber& parsed)
+{
+  const std::size_t key_pos = json.find("\"" + key + "\"");
   if (key_pos == std::string::npos)
   {
     return false;
   }
-  const auto colon = json.find(':', key_pos);
+  const std::size_t colon = json.find(':', key_pos);
   if (colon == std::string::npos)
   {
     return false;
   }
+
   std::size_t begin = colon + 1;
   while (begin < json.size() && std::isspace(static_cast<unsigned char>(json[begin])) != 0)
   {
     ++begin;
   }
-  std::size_t end = begin;
-  while (end < json.size() &&
-         (std::isdigit(static_cast<unsigned char>(json[end])) != 0 || json[end] == '-' ||
-          json[end] == '+' || json[end] == '.' || json[end] == 'e' || json[end] == 'E'))
-  {
-    ++end;
-  }
-  if (end == begin)
+  if (begin == json.size())
   {
     return false;
   }
-  out = std::strtod(json.c_str() + static_cast<std::ptrdiff_t>(begin), nullptr);
+
+  errno = 0;
+  char* end_ptr = nullptr;
+  const char* const token_ptr = json.c_str() + static_cast<std::ptrdiff_t>(begin);
+  const double value = std::strtod(token_ptr, &end_ptr);
+  if (end_ptr == token_ptr || errno == ERANGE || !std::isfinite(value))
+  {
+    return false;
+  }
+
+  const std::size_t token_end =
+      static_cast<std::size_t>(end_ptr - json.c_str());
+  std::size_t delimiter = token_end;
+  while (delimiter < json.size() &&
+         std::isspace(static_cast<unsigned char>(json[delimiter])) != 0)
+  {
+    ++delimiter;
+  }
+  if (delimiter >= json.size() || !IsJsonNumberDelimiter(json[delimiter]))
+  {
+    return false;
+  }
+
+  parsed = {.value = value, .token_begin = begin, .token_end = token_end};
+  return true;
+}
+}  // namespace
+
+bool OdasMessageParser::extractNumber(const std::string& json, const std::string& key, double& out)
+{
+  ParsedNumber parsed;
+  if (!ParseNumberForKey(json, key, parsed))
+  {
+    return false;
+  }
+  out = parsed.value;
   return true;
 }
 
@@ -62,16 +107,33 @@ bool OdasMessageParser::extractUnsigned(const std::string& json,
                                         const std::string& key,
                                         std::uint64_t& out)
 {
-  double value = 0.0;
-  if (!extractNumber(json, key, value))
+  ParsedNumber parsed;
+  if (!ParseNumberForKey(json, key, parsed))
   {
     return false;
   }
-  if (value < 0.0)
+  const std::string_view token(json.data() + parsed.token_begin,
+                               parsed.token_end - parsed.token_begin);
+  if (token.empty() || token.front() == '-' || token.front() == '+')
   {
     return false;
   }
-  out = static_cast<std::uint64_t>(value);
+  if (!std::all_of(token.begin(), token.end(), [](const char value)
+      {
+        return value >= '0' && value <= '9';
+      }))
+  {
+    return false;
+  }
+
+  std::uint64_t parsed_id = 0;
+  const auto result =
+      std::from_chars(token.data(), token.data() + token.size(), parsed_id, 10);
+  if (result.ec != std::errc{} || result.ptr != token.data() + token.size())
+  {
+    return false;
+  }
+  out = parsed_id;
   return true;
 }
 
@@ -104,11 +166,23 @@ std::vector<SourceObservation> OdasMessageParser::parseOneObject(const std::stri
 {
   std::vector<SourceObservation> out;
   double ts_sec = 0.0;
+  const bool has_timestamp = json_object.find("\"timeStamp\"") != std::string::npos;
   if (!extractNumber(json_object, "timeStamp", ts_sec))
   {
+    if (has_timestamp)
+    {
+      return out;
+    }
     ts_sec = 0.0;
   }
-  const std::uint64_t ts_ns = static_cast<std::uint64_t>(std::max(0.0, ts_sec) * 1'000'000'000.0);
+  constexpr long double kNanosPerSecond = 1'000'000'000.0L;
+  const long double timestamp_ns = static_cast<long double>(ts_sec) * kNanosPerSecond;
+  if (timestamp_ns < 0.0L ||
+      timestamp_ns > static_cast<long double>(std::numeric_limits<std::uint64_t>::max()))
+  {
+    return out;
+  }
+  const std::uint64_t ts_ns = static_cast<std::uint64_t>(timestamp_ns);
 
   const auto src_pos = json_object.find("\"src\"");
   if (src_pos == std::string::npos)
@@ -149,7 +223,7 @@ std::vector<SourceObservation> OdasMessageParser::parseOneObject(const std::stri
         extractNumber(src_obj, "activity", activity))
     {
       const double az = std::atan2(y, x) * (180.0 / kPi);
-      const double xy = std::sqrt((x * x) + (y * y));
+      const double xy = std::hypot(x, y);
       const double el = std::atan2(z, xy) * (180.0 / kPi);
       obs.source_id = id;
       obs.azimuth_deg = static_cast<float>(NormalizeAzimuthDeg(az));
@@ -165,7 +239,22 @@ std::vector<SourceObservation> OdasMessageParser::parseOneObject(const std::stri
 
 std::vector<SourceObservation> OdasMessageParser::feed(const std::string_view bytes)
 {
-  buffer_.append(bytes.data(), bytes.size());
+  const std::size_t max_buffer_bytes = std::max<std::size_t>(1, max_buffer_bytes_);
+  if (bytes.size() >= max_buffer_bytes)
+  {
+    buffer_.assign(bytes.data() + (bytes.size() - max_buffer_bytes), max_buffer_bytes);
+    ++overflow_resync_count_;
+  }
+  else
+  {
+    const std::size_t available = max_buffer_bytes - bytes.size();
+    if (buffer_.size() > available)
+    {
+      buffer_.erase(0, buffer_.size() - available);
+      ++overflow_resync_count_;
+    }
+    buffer_.append(bytes.data(), bytes.size());
+  }
   std::vector<SourceObservation> out;
 
   std::size_t start = 0;
@@ -183,6 +272,11 @@ std::vector<SourceObservation> OdasMessageParser::feed(const std::string_view by
       if (open > 0)
       {
         buffer_.erase(0, open);
+      }
+      else if (buffer_.size() >= max_buffer_bytes)
+      {
+        buffer_.erase(0, 1);
+        ++overflow_resync_count_;
       }
       break;
     }

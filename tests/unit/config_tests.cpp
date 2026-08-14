@@ -13,6 +13,7 @@ void RunCalibrationTests();
 void RunBeamformerTests();
 void RunLimiterTests();
 void RunOdasParserTests();
+void RunSourceTrackerTests();
 void RunControlLoopTests();
 void RunZoneTests();
 void RunStateMachineTests();
@@ -343,6 +344,7 @@ int main()
     RunSuppressorTests();
     RunLimiterTests();
     RunOdasParserTests();
+    RunSourceTrackerTests();
     RunControlLoopTests();
     RunZoneTests();
     RunStateMachineTests();

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
@@ -25,6 +26,7 @@ struct ConversationInput
 {
   bool has_track = false;
   audio::BeamformerSteering track{};
+  float confidence = 0.0F;
   float speech_probability = 0.0F;
 };
 
@@ -40,6 +42,8 @@ class ConversationStateMachine
  private:
   void transitionTo(ConversationState next);
   bool directionStable(float azimuth_deg) const;
+  static bool isFocusEligible(const std::optional<ResolvedZone>& zone);
+  static bool isAmbientZone(const std::optional<ResolvedZone>& zone);
 
   app::StateMachineConfig config_{};
   float ambient_floor_linear_ = 0.25F;
