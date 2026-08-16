@@ -18,6 +18,7 @@ enum class OwnVoiceHealth : std::uint8_t
 // deliberately does not multiply ConversationState variants.
 struct OwnVoiceState
 {
+  // Distance-derived similarity score in [0, 1]; not a posterior probability.
   float probability = 0.0F;
   std::uint64_t generation = 0;
   std::uint64_t observed_ns = 0;

@@ -41,7 +41,7 @@ Multi-microphone/multi-sensor in-ear OVD has been demonstrated with short frame-
 
 ## 4. Canonical signal model
 
-For calibrated microphone (m\),
+For calibrated microphone \(m\),
 
 \[
 x_m(f)=H_{t,m}(f)s_t(f)+H_{o,m}(f)s_o(f)+H_{d,m}(f)s_d(f)+v_m(f).
@@ -57,7 +57,7 @@ r_t=W_t^H x, \qquad r_o=W_o^H x, \qquad r_d=W_d^H x.
 
 ## 5. OVTF/RATF representation
 
-For reference microphone (q\), the measured relative transfer function is
+For reference microphone \(q\), the measured relative transfer function is
 
 \[
 R_{o,m}(f)=\frac{H_{o,m}(f)}{H_{o,q}(f)}.
@@ -73,6 +73,7 @@ p_o=\exp(-d^2/2).
 \]
 
 The production feature selection, bin rejection, means, variances, and weights are all `TODO(TBD_FROM_HARDWARE_EVIDENCE)`. A clustered or speech-dependent model may replace the diagonal model without changing the state/channel contracts.
+Disabled features use a zero weight and are skipped by scoring; only enabled features require positive inverse variance.
 
 ## 6. Own-voice reference extractor
 
@@ -92,13 +93,13 @@ The current code provides the worker-owned processing primitives, not a second l
 
 | Field/state | Meaning |
 |---|---|
-| `probability` | Calibrated model similarity in `[0,1]`; not an accuracy claim |
+| `probability` | Distance-derived similarity score `exp(-d^2/2)` in `[0,1]`; not a posterior probability or accuracy claim |
 | `active` | Hysteretic wearer-speech decision |
 | `Healthy` | Valid, non-stale observation and usable model |
 | `Disabled` | Deliberately disabled; RT cancellation must bypass |
 | `ModelUnavailable` | Enabled path lacks a usable calibrated model |
 | `InvalidObservation` | Non-finite or contract-invalid input; fail inactive |
-| `Stale` | No fresh update within the configured timeout; fail inactive |
+| `Stale` | A previously healthy state exceeded the timeout without a fresher healthy update; fail inactive |
 
 ## 9. Multi-reference cancellation
 
@@ -113,6 +114,8 @@ The v1 bound is exactly two interference references:
 - `HOLD`: apply the current estimate without coefficient updates;
 - `DECAY`: apply the estimate while leaking coefficients toward zero;
 - `BYPASS`: do not subtract that reference and decay retained coefficients.
+
+`cancellation_mix == 0` mutes subtraction for that reference but does not force adaptation off; adaptation remains controlled by the per-reference state so muted tracking can be retained without applying cancellation.
 
 No arbitrary-N source machinery is introduced.
 
@@ -179,9 +182,9 @@ The first-syllable limitation is causal. `own_ref` remains continuous; retained 
 Fail-safe rules:
 
 - missing/incompatible calibration: OVD disabled, own cancellation bypassed;
-- invalid observation: publish inactive/unhealthy state;
+- invalid observation (non-finite data, duplicate/replayed sequence, or backward timestamp): publish inactive/unhealthy state;
 - RT->OVD queue full: drop observation, never block audio;
-- stale detector state: inactive/stale, own cancellation bypassed;
+- stale detector state: healthy state timed out -> inactive/stale, own cancellation bypassed;
 - state queue full: retain last state only until its stale deadline;
 - suppressor input mismatch/non-finite data: return failure and do not claim valid cancellation;
 - ODAS stale while OVD healthy: preserve/hold external focus according to the existing ODAS failsafe, never acquire the wearer;

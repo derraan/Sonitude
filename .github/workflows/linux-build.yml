@@ -89,7 +89,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config clang-18 libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
-      - name: Run integrated concurrency and lifecycle tests under TSan
+      - name: Run concurrency and OVD tests under TSan
         run: >
           bash scripts/run_sanitizer_tests.sh thread
           -G Ninja

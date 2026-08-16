@@ -38,13 +38,19 @@ public:
 
 private:
   OwnVoiceState makeUnhealthy(OwnVoiceHealth health, std::uint64_t observed_ns) noexcept;
+  // exp(-d^2/2) similarity score in [0, 1], not a calibrated posterior.
   float probability(const OwnVoiceObservation& observation) const noexcept;
 
   OwnVoiceDetectorConfig config_{};
   StatisticalOvtfModel model_{};
   OwnVoiceState state_{};
+  std::uint64_t last_sequence_ = 0;
+  std::uint64_t last_observed_ns_ = 0;
+  bool has_observation_ = false;
   std::uint64_t activation_candidate_ns_ = 0;
   std::uint64_t release_candidate_ns_ = 0;
+  bool activation_candidate_valid_ = false;
+  bool release_candidate_valid_ = false;
   bool configured_ = false;
 };
 } // namespace sonitude::ovd

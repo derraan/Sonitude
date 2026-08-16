@@ -11,7 +11,7 @@ namespace
 bool Elapsed(const std::uint64_t now_ns, const std::uint64_t start_ns,
              const std::uint64_t duration_ns) noexcept
 {
-  return start_ns != 0U && now_ns >= start_ns && (now_ns - start_ns) >= duration_ns;
+  return now_ns >= start_ns && (now_ns - start_ns) >= duration_ns;
 }
 } // namespace
 
@@ -21,8 +21,13 @@ void OwnVoiceDetector::configure(const OwnVoiceDetectorConfig& config,
   config_ = config;
   model_ = model;
   state_ = {};
+  last_sequence_ = 0;
+  last_observed_ns_ = 0;
+  has_observation_ = false;
   activation_candidate_ns_ = 0;
   release_candidate_ns_ = 0;
+  activation_candidate_valid_ = false;
+  release_candidate_valid_ = false;
 
   if (!config_.enabled)
   {
@@ -51,12 +56,23 @@ void OwnVoiceDetector::configure(const OwnVoiceDetectorConfig& config,
   for (std::size_t feature = 0; feature < kOwnVoiceFeatureCount; ++feature)
   {
     if (!std::isfinite(model_.feature_mean[feature]) ||
-        !std::isfinite(model_.feature_inverse_variance[feature]) ||
-        !std::isfinite(model_.feature_weight[feature]) ||
-        model_.feature_inverse_variance[feature] <= 0.0F || model_.feature_weight[feature] < 0.0F)
+        !std::isfinite(model_.feature_weight[feature]) || model_.feature_weight[feature] < 0.0F)
     {
-      throw std::runtime_error("OVD model statistics must be finite with positive variances");
+      throw std::runtime_error(
+          "OVD model statistics must have finite means and non-negative weights");
     }
+
+    if (model_.feature_weight[feature] == 0.0F)
+    {
+      continue;
+    }
+
+    if (!std::isfinite(model_.feature_inverse_variance[feature]) ||
+        model_.feature_inverse_variance[feature] <= 0.0F)
+    {
+      throw std::runtime_error("enabled OVD features must have finite positive inverse variance");
+    }
+
     weight_sum += model_.feature_weight[feature];
   }
   if (!(weight_sum > 0.0F) || !std::isfinite(weight_sum))
@@ -73,11 +89,19 @@ float OwnVoiceDetector::probability(const OwnVoiceObservation& observation) cons
   double weight_sum = 0.0;
   for (std::size_t feature = 0; feature < kOwnVoiceFeatureCount; ++feature)
   {
+    const double weight = static_cast<double>(model_.feature_weight[feature]);
+    if (weight <= 0.0)
+    {
+      continue;
+    }
+    const double inverse_variance = static_cast<double>(model_.feature_inverse_variance[feature]);
+    if (!(inverse_variance > 0.0) || !std::isfinite(inverse_variance))
+    {
+      return 0.0F;
+    }
     const double delta = static_cast<double>(observation.features[feature]) -
                          static_cast<double>(model_.feature_mean[feature]);
-    const double weight = static_cast<double>(model_.feature_weight[feature]);
-    weighted_distance +=
-        weight * delta * delta * static_cast<double>(model_.feature_inverse_variance[feature]);
+    weighted_distance += weight * delta * delta * inverse_variance;
     weight_sum += weight;
   }
   if (!(weight_sum > 0.0) || !std::isfinite(weighted_distance))
@@ -98,6 +122,8 @@ OwnVoiceState OwnVoiceDetector::makeUnhealthy(const OwnVoiceHealth health,
   state_.health = health;
   activation_candidate_ns_ = 0;
   release_candidate_ns_ = 0;
+  activation_candidate_valid_ = false;
+  release_candidate_valid_ = false;
   return state_;
 }
 
@@ -113,8 +139,16 @@ OwnVoiceState OwnVoiceDetector::evaluate(const OwnVoiceObservation& observation,
   {
     return makeUnhealthy(OwnVoiceHealth::InvalidObservation, observation.observed_ns);
   }
-  if (now_ns < observation.observed_ns ||
-      (now_ns - observation.observed_ns) > config_.stale_timeout_ns)
+  if (now_ns < observation.observed_ns)
+  {
+    return makeUnhealthy(OwnVoiceHealth::InvalidObservation, observation.observed_ns);
+  }
+  if (has_observation_ &&
+      (observation.sequence <= last_sequence_ || observation.observed_ns < last_observed_ns_))
+  {
+    return makeUnhealthy(OwnVoiceHealth::InvalidObservation, observation.observed_ns);
+  }
+  if ((now_ns - observation.observed_ns) > config_.stale_timeout_ns)
   {
     return makeUnhealthy(OwnVoiceHealth::Stale, observation.observed_ns);
   }
@@ -128,44 +162,55 @@ OwnVoiceState OwnVoiceDetector::evaluate(const OwnVoiceObservation& observation,
   if (!state_.active)
   {
     release_candidate_ns_ = 0;
+    release_candidate_valid_ = false;
     if (current_probability >= config_.activation_probability)
     {
-      if (activation_candidate_ns_ == 0U)
+      if (!activation_candidate_valid_)
       {
         activation_candidate_ns_ = observation.observed_ns;
+        activation_candidate_valid_ = true;
       }
       if (Elapsed(observation.observed_ns, activation_candidate_ns_, config_.activation_hold_ns))
       {
         state_.active = true;
         activation_candidate_ns_ = 0;
+        activation_candidate_valid_ = false;
       }
     }
     else
     {
       activation_candidate_ns_ = 0;
+      activation_candidate_valid_ = false;
     }
   }
   else
   {
     activation_candidate_ns_ = 0;
+    activation_candidate_valid_ = false;
     if (current_probability <= config_.release_probability)
     {
-      if (release_candidate_ns_ == 0U)
+      if (!release_candidate_valid_)
       {
         release_candidate_ns_ = observation.observed_ns;
+        release_candidate_valid_ = true;
       }
       if (Elapsed(observation.observed_ns, release_candidate_ns_, config_.release_hold_ns))
       {
         state_.active = false;
         release_candidate_ns_ = 0;
+        release_candidate_valid_ = false;
       }
     }
     else
     {
       release_candidate_ns_ = 0;
+      release_candidate_valid_ = false;
     }
   }
 
+  has_observation_ = true;
+  last_sequence_ = observation.sequence;
+  last_observed_ns_ = observation.observed_ns;
   ++state_.generation;
   state_.probability = current_probability;
   state_.observed_ns = observation.observed_ns;
@@ -176,6 +221,10 @@ OwnVoiceState OwnVoiceDetector::evaluate(const OwnVoiceObservation& observation,
 OwnVoiceState OwnVoiceDetector::stateForTime(const std::uint64_t now_ns) noexcept
 {
   if (!configured_ || !config_.enabled)
+  {
+    return state_;
+  }
+  if (state_.health != OwnVoiceHealth::Healthy)
   {
     return state_;
   }

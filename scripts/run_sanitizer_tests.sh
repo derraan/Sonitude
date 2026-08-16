@@ -50,14 +50,14 @@ for sanitizer in "${sanitizers[@]}"; do
     "${extra_cmake_args[@]}"
   echo "=== building ${sanitizer} ==="
   if [[ "${sanitizer}" == "thread" ]]; then
-    cmake --build "${build_dir}" --target sonitude_concurrency_tests -j "$(nproc)"
+    cmake --build "${build_dir}" --target sonitude_concurrency_tests sonitude_own_voice_tests -j "$(nproc)"
   else
     cmake --build "${build_dir}" -j "$(nproc)"
   fi
   echo "=== running ${sanitizer} ==="
   if [[ "${sanitizer}" == "thread" ]]; then
     TSAN_OPTIONS="halt_on_error=1" run_no_aslr \
-      ctest --test-dir "${build_dir}" --output-on-failure -L concurrency
+      ctest --test-dir "${build_dir}" --output-on-failure -L "concurrency|ovd"
   else
     ASAN_OPTIONS="detect_leaks=1:abort_on_error=1" \
       UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" \
