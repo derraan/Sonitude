@@ -852,8 +852,7 @@ int main(int argc, char** argv)
             ? counters.asrc_ratio_ppm_max.load(std::memory_order_relaxed)
             : 0;
     std::cout
-        << "final_counters:"
-        << " stop_reason=" << sonitude::rt::StopReasonName(reason)
+        << "final_counters:" << " stop_reason=" << sonitude::rt::StopReasonName(reason)
         << " cap_xruns=" << counters.capture_xruns.load(std::memory_order_relaxed)
         << " pb_xruns=" << counters.playback_xruns.load(std::memory_order_relaxed)
         << " pb_write_fail=" << counters.playback_write_failures.load(std::memory_order_relaxed)
