@@ -69,6 +69,8 @@ add_library(
   src/dsp/calibration_applier.cpp
   src/dsp/hrtf_table.cpp
   src/dsp/limiter.cpp
+  src/dsp/multi_reference_suppressor.cpp
+  src/dsp/own_voice_reference.cpp
   src/dsp/resampler_linear.cpp
   src/dsp/resampler_cubic.cpp
   src/dsp/resampler_src.cpp
@@ -77,6 +79,8 @@ add_library(
   src/dsp/spectral_postfilter.cpp
   src/dsp/suppression_stage.cpp
   src/dsp/suppressor.cpp
+  src/ovd/own_voice_detector.cpp
+  src/ovd/own_voice_features.cpp
   src/rt/lifecycle.cpp
   src/rt/managed_thread.cpp
   src/rt/scheduling.cpp
@@ -409,6 +413,22 @@ if(SONITUDE_BUILD_TESTS)
     COMMAND sonitude_integration_smoke_tests
   )
   set_tests_properties(sonitude_integration_smoke_tests PROPERTIES LABELS "smoke")
+
+  add_executable(
+    sonitude_own_voice_tests
+    tests/unit/own_voice_tests.cpp
+  )
+  target_link_libraries(
+    sonitude_own_voice_tests
+    PRIVATE
+      sonitude_core
+      Threads::Threads
+  )
+  add_test(
+    NAME sonitude_own_voice_tests
+    COMMAND sonitude_own_voice_tests
+  )
+  set_tests_properties(sonitude_own_voice_tests PROPERTIES LABELS "unit;ovd")
 endif()
 
 if(SONITUDE_BUILD_FUZZERS)

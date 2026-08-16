@@ -1,0 +1,29 @@
+# Architecture-only example. Runtime integration must remain disabled until a
+# Sonitude headset calibration/model file and acceptance evidence exist.
+own_voice:
+  enabled: false
+
+  reference:
+    backend: "fixed_calibrated_spatial_filter"
+    # TODO(TBD_FROM_HARDWARE_EVIDENCE): Set to a versioned model generated from
+    # synchronized, calibrated six-channel Sonitude recordings.
+    calibration_file: ""
+
+  detector:
+    backend: "statistical_ovtf"
+    # TODO(TBD_FROM_HARDWARE_EVIDENCE): Derive all probabilities and time
+    # windows from labelled Sonitude replay data; zero is intentionally invalid
+    # for an enabled detector.
+    activation_probability: 0.0
+    release_probability: 0.0
+    activation_hold_ms: 0
+    release_hold_ms: 0
+    stale_timeout_ms: 0
+
+  cancellation:
+    enabled: false
+    max_interference_references: 2
+    # TODO(TBD_FROM_HARDWARE_EVIDENCE): Establish a target-distortion-safe
+    # limit from own + target + distractor recordings.
+    max_attenuation_db: 0.0
+    adaptation_mode: "target_protected_nlms"
