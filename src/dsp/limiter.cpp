@@ -29,19 +29,21 @@ void PeakLimiter::reset()
   gain_ = 1.0F;
 }
 
-void PeakLimiter::process(const std::span<float> mono)
+LimiterTelemetry PeakLimiter::process(const std::span<float> mono)
 {
   if (!configured_)
   {
     throw std::runtime_error("Limiter used before configure");
   }
 
+  LimiterTelemetry telemetry{};
   for (float& sample : mono)
   {
     const float amplitude = std::fabs(sample);
     float target_gain = 1.0F;
     if (amplitude > config_.ceiling_linear)
     {
+      ++telemetry.input_over_ceiling_events;
       target_gain = config_.ceiling_linear / amplitude;
     }
 
@@ -55,6 +57,52 @@ void PeakLimiter::process(const std::span<float> mono)
     }
 
     sample *= gain_;
+    if (std::fabs(sample) > 1.0F)
+    {
+      ++telemetry.output_saturation_events;
+    }
   }
+  return telemetry;
+}
+
+LimiterTelemetry PeakLimiter::processLinkedStereo(const std::span<StereoSample> stereo)
+{
+  if (!configured_)
+  {
+    throw std::runtime_error("Limiter used before configure");
+  }
+
+  LimiterTelemetry telemetry{};
+  for (StereoSample& sample : stereo)
+  {
+    const float frame_peak = std::max(std::fabs(sample.left), std::fabs(sample.right));
+    float target_gain = 1.0F;
+    if (frame_peak > config_.ceiling_linear)
+    {
+      ++telemetry.input_over_ceiling_events;
+      target_gain = config_.ceiling_linear / frame_peak;
+    }
+
+    if (target_gain < gain_)
+    {
+      gain_ = target_gain;
+    }
+    else
+    {
+      gain_ = std::min(1.0F, gain_ + release_step_per_sample_);
+    }
+
+    sample.left *= gain_;
+    sample.right *= gain_;
+    if (std::fabs(sample.left) > 1.0F)
+    {
+      ++telemetry.output_saturation_events;
+    }
+    if (std::fabs(sample.right) > 1.0F)
+    {
+      ++telemetry.output_saturation_events;
+    }
+  }
+  return telemetry;
 }
 }  // namespace sonitude::dsp

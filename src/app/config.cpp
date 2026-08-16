@@ -1,6 +1,7 @@
 #include "app/config.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <stdexcept>
 #include <unordered_set>
@@ -109,6 +110,19 @@ std::string ResolvePath(const std::string& base_file, const std::string& candida
 
   const std::filesystem::path base_path(base_file);
   return (base_path.parent_path() / candidate_path).lexically_normal().string();
+}
+
+bool IsFinite(const double value)
+{
+  return std::isfinite(value);
+}
+
+void RequireFinite(const double value, const char* name)
+{
+  if (!IsFinite(value))
+  {
+    throw std::runtime_error(std::string(name) + " must be finite");
+  }
 }
 } // namespace
 
@@ -257,10 +271,22 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     }
   }
 
+  RequireFinite(config.asrc.min_ratio, "asrc.min_ratio");
+  RequireFinite(config.asrc.max_ratio, "asrc.max_ratio");
+  RequireFinite(config.asrc.pi_kp, "asrc.pi_kp");
+  RequireFinite(config.asrc.pi_ki, "asrc.pi_ki");
+  if (config.asrc.pi_kp < 0.0 || config.asrc.pi_ki < 0.0)
+  {
+    throw std::runtime_error("ASRC PI gains must be non-negative");
+  }
   if (config.asrc.min_ratio <= 0.0 || config.asrc.max_ratio <= 0.0 ||
       config.asrc.min_ratio >= config.asrc.max_ratio)
   {
     throw std::runtime_error("ASRC ratio bounds are invalid");
+  }
+  if (config.asrc.min_ratio >= 1.0 || config.asrc.max_ratio <= 1.0)
+  {
+    throw std::runtime_error("ASRC ratio bounds must straddle unity ratio");
   }
 
   if (config.asrc.target_buffer_frames == 0)
@@ -268,9 +294,16 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     throw std::runtime_error("ASRC target buffer must be non-zero");
   }
 
+  RequireFinite(config.calibration_dc_block_hz, "calibration_dc_block_hz");
   if (config.calibration_dc_block_hz <= 0.0F || config.calibration_dc_block_hz > 500.0F)
   {
     throw std::runtime_error("calibration_dc_block_hz must be in (0, 500]");
+  }
+
+  RequireFinite(config.steering.speed_of_sound_mps, "steering.speed_of_sound_mps");
+  if (config.steering.speed_of_sound_mps <= 100.0F || config.steering.speed_of_sound_mps > 500.0F)
+  {
+    throw std::runtime_error("steering.speed_of_sound_mps must be in (100, 500]");
   }
 
   if (config.steering.reference_mic_index >= config.active_channel_map.size())
@@ -278,26 +311,31 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     throw std::runtime_error("reference_mic_index is out of active channel map range");
   }
 
+  RequireFinite(config.steering.steering_ramp_ms, "steering.steering_ramp_ms");
   if (config.steering.steering_ramp_ms < 10.0F || config.steering.steering_ramp_ms > 500.0F)
   {
     throw std::runtime_error("steering_ramp_ms is outside safe bounds");
   }
 
+  RequireFinite(config.steering.ambient_floor_linear, "steering.ambient_floor_linear");
   if (config.steering.ambient_floor_linear < 0.0F || config.steering.ambient_floor_linear > 1.0F)
   {
     throw std::runtime_error("ambient_floor_linear must be in [0, 1]");
   }
 
+  RequireFinite(config.suppression.fade_ms, "suppression.fade_ms");
   if (config.suppression.fade_ms < 1.0F || config.suppression.fade_ms > 1000.0F)
   {
     throw std::runtime_error("suppression.fade_ms must be in [1, 1000]");
   }
 
+  RequireFinite(config.suppression.activity_threshold, "suppression.activity_threshold");
   if (config.suppression.activity_threshold < 0.0F || config.suppression.activity_threshold > 1.0F)
   {
     throw std::runtime_error("suppression.activity_threshold must be in [0, 1]");
   }
 
+  RequireFinite(config.suppression.confidence_threshold, "suppression.confidence_threshold");
   if (config.suppression.confidence_threshold < 0.0F ||
       config.suppression.confidence_threshold > 1.0F)
   {
@@ -309,7 +347,13 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error("state machine activation and confirmation holds must be non-zero");
   }
+  if (config.state_machine.release_hold_ms == 0 || config.state_machine.hold_direction_ms == 0)
+  {
+    throw std::runtime_error("state machine release and hold-direction windows must be non-zero");
+  }
 
+  RequireFinite(config.state_machine.zone_direction_stability_deg,
+                "state_machine.zone_direction_stability_deg");
   if (config.state_machine.zone_direction_stability_deg <= 0.0F ||
       config.state_machine.zone_direction_stability_deg > 180.0F)
   {
@@ -333,6 +377,15 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     throw std::runtime_error(
         "realtime.require_memory_lock=true requires realtime.enable_mlockall=true");
   }
+  if (config.telemetry.stats_period_ms == 0)
+  {
+    throw std::runtime_error("telemetry.stats_period_ms must be non-zero");
+  }
+  if (config.realtime.rt_stack_kib == 0 || config.realtime.rt_prefault_kib == 0 ||
+      config.realtime.startup_timeout_ms == 0)
+  {
+    throw std::runtime_error("realtime stack, prefault, and startup timeout must be non-zero");
+  }
 
   if (config.zones.empty())
   {
@@ -345,6 +398,8 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     {
       throw std::runtime_error("zone name cannot be empty");
     }
+    RequireFinite(zone.azimuth_min_deg, "zone.azimuth_min_deg");
+    RequireFinite(zone.azimuth_max_deg, "zone.azimuth_max_deg");
     if (zone.azimuth_min_deg < -180.0F || zone.azimuth_min_deg > 360.0F ||
         zone.azimuth_max_deg < -180.0F || zone.azimuth_max_deg > 360.0F)
     {
@@ -436,6 +491,9 @@ void ValidateGeometryConfig(const GeometryConfig& geometry)
     {
       throw std::runtime_error("geometry microphone ids must be unique");
     }
+    RequireFinite(mic.x, "geometry.x");
+    RequireFinite(mic.y, "geometry.y");
+    RequireFinite(mic.z, "geometry.z");
   }
 }
 } // namespace sonitude::app

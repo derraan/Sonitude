@@ -20,3 +20,8 @@ Thumbs.db
 
 # Firmware local capture artifacts
 /mic-array-pico2w-usb6ch/inmp441_test_capture.wav
+/config/production_pi.local.yaml
+/config/production_pi.*.local.yaml
+/config/geometry_soundbubble_local.yaml
+/config/geometry_soundbubble_corrected.yaml
+/config/calibration_gain_test.yaml

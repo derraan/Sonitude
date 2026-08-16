@@ -33,7 +33,7 @@ flowchart TB
         Odas["ODAS or MockDoaProvider"]
         Parser["SST parser / source tracker"]
         SM["Conversation state machine\n+ ZoneMap + VAD"]
-        Snap["Steering snapshot\nseqlock publish"]
+        Snap["SteeringChannel publish\nlatest-wins SPSC"]
     end
 
     subgraph offline [Offline / diagnostics]
@@ -74,7 +74,7 @@ flowchart TB
 | **Beamformer**       | Align mics in time for steering angle; sum with 1/6 weights → mono (M4)                     |
 | **ASRC**             | PI controller adjusts playback resample ratio so capture/playback clock drift does not XRUN |
 | **Passthrough mode** | Today: ear-cup mics 4/5 to L/R, bypasses beamformer (`--mode passthrough`)                  |
-| **Control**          | ODAS/mock → tracker → state machine → atomic snapshot; audio thread reads snapshot only     |
+| **Control**          | ODAS/mock → tracker → state machine → `SteeringChannel`; audio thread drains latest only     |
 
 
 **Clock rule:** Pico and DAC clocks are independent (~tens of ppm). Never drop/duplicate samples for drift — use bounded ASRC ratio control (default ±0.5%).
@@ -120,10 +120,11 @@ On-target speech adds coherently; off-axis energy is partially rejected (exact c
 
 Conservative **distractor suppression** after beamforming, with explicit user selection and an **ambient floor**. v1 avoids MVDR/nulling and neural processing (**SCOPE-3**).
 
-### Stage 5 — Mono → stereo
+### Stage 5 — Output staging and stereo
 
-- `--mode passthrough` **(today):** taps ear-cup mics 4 and 5 to L/R in `main.cpp` — no beamformer.
-- `--mode beamform` **(implemented):** duplicate mono beam to both channels (no HRTF in v1).
+- `--mode passthrough`: taps calibrated ear-cup mics 4 and 5 to L/R in `main.cpp`.
+- `--mode beamform`: duplicate mono beam to both channels (no HRTF in v1).
+- Both modes pass through the same linked-stereo peak-limiter stage.
 
 
 
@@ -183,8 +184,13 @@ The production launcher explicitly uses `config/production_pi.yaml`. It fails
 startup unless `mlockall(MCL_CURRENT | MCL_FUTURE)` succeeds and both audio
 threads obtain their requested FIFO policies. Before accepting a Pi run, the
 printed scheduling table must show capture `SCHED_FIFO/80`, playback
-`SCHED_FIFO/78`, and control/telemetry `SCHED_OTHER/0`, with no `DEGRADED`
-thread.
+`SCHED_FIFO/78`, and telemetry `SCHED_OTHER/0` in passthrough mode; beamform
+adds control at `SCHED_OTHER/0`. No row should show `DEGRADED`.
+
+The tracked Pi baseline profile uses `hw:active,0` capture, `hw:X1,0`
+playback, reverse map `[5,4,3,2,1,0]`, `geometry_soundbubble_xyz_v1.yaml`, and
+`calibration_example.yaml`. Re-check card identities with `arecord -l` and
+`aplay -l` if hardware identity changes.
 
 
 
@@ -210,8 +216,8 @@ Veto checkboxes and override log: `docs/CodebaseState.md` [§1](docs/CodebaseSta
 
 See the [Milestones](#milestones) table above. Quick summary:
 
-- **Implemented:** scaffold, typed config, ALSA probe/workers, RT primitives (SPSC, block pool), ASRC + resampler, calibration load/apply/WAV tools, passthrough mode, unit tests.
-- **In progress / pending gates:** Pi hardware soak (M1–M3), M4/M7 hardware evidence, M5 ODAS control gate, M6 state machine gate, M8 latency measurement.
+- **Implemented:** typed config validation, split capture/playback realtime workers, control and telemetry supervisor threads, ASRC + resampler, calibration load/apply/WAV tools, passthrough/beamform runtime modes, and unit/integration coverage.
+- **In progress / pending gates:** one-hour passthrough and beamform soaks, corrected-geometry beam evidence, scripted/live ODAS gates, current six-active-channel calibration capture, fault-injection gates, and latency measurement.
 
 
 

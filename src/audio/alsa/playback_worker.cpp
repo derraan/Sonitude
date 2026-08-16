@@ -81,9 +81,20 @@ bool PlaybackWorker::writeStereo(std::span<const dsp::StereoSample> input,
     output_count = rr.produced;
   }
 
-  counters_->asrc_ratio_ppm.store(
-      static_cast<std::int64_t>(std::llround((ratio - 1.0) * 1'000'000.0)),
-      std::memory_order_relaxed);
+  const std::int64_t asrc_ratio_ppm =
+      static_cast<std::int64_t>(std::llround((ratio - 1.0) * 1'000'000.0));
+  counters_->asrc_ratio_ppm.store(asrc_ratio_ppm, std::memory_order_relaxed);
+  if (counters_->asrc_ratio_ppm_has_sample.load(std::memory_order_relaxed) == 0U)
+  {
+    counters_->asrc_ratio_ppm_min.store(asrc_ratio_ppm, std::memory_order_relaxed);
+    counters_->asrc_ratio_ppm_max.store(asrc_ratio_ppm, std::memory_order_relaxed);
+    counters_->asrc_ratio_ppm_has_sample.store(1U, std::memory_order_relaxed);
+  }
+  else
+  {
+    rt::StoreMinRelaxed(counters_->asrc_ratio_ppm_min, asrc_ratio_ppm);
+    rt::StoreMaxRelaxed(counters_->asrc_ratio_ppm_max, asrc_ratio_ppm);
+  }
   counters_->ring_occupancy_frames.store(static_cast<std::int64_t>(occupancy_frames),
                                          std::memory_order_relaxed);
 

@@ -196,7 +196,7 @@ public:
     BlockRef ref{};
     if (!ready_blocks_.pop(ref))
     {
-      starvation_.fetch_add(1, std::memory_order_relaxed);
+      playback_empty_waits_.fetch_add(1, std::memory_order_relaxed);
       return false;
     }
     owners_[ref.slot].store(BlockOwner::Consumer, std::memory_order_relaxed);
@@ -266,9 +266,9 @@ public:
   {
     return pool_exhausted_.load(std::memory_order_relaxed);
   }
-  std::uint64_t starvationCount() const noexcept
+  std::uint64_t playbackEmptyWaitCount() const noexcept
   {
-    return starvation_.load(std::memory_order_relaxed);
+    return playback_empty_waits_.load(std::memory_order_relaxed);
   }
   std::uint64_t commitFailureCount() const noexcept
   {
@@ -320,7 +320,8 @@ private:
   std::atomic<std::size_t> ready_high_water_{0};
   // Written by the consumer only.
   std::atomic<std::uint64_t> frames_taken_{0};
-  std::atomic<std::uint64_t> starvation_{0};
+  // Count of consumer checks that found no ready software block before waiting.
+  std::atomic<std::uint64_t> playback_empty_waits_{0};
 
   static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
                 "block accounting is updated by realtime threads and must be lock-free");

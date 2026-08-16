@@ -256,12 +256,12 @@ void TestProducerBlocksWhenConsumerNeverReleases()
 
 void TestConsumerStarvesWhenProducerIsSlow()
 {
-  // Playback outrunning the producer: take() must report starvation rather than
+  // Playback outrunning the producer: take() must report an empty-ready wait rather than
   // hand back a stale or half-written block.
   TestChannel channel(4, 4);
   sonitude::rt::BlockRef ref{};
   Require(!channel.take(ref), "an empty ready queue must not yield a block");
-  Require(channel.starvationCount() == 1U, "starvation must be counted");
+  Require(channel.playbackEmptyWaitCount() == 1U, "empty ready-queue waits must be counted");
 
   std::uint32_t slot = 0;
   Require(channel.acquire(slot), "acquire must succeed");

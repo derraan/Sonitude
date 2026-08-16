@@ -1,7 +1,10 @@
 #include <exception>
+#include <functional>
 #include <iostream>
+#include <cmath>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
@@ -35,6 +38,28 @@ void Require(bool condition, const std::string& message)
   if (!condition)
   {
     throw std::runtime_error(message);
+  }
+}
+
+void RequireThrowsContains(const std::string& expected, const std::function<void()>& fn,
+                           const std::string& message)
+{
+  bool threw = false;
+  try
+  {
+    fn();
+  }
+  catch (const std::exception& ex)
+  {
+    threw = true;
+    if (ex.what() == nullptr || std::string(ex.what()).find(expected) == std::string::npos)
+    {
+      throw std::runtime_error(message + ": unexpected error '" + std::string(ex.what()) + "'");
+    }
+  }
+  if (!threw)
+  {
+    throw std::runtime_error(message + ": expected an exception");
   }
 }
 
@@ -75,6 +100,29 @@ void TestProductionRealtimeContract()
     threw = true;
   }
   Require(threw, "require_memory_lock without enable_mlockall must be rejected");
+}
+
+void TestProductionPiProfileMatchesValidatedHardware()
+{
+  const auto config =
+      sonitude::app::LoadRuntimeConfigFromFile(FixturePath("config/production_pi.yaml"));
+  Require(config.capture.alsa_device == "hw:active,0",
+          "production capture ALSA device must match Pi-tested identity");
+  Require(config.playback.alsa_device == "hw:X1,0",
+          "production playback ALSA device must match Pi-tested identity");
+  Require(config.active_channel_map == std::vector<std::size_t>({5, 4, 3, 2, 1, 0}),
+          "production active_channel_map must match the Pi-tested reverse map");
+  Require(config.geometry_path.find("geometry_soundbubble_xyz_v1.yaml") != std::string::npos,
+          "production geometry path must use the corrected XYZ profile");
+  Require(config.calibration_path.find("calibration_example.yaml") != std::string::npos,
+          "production calibration path must use the unity fixture");
+  Require(!config.odas.enabled, "production profile must keep ODAS disabled for baseline gates");
+  Require(!config.suppression.enabled,
+          "production profile must keep suppression disabled for baseline gates");
+  Require(config.realtime.require_realtime,
+          "production profile must fail closed when realtime policy cannot be obtained");
+  Require(config.realtime.enable_mlockall && config.realtime.require_memory_lock,
+          "production profile must fail closed when memory lock is unavailable");
 }
 
 void TestRuntimeConfigDuplicateChannelFails()
@@ -282,17 +330,42 @@ void TestRuntimeAudioContractHeadroom()
 
 void TestRuntimeConfigOdasContradictionFails()
 {
-  bool threw = false;
-  try
-  {
-    (void)sonitude::app::LoadRuntimeConfigFromFile(
-        FixturePath("tests/fixtures/runtime_invalid_odas_disabled_real.yaml"));
-  }
-  catch (const std::exception&)
-  {
-    threw = true;
-  }
-  Require(threw, "odas.enabled=false with use_mock_provider=false should throw");
+  RequireThrowsContains(
+      "contradictory provider settings",
+      [&]()
+      {
+        (void)sonitude::app::LoadRuntimeConfigFromFile(
+            FixturePath("tests/fixtures/runtime_invalid_odas_disabled_real.yaml"));
+      },
+      "odas.enabled=false with use_mock_provider=false should throw a specific validation error");
+}
+
+void TestRuntimeConfigRejectsNonFiniteAndZeroInvalidFields()
+{
+  RequireThrowsContains(
+      "asrc.min_ratio must be finite",
+      [&]()
+      {
+        (void)sonitude::app::LoadRuntimeConfigFromFile(
+            FixturePath("tests/fixtures/runtime_invalid_asrc_nan.yaml"));
+      },
+      "runtime config should reject non-finite ASRC ratio bounds");
+  RequireThrowsContains(
+      "steering.speed_of_sound_mps must be in (100, 500]",
+      [&]()
+      {
+        (void)sonitude::app::LoadRuntimeConfigFromFile(
+            FixturePath("tests/fixtures/runtime_invalid_steering_speed_zero.yaml"));
+      },
+      "runtime config should reject non-physical steering speed");
+  RequireThrowsContains(
+      "telemetry.stats_period_ms must be non-zero",
+      [&]()
+      {
+        (void)sonitude::app::LoadRuntimeConfigFromFile(
+            FixturePath("tests/fixtures/runtime_invalid_telemetry_period_zero.yaml"));
+      },
+      "runtime config should reject zero telemetry period");
 }
 
 void TestGeometryValid()
@@ -301,6 +374,37 @@ void TestGeometryValid()
       sonitude::app::LoadGeometryFromFile(FixturePath("tests/fixtures/geometry_valid.yaml"));
   Require(geometry.microphones.size() == sonitude::audio::kMicChannels,
           "valid geometry did not load six microphones");
+}
+
+void TestProductionGeometryFrame()
+{
+  const auto geometry =
+      sonitude::app::LoadGeometryFromFile(FixturePath("config/geometry_soundbubble_xyz_v1.yaml"));
+  Require(geometry.microphones.size() == 6U, "production geometry must contain six microphones");
+  Require(geometry.microphones.front().id == "M0_upper_inner_left",
+          "production geometry IDs must remain in expected order");
+  std::unordered_set<std::string> ids;
+  bool saw_left = false;
+  bool saw_right = false;
+  for (const auto& mic : geometry.microphones)
+  {
+    Require(std::isfinite(mic.x) && std::isfinite(mic.y) && std::isfinite(mic.z),
+            "production geometry coordinates must be finite");
+    Require(ids.insert(mic.id).second, "production geometry IDs must remain unique");
+    if (mic.id.find("left") != std::string::npos)
+    {
+      Require(mic.y < 0.0, "left microphones must lie on negative Y");
+      saw_left = true;
+    }
+    if (mic.id.find("right") != std::string::npos)
+    {
+      Require(mic.y > 0.0, "right microphones must lie on positive Y");
+      saw_right = true;
+    }
+  }
+  Require(geometry.microphones[0].x > 0.0 && geometry.microphones[1].x > 0.0,
+          "front upper microphones must remain at positive X");
+  Require(saw_left && saw_right, "production geometry must contain both left and right IDs");
 }
 
 void TestGeometryInvalidCountFails()
@@ -318,6 +422,17 @@ void TestGeometryInvalidCountFails()
   Require(threw, "invalid microphone count should throw");
 }
 
+void TestGeometryInvalidNanFails()
+{
+  RequireThrowsContains(
+      "geometry.x must be finite",
+      [&]()
+      {
+        (void)sonitude::app::LoadGeometryFromFile(FixturePath("tests/fixtures/geometry_invalid_nan.yaml"));
+      },
+      "geometry parser should reject non-finite coordinates");
+}
+
 void TestAudioTypeInvariants()
 {
   sonitude::audio::MicFrame frame{};
@@ -331,12 +446,16 @@ int main()
   {
     TestRuntimeConfigValid();
     TestProductionRealtimeContract();
+    TestProductionPiProfileMatchesValidatedHardware();
     TestRuntimeConfigDuplicateChannelFails();
     TestRuntimeAudioContract();
     TestRuntimeAudioContractHeadroom();
     TestRuntimeConfigOdasContradictionFails();
+    TestRuntimeConfigRejectsNonFiniteAndZeroInvalidFields();
     TestGeometryValid();
+    TestProductionGeometryFrame();
     TestGeometryInvalidCountFails();
+    TestGeometryInvalidNanFails();
     TestAudioTypeInvariants();
     RunAudioSupportTests();
     RunRtPrimitiveTests();

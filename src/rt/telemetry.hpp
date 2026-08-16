@@ -34,12 +34,14 @@ struct TelemetryCounters
   std::atomic<std::uint64_t> capture_overflow_refusals{0};
 
   // Block ownership pipeline.
-  std::atomic<std::uint64_t> ring_overruns{0};  // producer had no free slot
-  std::atomic<std::uint64_t> ring_underruns{0}; // playback had no ready block
-  std::atomic<std::uint64_t> block_commit_failures{0};
+  std::atomic<std::uint64_t> limiter_input_over_ceiling_events{0};
+  std::atomic<std::uint64_t> limiter_output_saturation_events{0};
 
   // ASRC.
   std::atomic<std::int64_t> asrc_ratio_ppm{0};
+  std::atomic<std::int64_t> asrc_ratio_ppm_min{0};
+  std::atomic<std::int64_t> asrc_ratio_ppm_max{0};
+  std::atomic<std::uint8_t> asrc_ratio_ppm_has_sample{0};
   std::atomic<std::int64_t> ring_occupancy_frames{0};
 
   // Loop timing, in microseconds, sampled by the owning realtime thread.
@@ -69,6 +71,24 @@ inline void StoreMaxRelaxed(std::atomic<std::uint64_t>& target, const std::uint6
 {
   std::uint64_t current = target.load(std::memory_order_relaxed);
   while (value > current && !target.compare_exchange_weak(current, value, std::memory_order_relaxed,
+                                                          std::memory_order_relaxed))
+  {
+  }
+}
+
+inline void StoreMaxRelaxed(std::atomic<std::int64_t>& target, const std::int64_t value) noexcept
+{
+  std::int64_t current = target.load(std::memory_order_relaxed);
+  while (value > current && !target.compare_exchange_weak(current, value, std::memory_order_relaxed,
+                                                          std::memory_order_relaxed))
+  {
+  }
+}
+
+inline void StoreMinRelaxed(std::atomic<std::int64_t>& target, const std::int64_t value) noexcept
+{
+  std::int64_t current = target.load(std::memory_order_relaxed);
+  while (value < current && !target.compare_exchange_weak(current, value, std::memory_order_relaxed,
                                                           std::memory_order_relaxed))
   {
   }

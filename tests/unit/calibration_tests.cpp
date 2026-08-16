@@ -1,4 +1,5 @@
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <span>
@@ -86,6 +87,61 @@ void TestCalibrationRejectsDuplicateIds()
   Require(rejected, "calibration validation must reject duplicate microphone IDs");
 }
 
+void TestCalibrationRejectsNonFiniteAndOutOfRangeValues()
+{
+  sonitude::app::CalibrationConfig calibration;
+  calibration.sample_rate_hz = 44100;
+  const auto ids = ChannelIds();
+  for (const auto& id : ids)
+  {
+    sonitude::app::CalibrationChannel channel;
+    channel.id = id;
+    channel.polarity = 1;
+    channel.gain_linear = 1.0F;
+    channel.delay_samples = 0.0F;
+    channel.dc_offset = 0.0F;
+    calibration.channels.push_back(channel);
+  }
+
+  calibration.channels[0].gain_linear = std::numeric_limits<float>::infinity();
+  bool rejected_gain = false;
+  try
+  {
+    sonitude::app::ValidateCalibrationConfig(calibration, ids, 44100);
+  }
+  catch (const std::runtime_error&)
+  {
+    rejected_gain = true;
+  }
+  Require(rejected_gain, "calibration validation must reject non-finite gain");
+
+  calibration.channels[0].gain_linear = 1.0F;
+  calibration.channels[1].delay_samples = std::numeric_limits<float>::quiet_NaN();
+  bool rejected_delay = false;
+  try
+  {
+    sonitude::app::ValidateCalibrationConfig(calibration, ids, 44100);
+  }
+  catch (const std::runtime_error&)
+  {
+    rejected_delay = true;
+  }
+  Require(rejected_delay, "calibration validation must reject non-finite delay");
+
+  calibration.channels[1].delay_samples = 0.0F;
+  calibration.channels[2].dc_offset = 2.0F;
+  bool rejected_offset = false;
+  try
+  {
+    sonitude::app::ValidateCalibrationConfig(calibration, ids, 44100);
+  }
+  catch (const std::runtime_error&)
+  {
+    rejected_offset = true;
+  }
+  Require(rejected_offset, "calibration validation must reject out-of-range dc_offset");
+}
+
 void TestDcBlockerCutoff()
 {
   std::vector<sonitude::app::CalibrationChannel> channels(sonitude::audio::kMicChannels);
@@ -127,6 +183,7 @@ void RunCalibrationTests()
   TestCalibrationApply();
   TestCalibrationMapsById();
   TestCalibrationRejectsDuplicateIds();
+  TestCalibrationRejectsNonFiniteAndOutOfRangeValues();
   TestDcBlockerCutoff();
   TestWriter();
 }

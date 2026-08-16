@@ -48,9 +48,10 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
   - `./build/sonitude_capture_check --config config/default.yaml`
   - `./build/sonitude_playback_check --config config/default.yaml`
   - `./build/sonitude_loopback_diag --config config/default.yaml`
-  - `./scripts/verify_alsa_devices.sh hw:PicoMic,0 hw:Creative,0`
+  - `./scripts/verify_alsa_devices.sh hw:active,0 hw:X1,0` (replace with locally discovered IDs from `arecord -l` and `aplay -l`)
 - Evidence/result:
   - Probe tooling and ALSA wrappers implemented and buildable.
+  - 2026-08-15 short Pi passthrough gate captured scheduling and 293 telemetry samples (see `docs/rpi_hardware_test_2026-08-15.md`).
   - Hardware negotiation/activity evidence must be collected on Pi 5 with connected devices.
 - Negotiated parameters record template:
   - Capture: `rate=?, format=?, container_channels=?, period=?, buffer=?`
@@ -70,12 +71,12 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
   - ASRC interface and bypass mode compile-tested
 - Evidence command template:
   - `ctest --test-dir build --output-on-failure`
-  - `./scripts/run_realtime.sh config/default.yaml`
+  - `./scripts/run_realtime.sh config/production_pi.yaml passthrough`
 - Evidence/result:
-  - RT primitives (SPSC ring, block pool, ASRC controller, resampler interfaces) and tests implemented.
+  - RT primitives (`BlockChannel`, `SteeringChannel`, ASRC controller, resampler interfaces) and tests implemented.
   - M2 passthrough mode in `sonitude_realtime` implemented.
-  - Current runtime keeps blocking capture, DSP, and playback on one audio loop; separate RT capture/render/playback workers and per-thread scheduling remain pending M2 hardening gates.
-  - Hardware soak evidence (30 min occupancy/XRUN log) pending Pi execution.
+  - Runtime uses split capture/DSP and playback realtime workers with normal-policy telemetry and optional control workers.
+  - 2026-08-15 short passthrough gate passed (`cb8b522`), but one-hour passthrough and beamform soaks remain pending.
 
 ## Milestone 3 - Calibration and offline analysis
 
@@ -133,7 +134,7 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
   - `./build/sonitude_wav_replay --input <six_channel_wav> --config config/default.yaml --script <steering_csv> --output <unsuppressed_mono_wav>`
 - Evidence/result:
   - Conservative suppressor (`ConservativeSuppressor`) added with ambient-floor clamp, confidence gating, and failsafe ramp-to-unity behavior.
-  - Peak limiter (`PeakLimiter`) added after suppression in the beamform path.
+  - Peak limiter (`PeakLimiter`) now runs as a shared post-mode output stage for both passthrough and beamform paths.
   - Deterministic unit tests added for suppressor gain floor/fallback and limiter ceiling/release behavior.
   - Runtime and offline wiring are implemented, but reference SNR logs and hardware transition checks are pending; milestone remains `in_progress`.
 

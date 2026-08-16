@@ -252,6 +252,50 @@ No item in this section has been passed by WSL, synthetic input, or firmware
 compilation. All require Raspberry Pi execution with the configured ALSA
 devices and archived logs/artifacts:
 
+### Raspberry Pi short hardware gate — 2026-08-15
+
+- Tested commit: `cb8b52263f4a867cb93521d245e7ad6487f46774`
+- Snapshot SHA-256: `cd54733667a0925ba4e74da91585e7cc356110a6433cc2a9d9fe5c9507377412`
+- Tested local device IDs: capture `hw:active,0`, playback `hw:X1,0`
+- Tested active map: `[5,4,3,2,1,0]`
+- Tested calibration: `calibration_example.yaml` (unity gains)
+- Tested runtime state: ODAS disabled, suppression disabled
+- Scheduling result (passthrough): capture/DSP `SCHED_FIFO/80`, playback
+  `SCHED_FIFO/78`, telemetry `SCHED_OTHER/0`
+- Memory lock result: pass by fail-closed startup invariant (`require_memory_lock: true`)
+
+Concise 293-sample short-run summary (PID 1240):
+
+- `cap_frames=12933312` (about 293.27 s at 44.1 kHz)
+- `pb_frames=12934146`
+- `cap_xruns=0`, `pb_xruns=0`
+- `pb_write_fail=0`
+- `cap_wait_timeouts=0`, `cap_wait_errors=0`
+- `cap_overflow_refusals=0`
+- `block_commit_fail=0`
+- `pool_exhausted=0`
+- `cap_deadline_misses=0`
+- `ready_high_water=2`
+- `free_slots=14..16`
+- `occupancy=93..164`
+- `asrc_ppm=-520..+4700` (`+4700` was startup and within +5000 ppm bound)
+- `cap_period_us_max=2051`
+- `cap_work_us_max=20`
+- `pb_write_us_max=1826`
+- legacy `starvation=196113` was expected empty-ready checks before wait; it is
+  not an ALSA XRUN counter
+
+Geometry-axis finding from this run:
+
+- A physical front source was strongest at steering `+90°` with the original
+  geometry, confirming a 90° axis rotation mismatch against the runtime
+  convention where `0°` is `+X`.
+
+Short-gate verdict:
+
+- Short passthrough gate: **pass**
+- Hardware/release approval: **still pending**
+
 - [ ] Run the production configuration with `require_realtime: true`.
 - [ ] Prove mandatory `mlockall(MCL_CURRENT | MCL_FUTURE)` succeeds.
 - [ ] Record the scheduling table: capture FIFO 80, playback FIFO 78,
@@ -259,7 +303,7 @@ devices and archived logs/artifacts:
 - [ ] Complete at least a one-hour passthrough soak.
 - [ ] Complete at least a one-hour beamform soak.
 - [ ] Record capture and playback xruns.
-- [ ] Record pool exhaustion, starvation, and high-water values.
+- [ ] Record pool exhaustion, playback_empty_waits, and high-water values.
 - [ ] Record capture deadline misses and measured maximum execution times.
 - [ ] Verify event-driven ALSA capture wait.
 - [ ] Deliver SIGINT while capture is blocked and verify clean teardown.
@@ -271,6 +315,10 @@ devices and archived logs/artifacts:
       characterization.
 - [ ] Capture hardware calibration results and prove low-quality channels are
       rejected without replacing the accepted calibration.
+
+The one-hour soak, corrected-geometry beam test, scripted/live ODAS test,
+current six-active-channel calibration capture, fault-injection gates, and
+latency gate were not closed by the 2026-08-15 short passthrough run.
 
 ## Current verdict
 
