@@ -20,6 +20,8 @@ struct TelemetryCounters
                 "realtime threads update these counters and must not block on them");
   static_assert(std::atomic<std::int64_t>::is_always_lock_free,
                 "realtime threads update these counters and must not block on them");
+  static_assert(std::atomic<std::uint8_t>::is_always_lock_free,
+                "realtime threads update these counters and must not block on them");
 
   // Throughput.
   std::atomic<std::uint64_t> capture_frames{0};
