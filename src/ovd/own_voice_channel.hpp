@@ -8,16 +8,21 @@
 #include "ovd/own_voice_state.hpp"
 #include "rt/spsc_ring.hpp"
 
-namespace sonitude::ovd {
+namespace sonitude::ovd
+{
 // Audio producer -> OVD worker consumer. Full queue policy is drop-newest:
 // the audio deadline never waits for OVD.
-class OwnVoiceObservationChannel {
+class OwnVoiceObservationChannel
+{
 public:
-  explicit OwnVoiceObservationChannel(const std::size_t capacity_pow2 = 16U)
-      : ring_(capacity_pow2) {}
+  explicit OwnVoiceObservationChannel(const std::size_t capacity_pow2 = 16U) : ring_(capacity_pow2)
+  {
+  }
 
-  bool publish(const OwnVoiceObservation &observation) noexcept {
-    if (!ring_.push(observation)) {
+  bool publish(const OwnVoiceObservation& observation) noexcept
+  {
+    if (!ring_.push(observation))
+    {
       drops_.fetch_add(1, std::memory_order_relaxed);
       return false;
     }
@@ -25,11 +30,13 @@ public:
     return true;
   }
 
-  bool tryPop(OwnVoiceObservation &observation) noexcept {
+  bool tryPop(OwnVoiceObservation& observation) noexcept
+  {
     return ring_.pop(observation);
   }
 
-  std::uint64_t drops() const noexcept {
+  std::uint64_t drops() const noexcept
+  {
     return drops_.load(std::memory_order_relaxed);
   }
 
@@ -41,36 +48,43 @@ private:
 
 // OVD/control producer -> audio consumer. Each state is complete; audio drains
 // superseded states at a period boundary and retains only the newest.
-class OwnVoiceStateChannel {
+class OwnVoiceStateChannel
+{
 public:
-  explicit OwnVoiceStateChannel(const std::size_t capacity_pow2 = 16U)
-      : ring_(capacity_pow2) {}
+  explicit OwnVoiceStateChannel(const std::size_t capacity_pow2 = 16U) : ring_(capacity_pow2) {}
 
-  bool publish(const OwnVoiceState &state) noexcept {
-    if (!ring_.push(state)) {
+  bool publish(const OwnVoiceState& state) noexcept
+  {
+    if (!ring_.push(state))
+    {
       drops_.fetch_add(1, std::memory_order_relaxed);
       return false;
     }
     return true;
   }
 
-  bool drainLatest(OwnVoiceState &state) noexcept {
+  bool drainLatest(OwnVoiceState& state) noexcept
+  {
     OwnVoiceState candidate{};
     std::uint64_t drained = 0;
-    while (ring_.pop(candidate)) {
+    while (ring_.pop(candidate))
+    {
       ++drained;
     }
-    if (drained == 0U) {
+    if (drained == 0U)
+    {
       return false;
     }
     state = candidate;
-    if (drained > 1U) {
+    if (drained > 1U)
+    {
       superseded_.fetch_add(drained - 1U, std::memory_order_relaxed);
     }
     return true;
   }
 
-  std::uint64_t drops() const noexcept {
+  std::uint64_t drops() const noexcept
+  {
     return drops_.load(std::memory_order_relaxed);
   }
 
