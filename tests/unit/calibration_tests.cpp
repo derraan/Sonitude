@@ -1,8 +1,8 @@
 #include <cmath>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
-#include <span>
 #include <vector>
 
 #include "app/calibration_config.hpp"
@@ -176,7 +176,7 @@ void TestWriter()
   }
   sonitude::app::WriteCalibrationYamlBackupSafe("calibration_writer_test.yaml", cal, true);
 }
-}  // namespace
+} // namespace
 
 void RunCalibrationTests()
 {

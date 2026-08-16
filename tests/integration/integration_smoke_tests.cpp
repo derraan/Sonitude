@@ -41,8 +41,7 @@ int main()
             "production profile should use unity calibration");
     Require(!production.odas.enabled && !production.suppression.enabled,
             "production baseline should keep ODAS and suppression disabled");
-    Require(production.realtime.require_realtime &&
-                production.realtime.enable_mlockall &&
+    Require(production.realtime.require_realtime && production.realtime.enable_mlockall &&
                 production.realtime.require_memory_lock,
             "production baseline should enforce realtime and memory lock startup requirements");
 
@@ -55,7 +54,8 @@ int main()
     {
       geometry_ids.push_back(mic.id);
     }
-    sonitude::app::ValidateCalibrationConfig(calibration, geometry_ids, production.capture.sample_rate_hz);
+    sonitude::app::ValidateCalibrationConfig(calibration, geometry_ids,
+                                             production.capture.sample_rate_hz);
 
     const std::filesystem::path source_root = SONITUDE_SOURCE_DIR;
     Require(std::filesystem::exists(source_root / "scripts/openmha_golden_render.sh"),

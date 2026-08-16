@@ -46,7 +46,8 @@ void TestLimiterRecoversAfterTransient()
 
   std::vector<float> tail(30, 0.2F);
   (void)limiter.process(tail);
-  Require(limiter.currentGain() > dipped_gain, "limiter should release toward unity after overload");
+  Require(limiter.currentGain() > dipped_gain,
+          "limiter should release toward unity after overload");
 }
 
 void TestLimiterResetRestoresUnity()
@@ -64,11 +65,10 @@ void TestLinkedStereoLimiterTracksHigherChannel()
 {
   sonitude::dsp::PeakLimiter limiter;
   limiter.configure({.ceiling_linear = 0.75F, .release_ms = 40.0F}, 48000);
-  std::vector<sonitude::dsp::StereoSample> stereo = {
-      {.left = 0.10F, .right = 0.20F},
-      {.left = 1.30F, .right = 0.30F},
-      {.left = 0.30F, .right = -1.10F},
-      {.left = -0.50F, .right = 0.50F}};
+  std::vector<sonitude::dsp::StereoSample> stereo = {{.left = 0.10F, .right = 0.20F},
+                                                     {.left = 1.30F, .right = 0.30F},
+                                                     {.left = 0.30F, .right = -1.10F},
+                                                     {.left = -0.50F, .right = 0.50F}};
   const sonitude::dsp::LimiterTelemetry telemetry = limiter.processLinkedStereo(stereo);
 
   for (const sonitude::dsp::StereoSample& sample : stereo)
@@ -115,7 +115,7 @@ void TestLinkedStereoLimiterReleaseAfterOverload()
   Require(limiter.currentGain() > dipped_gain,
           "linked limiter should release toward unity after overload");
 }
-}  // namespace
+} // namespace
 
 void RunLimiterTests()
 {

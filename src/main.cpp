@@ -206,7 +206,8 @@ int main(int argc, char** argv)
     {
       geometry_ids.push_back(mic.id);
     }
-    const auto calibration = sonitude::app::LoadCalibrationFromFile(runtime_config.calibration_path);
+    const auto calibration =
+        sonitude::app::LoadCalibrationFromFile(runtime_config.calibration_path);
     sonitude::app::ValidateCalibrationConfig(calibration, geometry_ids,
                                              runtime_config.capture.sample_rate_hz);
     // TODO(sonitude-geometry): Keep load-time geometry validation explicit until a dedicated
@@ -537,9 +538,8 @@ int main(int argc, char** argv)
           }
         }
 
-        const sonitude::dsp::LimiterTelemetry limiter_telemetry =
-            limiter.processLinkedStereo(std::span<sonitude::dsp::StereoSample>(stereo.data(),
-                                                                                frame_count));
+        const sonitude::dsp::LimiterTelemetry limiter_telemetry = limiter.processLinkedStereo(
+            std::span<sonitude::dsp::StereoSample>(stereo.data(), frame_count));
         counters.limiter_input_over_ceiling_events.fetch_add(
             limiter_telemetry.input_over_ceiling_events, std::memory_order_relaxed);
         counters.limiter_output_saturation_events.fetch_add(
@@ -851,26 +851,25 @@ int main(int argc, char** argv)
         counters.asrc_ratio_ppm_has_sample.load(std::memory_order_relaxed)
             ? counters.asrc_ratio_ppm_max.load(std::memory_order_relaxed)
             : 0;
-    std::cout << "final_counters:"
-              << " stop_reason=" << sonitude::rt::StopReasonName(reason)
-              << " cap_xruns=" << counters.capture_xruns.load(std::memory_order_relaxed)
-              << " pb_xruns=" << counters.playback_xruns.load(std::memory_order_relaxed)
-              << " pb_write_fail=" << counters.playback_write_failures.load(std::memory_order_relaxed)
-              << " block_commit_fail=" << blocks.commitFailureCount()
-              << " pool_exhausted=" << blocks.poolExhaustedCount()
-              << " playback_empty_waits=" << blocks.playbackEmptyWaitCount()
-              << " cap_deadline_misses="
-              << counters.capture_deadline_misses.load(std::memory_order_relaxed)
-              << " cap_period_us_max=" << counters.capture_period_max_us.load(std::memory_order_relaxed)
-              << " cap_work_us_max=" << counters.capture_work_max_us.load(std::memory_order_relaxed)
-              << " pb_write_us_max=" << counters.playback_write_max_us.load(std::memory_order_relaxed)
-              << " asrc_ppm_current=" << counters.asrc_ratio_ppm.load(std::memory_order_relaxed)
-              << " asrc_ppm_min=" << asrc_ppm_min << " asrc_ppm_max=" << asrc_ppm_max
-              << " limiter_over_ceiling="
-              << counters.limiter_input_over_ceiling_events.load(std::memory_order_relaxed)
-              << " limiter_output_saturation="
-              << counters.limiter_output_saturation_events.load(std::memory_order_relaxed)
-              << '\n';
+    std::cout
+        << "final_counters:"
+        << " stop_reason=" << sonitude::rt::StopReasonName(reason)
+        << " cap_xruns=" << counters.capture_xruns.load(std::memory_order_relaxed)
+        << " pb_xruns=" << counters.playback_xruns.load(std::memory_order_relaxed)
+        << " pb_write_fail=" << counters.playback_write_failures.load(std::memory_order_relaxed)
+        << " block_commit_fail=" << blocks.commitFailureCount()
+        << " pool_exhausted=" << blocks.poolExhaustedCount()
+        << " playback_empty_waits=" << blocks.playbackEmptyWaitCount() << " cap_deadline_misses="
+        << counters.capture_deadline_misses.load(std::memory_order_relaxed)
+        << " cap_period_us_max=" << counters.capture_period_max_us.load(std::memory_order_relaxed)
+        << " cap_work_us_max=" << counters.capture_work_max_us.load(std::memory_order_relaxed)
+        << " pb_write_us_max=" << counters.playback_write_max_us.load(std::memory_order_relaxed)
+        << " asrc_ppm_current=" << counters.asrc_ratio_ppm.load(std::memory_order_relaxed)
+        << " asrc_ppm_min=" << asrc_ppm_min << " asrc_ppm_max=" << asrc_ppm_max
+        << " limiter_over_ceiling="
+        << counters.limiter_input_over_ceiling_events.load(std::memory_order_relaxed)
+        << " limiter_output_saturation="
+        << counters.limiter_output_saturation_events.load(std::memory_order_relaxed) << '\n';
 
     // Only now is it safe to touch the devices: every thread that could have
     // used them has been joined.

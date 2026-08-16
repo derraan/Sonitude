@@ -105,4 +105,4 @@ LimiterTelemetry PeakLimiter::processLinkedStereo(const std::span<StereoSample> 
   }
   return telemetry;
 }
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp

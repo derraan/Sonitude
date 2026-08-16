@@ -1,7 +1,7 @@
+#include <cmath>
 #include <exception>
 #include <functional>
 #include <iostream>
-#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -428,7 +428,8 @@ void TestGeometryInvalidNanFails()
       "geometry.x must be finite",
       [&]()
       {
-        (void)sonitude::app::LoadGeometryFromFile(FixturePath("tests/fixtures/geometry_invalid_nan.yaml"));
+        (void)sonitude::app::LoadGeometryFromFile(
+            FixturePath("tests/fixtures/geometry_invalid_nan.yaml"));
       },
       "geometry parser should reject non-finite coordinates");
 }

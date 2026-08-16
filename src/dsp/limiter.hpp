@@ -21,17 +21,20 @@ struct LimiterTelemetry
 
 class PeakLimiter
 {
- public:
+public:
   void configure(const LimiterConfig& config, std::uint32_t sample_rate_hz);
   void reset();
   LimiterTelemetry process(std::span<float> mono);
   LimiterTelemetry processLinkedStereo(std::span<StereoSample> stereo);
-  float currentGain() const { return gain_; }
+  float currentGain() const
+  {
+    return gain_;
+  }
 
- private:
+private:
   LimiterConfig config_{};
   bool configured_ = false;
   float gain_ = 1.0F;
   float release_step_per_sample_ = 0.01F;
 };
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp
