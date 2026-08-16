@@ -8,15 +8,15 @@
 
 #include "audio/audio_types.hpp"
 
-namespace sonitude::ovd
-{
-inline constexpr std::size_t kRelativeLevelFeatureCount = audio::kMicChannels - 1U;
-inline constexpr std::size_t kCorrelationFeatureCount = audio::kMicChannels - 1U;
+namespace sonitude::ovd {
+inline constexpr std::size_t kRelativeLevelFeatureCount =
+    audio::kMicChannels - 1U;
+inline constexpr std::size_t kCorrelationFeatureCount =
+    audio::kMicChannels - 1U;
 inline constexpr std::size_t kOwnVoiceFeatureCount =
     1U + kRelativeLevelFeatureCount + kCorrelationFeatureCount;
 
-struct OwnVoiceObservation
-{
+struct OwnVoiceObservation {
   std::array<float, kOwnVoiceFeatureCount> features{};
   std::uint64_t sequence = 0;
   std::uint64_t observed_ns = 0;
@@ -25,8 +25,7 @@ struct OwnVoiceObservation
 
 // Cheap bounded period features for the RT -> OVD queue. This deliberately
 // stops short of claiming a production OVTF/RATF representation.
-class OwnVoiceFeatureExtractor
-{
+class OwnVoiceFeatureExtractor {
 public:
   explicit OwnVoiceFeatureExtractor(std::size_t reference_mic_index = 0);
 
@@ -39,7 +38,8 @@ public:
   // frequency-binned statistical RATF features selected from Sonitude headset
   // measurements. Keep OwnVoiceObservation fixed-size and trivially copyable.
   OwnVoiceObservation extract(std::span<const audio::MicFrame> calibrated_input,
-                              std::span<const float> own_reference, std::uint64_t sequence,
+                              std::span<const float> own_reference,
+                              std::uint64_t sequence,
                               std::uint64_t observed_ns) const noexcept;
 
 private:
@@ -47,5 +47,6 @@ private:
 };
 
 static_assert(std::is_trivially_copyable_v<OwnVoiceObservation>,
-              "OwnVoiceObservation crosses an RT boundary and must be trivially copyable");
+              "OwnVoiceObservation crosses an RT boundary and must be "
+              "trivially copyable");
 } // namespace sonitude::ovd
