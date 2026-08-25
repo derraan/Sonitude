@@ -12,9 +12,7 @@ import argparse
 import json
 import math
 import pathlib
-import statistics
 import sys
-import tempfile
 
 SCENARIOS = {
     "silence", "own", "target", "distractor", "own_target",
