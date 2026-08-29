@@ -34,9 +34,9 @@ class PlaybackPanel(QWidget):
         self._sources: dict[str, Path] = {}
         self._seeking = False
 
-        self._raw_radio = QRadioButton("RAW")
-        self._processed_radio = QRadioButton("PROCESSED")
-        self._residual_radio = QRadioButton("RESIDUAL")
+        self._raw_radio = QRadioButton("Listening preview (ear-cup, not binaural)")
+        self._processed_radio = QRadioButton("Final processed stereo")
+        self._residual_radio = QRadioButton("DSP residual (not preview)")
         self._processed_radio.setChecked(True)
         self._source_group = QButtonGroup(self)
         for name, button in (

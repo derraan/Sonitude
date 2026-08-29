@@ -20,7 +20,7 @@ class MetricsPanel(QWidget):
         self._noise_labels = self._build_group(
             "noise",
             "Noise Suppression",
-            ["Input noise floor", "Output noise floor", "Noise reduction", "SNR before", "SNR after", "SNR improvement"],
+            ["Input noise floor", "Output noise floor", "Noise reduction", "Mixture-to-noise before", "Mixture-to-noise after", "Mixture-to-noise improvement"],
         )
         self._sii_labels = self._build_group(
             "sii",
@@ -66,9 +66,18 @@ class MetricsPanel(QWidget):
         self._noise_labels["Input noise floor"].setText(_metric_label(f"{noise.get('input_noise_floor_dbfs', 0):.1f} dBFS", method))
         self._noise_labels["Output noise floor"].setText(_metric_label(f"{noise.get('output_noise_floor_dbfs', 0):.1f} dBFS", method))
         self._noise_labels["Noise reduction"].setText(_metric_label(f"{noise.get('noise_reduction_db', 0):.1f} dB", method))
-        self._noise_labels["SNR before"].setText(_metric_label(f"{noise.get('snr_before_db', 0):.1f} dB", method))
-        self._noise_labels["SNR after"].setText(_metric_label(f"{noise.get('snr_after_db', 0):.1f} dB", method))
-        self._noise_labels["SNR improvement"].setText(_metric_label(f"{noise.get('snr_improvement_db', 0):.1f} dB", method))
+        self._noise_labels["Mixture-to-noise before"].setText(
+            _metric_label(f"{noise.get('mixture_to_noise_before_db', noise.get('snr_before_db', 0)):.1f} dB", method)
+        )
+        self._noise_labels["Mixture-to-noise after"].setText(
+            _metric_label(f"{noise.get('mixture_to_noise_after_db', noise.get('snr_after_db', 0)):.1f} dB", method)
+        )
+        self._noise_labels["Mixture-to-noise improvement"].setText(
+            _metric_label(
+                f"{noise.get('mixture_to_noise_improvement_db', noise.get('snr_improvement_db', 0)):.1f} dB",
+                method,
+            )
+        )
 
         proxy = metrics.get("intelligibility_proxy", {})
         proxy_before = proxy.get("sii_before", {})
@@ -90,7 +99,7 @@ class MetricsPanel(QWidget):
         steering = metrics.get("steering", {})
         events = steering.get("commanded_events", [])
         commanded_text = ", ".join(
-            f"{e['time_s']:.1f}s→{e['azimuth_deg']:.0f}° (width {e.get('width_deg', 0):.0f}°)" for e in events
+            f"{e['time_s']:.1f}s→{e['azimuth_deg']:.0f}° (blend {e.get('directivity_blend_deg', e.get('width_deg', 0)):.0f}°)" for e in events
         ) or "—"
         self._steering_labels["Commanded direction(s)"].setText(commanded_text)
 
