@@ -1,9 +1,14 @@
 # Integration Tests
 
-Milestone 0 note: integration tests are staged for later milestones.
+C++ CTest remains `ctest --test-dir build --output-on-failure`.
 
-Planned additions:
+The PySide6 algorithm test bench (`testbench/`) has its own pytest suite,
+including real `sonitude_wav_replay` / `sonitude_stream_process` integration
+when those binaries are built. See `testbench/README.md`. CI fails those
+tests if `SONITUDE_REQUIRE_CPP=1` and the tools are missing.
 
-- six-channel WAV replay and beamformer validation
+Still planned here (host/hardware gates, not the Python GUI):
+
 - ODAS mock trajectory and state-machine transition checks
 - long-duration ASRC drift simulation
+- openMHA golden-render evidence (`openmha_m4_validation.md`)
