@@ -12,6 +12,7 @@ from app.processing.sonitude_binary_locator import find_binary
 
 
 KNOWN_BINAURAL_BACKENDS = ("mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference")
+PREFERRED_BINAURAL_BACKENDS = ("compact_hrtf", "itd_ild", "full_hrtf_reference", "mono_reference")
 
 
 @dataclass
@@ -34,6 +35,7 @@ class ToolCapabilities:
     taps: list[str] = field(default_factory=lambda: ["beamformed", "suppressed", "processed"])
     binaural: BinauralCapabilities = field(default_factory=BinauralCapabilities)
     queried: bool = False
+    binary_path: str | None = None
     raw: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
@@ -48,7 +50,21 @@ class ToolCapabilities:
                 "note": self.binaural.note,
             },
             "queried": self.queried,
+            "binary_path": self.binary_path,
         }
+
+
+def preferred_binaural_backend(
+    available: list[str],
+    yaml_backend: str | None = None,
+) -> str | None:
+    """Pick the GUI default. Prefer a real HRTF/ITD backend over L=R bypass."""
+    if yaml_backend and yaml_backend != "mono_reference" and yaml_backend in available:
+        return yaml_backend
+    for name in PREFERRED_BINAURAL_BACKENDS:
+        if name in available:
+            return name
+    return available[0] if available else None
 
 
 def parse_capabilities_json(payload: dict) -> ToolCapabilities:
@@ -97,11 +113,13 @@ def query_tool_capabilities(
             timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ToolCapabilities()
+        return ToolCapabilities(binary_path=str(binary))
     if proc.returncode != 0:
-        return ToolCapabilities()
+        return ToolCapabilities(binary_path=str(binary))
     try:
         payload = json.loads(proc.stdout.strip().splitlines()[-1])
     except (json.JSONDecodeError, IndexError):
-        return ToolCapabilities()
-    return parse_capabilities_json(payload)
+        return ToolCapabilities(binary_path=str(binary))
+    parsed = parse_capabilities_json(payload)
+    parsed.binary_path = str(binary)
+    return parsed

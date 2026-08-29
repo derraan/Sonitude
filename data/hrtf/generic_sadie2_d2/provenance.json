@@ -1,0 +1,47 @@
+{
+  "dataset": "SADIE II",
+  "subject": "D2",
+  "profile_id": "generic_sadie2_d2",
+  "license": "Apache-2.0",
+  "source_url": "https://zenodo.org/records/12092466/files/D2_HRIR_SOFA.zip?download=1",
+  "source_zip_sha256": "2561af2c09688c95f3909303cd2ac51cb8c15abb574903f17f635e1376cbce94",
+  "source_license_url": "https://zenodo.org/records/12092466/files/LICENSE.txt?download=1",
+  "source_format": "SOFA/AES69",
+  "preparation_tool": "tools/hrtf/prepare_hrtf.py",
+  "preparation_version": "1",
+  "azimuth_mapping": "sonitude_az = normalize(-sadie_az)",
+  "outputs": {
+    "compact_16.shrf": {
+      "source_sample_rate_hz": 44100,
+      "target_sample_rate_hz": 44100,
+      "direction_count": 72,
+      "taps_per_ear": 16,
+      "crc32": "0xb9a22e07",
+      "path": "data/hrtf/generic_sadie2_d2/compact_16.shrf"
+    },
+    "compact_32.shrf": {
+      "source_sample_rate_hz": 44100,
+      "target_sample_rate_hz": 44100,
+      "direction_count": 72,
+      "taps_per_ear": 32,
+      "crc32": "0xde216d22",
+      "path": "data/hrtf/generic_sadie2_d2/compact_32.shrf"
+    },
+    "compact_64.shrf": {
+      "source_sample_rate_hz": 44100,
+      "target_sample_rate_hz": 44100,
+      "direction_count": 72,
+      "taps_per_ear": 64,
+      "crc32": "0x940b3d60",
+      "path": "data/hrtf/generic_sadie2_d2/compact_64.shrf"
+    },
+    "reference.shrf": {
+      "source_sample_rate_hz": 44100,
+      "target_sample_rate_hz": 44100,
+      "direction_count": 72,
+      "taps_per_ear": 256,
+      "crc32": "0xe1975f15",
+      "path": "data/hrtf/generic_sadie2_d2/reference.shrf"
+    }
+  }
+}

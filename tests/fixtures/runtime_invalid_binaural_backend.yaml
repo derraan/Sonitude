@@ -1,18 +1,18 @@
 capture:
-  alsa_device: "hw:PicoMic,0"
+  alsa_device: "hw:test,0"
   sample_rate_hz: 44100
   period_frames: 64
   periods: 3
 
 playback:
-  alsa_device: "hw:Creative,0"
+  alsa_device: "hw:test,1"
   sample_rate_hz: 44100
   period_frames: 64
   periods: 3
 
 active_channel_map: [0, 1, 2, 3, 4, 5]
-geometry_path: "geometry_soundbubble_initial.yaml"
-calibration_path: "calibration_example.yaml"
+geometry_path: "geometry_valid.yaml"
+calibration_path: "../../config/calibration_example.yaml"
 calibration_dc_block_hz: 20.0
 
 asrc:
@@ -43,20 +43,6 @@ state_machine:
   hold_direction_ms: 1000
   zone_direction_stability_deg: 15.0
 
-zones:
-  front_auto_focus:
-    azimuth_min_deg: -45.0
-    azimuth_max_deg: 45.0
-  right_assist:
-    azimuth_min_deg: 45.0
-    azimuth_max_deg: 100.0
-  left_assist:
-    azimuth_min_deg: -100.0
-    azimuth_max_deg: -45.0
-  rear_ambient:
-    azimuth_min_deg: 100.0
-    azimuth_max_deg: 260.0
-
 odas:
   enabled: false
   use_mock_provider: true
@@ -69,17 +55,19 @@ telemetry:
   stats_period_ms: 1000
 
 binaural:
-  enabled: false
-  backend: mono_reference
+  enabled: true
+  backend: "unknown_backend"
   direction:
     follow_steering: true
-    azimuth_deg: 0.0
-    elevation_deg: 0.0
   transition:
-    duration_ms: 150.0
+    duration_ms: 100.0
   profile:
-    id: generic_sadie2_d2
-    table_path: "../data/hrtf/generic_sadie2_d2/compact_32.shrf"
+    id: "generic"
   model:
     head_radius_m: 0.0875
     max_ild_db: 6.0
+
+zones:
+  front_auto_focus:
+    azimuth_min_deg: -45.0
+    azimuth_max_deg: 45.0

@@ -405,6 +405,11 @@ class RecordedDataTab(QWidget):
         test_id = result["test_id"]
         self._last_metrics[test_id] = result["metrics"]
         self._results_combo.addItem(test_id)
+        binaural_path = self._result_store.results_dir / test_id / "binaural_stereo.wav"
+        if binaural_path.exists():
+            binaural_index = self._stage_combo.findData("binaural_stereo.wav")
+            if binaural_index >= 0:
+                self._stage_combo.setCurrentIndex(binaural_index)
         self._results_combo.setCurrentText(test_id)
         self._status_label.setText(f"Finished: {Path(input_path).name} -> {test_id}")
 

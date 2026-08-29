@@ -1,5 +1,10 @@
 # Sonitude Binaural Renderer DSP Design Proposal
 
+This is the design specification. Implementation status, tool flags, and
+protocol v2 details are in `docs/binaural_renderer.md`. The portable CLI tools
+use the test-bench protocol v2 (`SBB2`/`SBO2`); they do not keep a parallel
+SBB1 framing.
+
 ## 1. Purpose
 
 This document specifies a portable binaural-rendering subsystem for Sonitude.

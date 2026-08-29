@@ -17,12 +17,14 @@ PySide6 GUI  →  Controller (QThread)  →  subprocess  →  C++ CLI  →  soni
 | `sonitude_wav_replay` | Mode 1 batch: decoded 6-channel WAV + steering script → mono + diagnostic taps |
 | `sonitude_stream_process` | Mode 2 live: protocol v2 stdin/stdout blocks around the same DSP chain |
 
-The C++ chain is still `CalibrationApplier → DelaySumBeamformer →
-ConservativeSuppressor → PeakLimiter`. Python never implements HRTF/ITD.
-Binaural controls are **capability-gated**: this tree reports only
-`mono_reference` (L=R duplicate of directional mono). `itd_ild`,
-`compact_hrtf`, and `full_hrtf_reference` are listed as unavailable until
-the separate binaural DSP work lands.
+The C++ chain is `CalibrationApplier → DelaySumBeamformer →
+ConservativeSuppressor → PeakLimiter`, plus optional `BinauralRenderer` in
+the portable CLI tools (not yet in `sonitude_realtime`). Python never
+implements HRTF/ITD. Binaural controls are **capability-gated** from
+`--capabilities`. This tree implements `mono_reference`, `itd_ild`,
+`compact_hrtf`, and `full_hrtf_reference`. Rebuild the CLI tools after
+checkout; an older binary that only advertises `mono_reference` still
+gates HRTF. `--output` stays mono; listen to the **Binaural** DSP stage.
 
 ## Building the C++ tools
 
@@ -195,6 +197,18 @@ Output header 24 bytes (`SBO2`): echoed sequence, flags, stereo PCM.
 Detected errors include invalid magic, unsupported version, truncation,
 invalid payload length / frame count, and unexpected / stale sequence.
 
+Binaural input flags: bit1 enabled, bit2 follow steering. Output flags:
+bit1 applied, bit2 unavailable, bit3 mono_reference. Backend byte:
+`0` none, `1` mono_reference, `2` itd_ild, `3` compact_hrtf,
+`4` full_hrtf_reference.
+
+### Binaural renderer (C++ DSP)
+
+The GUI enables C++ rendering through `--output-binaural` / stream flags
+and follow/fixed-direction CLI overrides. Defaults to `compact_hrtf` when
+that backend is advertised. Tables live under
+`data/hrtf/generic_sadie2_d2/`. Notes: `docs/binaural_renderer.md`.
+
 ### Provenance
 
 `metadata.json` records input path/format/rate/channels, channel map,
@@ -213,6 +227,7 @@ testbench/app/
 ├── ui/
 │   ├── recorded_tab.py
 │   ├── realtime_tab.py
+│   ├── binaural_controls.py
 │   ├── steering_dial.py
 │   ├── playback_panel.py        # listening preview / processed / residual
 │   ├── visualization_panel.py
@@ -254,7 +269,10 @@ These tools wrap `sonitude_core`. They do **not** change
 `sonitude_wav_replay`:
 
 - Diagnostic taps: `--output-beamformed`, `--output-suppressed`, optional
-  `--output-binaural` (`mono_reference` only in this tree)
+  `--output-binaural` (`mono_reference`, `itd_ild`, `compact_hrtf`,
+  `full_hrtf_reference`) plus `--binaural-follow-steering` /
+  `--binaural-fixed-direction` / `--binaural-azimuth` /
+  `--binaural-elevation`
 - `--suppression auto|on|off` (plus `--enable-suppression` /
   `--disable-suppression`)
 - `--capabilities`
@@ -271,8 +289,8 @@ These tools wrap `sonitude_core`. They do **not** change
 ## Known limitations
 
 - Not a low-latency production path (subprocess round-trip per block).
-- HRTF/ITD DSP is not in this tree; GUI must not pretend unimplemented
-  backends work.
+- GUI must not pretend a backend works if `--capabilities` does not list it
+  or if an HRTF table fails to load (`BINAURAL_UNAVAILABLE`).
 - Intelligibility proxy is experimental and must not gate acceptance.
 - Directional / Omni Blend is a test-bench mix, not physical beamwidth.
 - Optional steering sweep still searches ±90° by default; circular error

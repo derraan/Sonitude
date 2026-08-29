@@ -4,6 +4,9 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -14,7 +17,9 @@
 #include "audio/audio_types.hpp"
 #include "audio/wav_io.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/binaural_renderer.hpp"
 #include "dsp/calibration_applier.hpp"
+#include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/suppressor.hpp"
 
@@ -71,17 +76,67 @@ bool ResolveSuppression(const SuppressionMode mode, const bool yaml_enabled)
   return yaml_enabled;
 }
 
+sonitude::dsp::BinauralBackend ParseBinauralBackend(const std::string& backend)
+{
+  if (backend.empty() || backend == "mono_reference")
+  {
+    return sonitude::dsp::BinauralBackend::MonoReference;
+  }
+  if (backend == "itd_ild")
+  {
+    return sonitude::dsp::BinauralBackend::ItdIld;
+  }
+  if (backend == "compact_hrtf")
+  {
+    return sonitude::dsp::BinauralBackend::CompactHrtf;
+  }
+  if (backend == "full_hrtf_reference")
+  {
+    return sonitude::dsp::BinauralBackend::FullHrtfReference;
+  }
+  throw std::runtime_error("Unknown binaural backend: " + backend);
+}
+
+std::string SiblingFile(const std::string& path, const std::string& filename)
+{
+  const auto pos = path.find_last_of("/\\");
+  if (pos == std::string::npos)
+  {
+    return filename;
+  }
+  return path.substr(0, pos + 1U) + filename;
+}
+
+std::string TablePathForBackend(const sonitude::app::BinauralConfig& binaural,
+                                const sonitude::dsp::BinauralBackend backend)
+{
+  if (backend == sonitude::dsp::BinauralBackend::FullHrtfReference)
+  {
+    if (binaural.profile.table_path.empty())
+    {
+      return {};
+    }
+    return SiblingFile(binaural.profile.table_path, "reference.shrf");
+  }
+  if (backend == sonitude::dsp::BinauralBackend::CompactHrtf)
+  {
+    return binaural.profile.table_path;
+  }
+  return {};
+}
+
 void PrintCapabilities()
 {
   std::cout << "{"
             << "\"protocol_version\":2,"
             << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"]},"
-            << "\"taps\":[\"beamformed\",\"suppressed\",\"processed\",\"binaural_mono_reference\"],"
+            << "\"taps\":[\"beamformed\",\"suppressed\",\"processed\",\"binaural\"],"
             << "\"binaural\":{"
             << "\"available\":true,"
-            << "\"backends\":[\"mono_reference\"],"
-            << "\"unavailable_backends\":[\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
-            << "\"note\":\"HRTF/ITD DSP is not in this build; mono_reference is L=R duplicate of directional mono.\""
+            << "\"backends\":[\"mono_reference\",\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
+            << "\"unavailable_backends\":[],"
+            << "\"note\":\"ITD/ILD and SADIE II D2 HRTF tables are implemented. "
+               "mono_reference remains L=R of processed mono; --output stays 1ch.\""
             << "}"
             << "}\n";
 }
@@ -95,17 +150,22 @@ void PrintUsage()
             << "                      [--enable-suppression] [--disable-suppression] [--disable-limiter]\n"
             << "                      [--output-beamformed <mono_wav>]\n"
             << "                      [--output-suppressed <mono_wav>]\n"
+            << "                      [--output-mono-pre-binaural <mono_wav>]\n"
             << "                      [--output-binaural <stereo_wav>] [--binaural-backend <name>]\n"
+            << "                      [--binaural-follow-steering] [--binaural-fixed-direction]\n"
+            << "                      [--binaural-azimuth <deg>] [--binaural-elevation <deg>]\n"
             << "                      [--capabilities]\n"
             << "\n"
             << "  --output-beamformed writes the mono signal immediately after the\n"
             << "  beamformer (including the directional/omni blend), before suppression\n"
             << "  or limiting are applied.\n"
             << "  --output-suppressed writes the mono signal after suppression (if\n"
-            << "  enabled) but before limiting. Both are diagnostic taps only; they do\n"
-            << "  not change the final --output render.\n"
-            << "  --output-binaural writes stereo. This build only implements\n"
-            << "  mono_reference (L=R duplicate). Other backends are reported unavailable.\n"
+            << "  enabled) but before limiting. --output-mono-pre-binaural is the same tap.\n"
+            << "  Both are diagnostic taps only; they do not change the final --output render.\n"
+            << "  --output-binaural writes stereo via the requested backend. --output stays mono.\n"
+            << "  --binaural-follow-steering / --binaural-fixed-direction override YAML\n"
+            << "  binaural.direction.follow_steering. Fixed azimuth/elevation override YAML\n"
+            << "  only when follow-steering is off (CLI flag or YAML).\n"
             << "\n"
             << "  Steering script columns: time_s,azimuth_deg,elevation_deg[,directivity_blend_deg]\n"
             << "  directivity_blend_deg (0-" << kMaxWidthDeg
@@ -176,8 +236,12 @@ int main(int argc, char** argv)
   std::string output_path;
   std::string output_beamformed_path;
   std::string output_suppressed_path;
+  std::string output_mono_pre_binaural_path;
   std::string output_binaural_path;
   std::string binaural_backend = "mono_reference";
+  std::optional<bool> binaural_follow_override;
+  std::optional<float> binaural_azimuth_override;
+  std::optional<float> binaural_elevation_override;
   SuppressionMode suppression_mode = SuppressionMode::Auto;
   bool disable_limiter = false;
 
@@ -208,6 +272,10 @@ int main(int argc, char** argv)
     {
       output_suppressed_path = argv[++i];
     }
+    else if (arg == "--output-mono-pre-binaural" && i + 1 < argc)
+    {
+      output_mono_pre_binaural_path = argv[++i];
+    }
     else if (arg == "--output-binaural" && i + 1 < argc)
     {
       output_binaural_path = argv[++i];
@@ -215,6 +283,22 @@ int main(int argc, char** argv)
     else if (arg == "--binaural-backend" && i + 1 < argc)
     {
       binaural_backend = argv[++i];
+    }
+    else if (arg == "--binaural-follow-steering")
+    {
+      binaural_follow_override = true;
+    }
+    else if (arg == "--binaural-fixed-direction")
+    {
+      binaural_follow_override = false;
+    }
+    else if (arg == "--binaural-azimuth" && i + 1 < argc)
+    {
+      binaural_azimuth_override = std::stof(argv[++i]);
+    }
+    else if (arg == "--binaural-elevation" && i + 1 < argc)
+    {
+      binaural_elevation_override = std::stof(argv[++i]);
     }
     else if (arg == "--help")
     {
@@ -314,12 +398,51 @@ int main(int argc, char** argv)
     const char* requested = suppression_mode == SuppressionMode::On
                                 ? "on"
                                 : (suppression_mode == SuppressionMode::Off ? "off" : "auto");
-    const bool binaural_mono_reference = (binaural_backend == "mono_reference" || binaural_backend.empty());
+    const bool binaural_enabled = !output_binaural_path.empty();
+    const bool binaural_follow =
+        binaural_follow_override.value_or(runtime.binaural.direction.follow_steering);
+    const float binaural_az =
+        binaural_azimuth_override.value_or(runtime.binaural.direction.azimuth_deg);
+    const float binaural_el =
+        binaural_elevation_override.value_or(runtime.binaural.direction.elevation_deg);
+    sonitude::dsp::BinauralBackend backend = sonitude::dsp::BinauralBackend::MonoReference;
+
+    std::unique_ptr<sonitude::dsp::HrtfTable> hrtf_table;
+    sonitude::dsp::BinauralRenderer binaural;
+    if (binaural_enabled)
+    {
+      backend = ParseBinauralBackend(binaural_backend);
+      const std::string table_path = TablePathForBackend(runtime.binaural, backend);
+      if (backend == sonitude::dsp::BinauralBackend::CompactHrtf ||
+          backend == sonitude::dsp::BinauralBackend::FullHrtfReference)
+      {
+        if (table_path.empty())
+        {
+          throw std::runtime_error("binaural.profile.table_path is required for HRTF backends");
+        }
+        hrtf_table = std::make_unique<sonitude::dsp::HrtfTable>(
+            sonitude::dsp::LoadHrtfTableFromFile(table_path));
+      }
+      constexpr std::size_t kBlock = 256;
+      binaural.configure({.sample_rate_hz = input_wav.sample_rate_hz,
+                          .backend = backend,
+                          .transition_ms = runtime.binaural.transition.duration_ms,
+                          .max_block_frames = kBlock,
+                          .itd_ild = {.head_radius_m = runtime.binaural.model.head_radius_m,
+                                      .max_ild_db = runtime.binaural.model.max_ild_db},
+                          .table = hrtf_table.get()});
+      binaural.setDirection(binaural_follow
+                                ? events.front().target
+                                : sonitude::audio::BeamformerSteering{binaural_az, binaural_el});
+    }
+
     std::cerr << "sonitude_resolved {\"protocol_version\":2,\"suppression_requested\":\"" << requested
               << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
               << ",\"limiter_disabled\":" << (disable_limiter ? "true" : "false")
-              << ",\"binaural_backend\":\"" << binaural_backend << "\",\"binaural_available\":"
-              << (binaural_mono_reference ? "true" : "false") << "}\n";
+              << ",\"binaural_backend\":\"" << binaural_backend << "\",\"binaural_available\":true"
+              << ",\"binaural_follow_steering\":" << (binaural_follow ? "true" : "false")
+              << ",\"binaural_azimuth_deg\":" << binaural_az
+              << ",\"binaural_elevation_deg\":" << binaural_el << "}\n";
     sonitude::dsp::ConservativeSuppressor suppressor;
     suppressor.configure(
         {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
@@ -329,17 +452,34 @@ int main(int argc, char** argv)
         input_wav.sample_rate_hz);
     sonitude::dsp::PeakLimiter limiter;
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
+    sonitude::dsp::StereoPeakLimiter stereo_limiter;
+    if (binaural_enabled)
+    {
+      stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
+    }
 
     std::vector<float> mono(frames, 0.0F);
+    std::vector<float> left;
+    std::vector<float> right;
     std::vector<float> beamformed_tap;
     std::vector<float> suppressed_tap;
+    std::vector<float> binaural_tap;
+    if (binaural_enabled)
+    {
+      left.assign(frames, 0.0F);
+      right.assign(frames, 0.0F);
+    }
     if (!output_beamformed_path.empty())
     {
       beamformed_tap.resize(frames, 0.0F);
     }
-    if (!output_suppressed_path.empty())
+    if (!output_suppressed_path.empty() || !output_mono_pre_binaural_path.empty())
     {
       suppressed_tap.resize(frames, 0.0F);
+    }
+    if (!output_binaural_path.empty())
+    {
+      binaural_tap.resize(frames * 2U, 0.0F);
     }
 
     std::size_t event_index = 1;
@@ -349,6 +489,10 @@ int main(int argc, char** argv)
       while (event_index < events.size() && events[event_index].frame_index <= start)
       {
         beamformer.setTarget(events[event_index].target);
+        if (binaural_enabled && binaural_follow)
+        {
+          binaural.setDirection(events[event_index].target);
+        }
         current_width_deg = events[event_index].width_deg;
         ++event_index;
       }
@@ -390,34 +534,32 @@ int main(int argc, char** argv)
       {
         limiter.process(std::span<float>(mono.data() + start, count));
       }
+      if (binaural_enabled)
+      {
+        binaural.process(std::span<const float>(mono.data() + start, count),
+                         std::span<float>(left.data() + start, count),
+                         std::span<float>(right.data() + start, count));
+        if (!disable_limiter)
+        {
+          stereo_limiter.process(std::span<float>(left.data() + start, count),
+                                 std::span<float>(right.data() + start, count));
+        }
+        if (!binaural_tap.empty())
+        {
+          for (std::size_t i = 0; i < count; ++i)
+          {
+            const std::size_t out_index = (start + i) * 2U;
+            binaural_tap[out_index] = left[start + i];
+            binaural_tap[out_index + 1U] = right[start + i];
+          }
+        }
+      }
     }
 
     sonitude::audio::WavData out;
     out.sample_rate_hz = input_wav.sample_rate_hz;
     out.channels = 1;
     out.format = sonitude::audio::PcmFormat::FLOAT32_LE;
-    if (!output_binaural_path.empty())
-    {
-      if (!binaural_mono_reference)
-      {
-        throw std::runtime_error(
-            "Requested binaural backend is not implemented in this build (only mono_reference)");
-      }
-      std::vector<float> stereo(frames * 2, 0.0F);
-      for (std::size_t i = 0; i < frames; ++i)
-      {
-        stereo[(i * 2) + 0] = mono[i];
-        stereo[(i * 2) + 1] = mono[i];
-      }
-      sonitude::audio::WavData binaural;
-      binaural.sample_rate_hz = input_wav.sample_rate_hz;
-      binaural.channels = 2;
-      binaural.format = sonitude::audio::PcmFormat::FLOAT32_LE;
-      binaural.interleaved = std::move(stereo);
-      sonitude::audio::WriteWavFile(output_binaural_path, binaural);
-      std::cout << "Wrote mono_reference binaural stereo (L=R, not HRTF) to " << output_binaural_path
-                << '\n';
-    }
     out.interleaved = std::move(mono);
     sonitude::audio::WriteWavFile(output_path, out);
     std::cout << "Rendered beamformed WAV to " << output_path << '\n';
@@ -438,9 +580,27 @@ int main(int argc, char** argv)
       tap.sample_rate_hz = input_wav.sample_rate_hz;
       tap.channels = 1;
       tap.format = sonitude::audio::PcmFormat::FLOAT32_LE;
-      tap.interleaved = std::move(suppressed_tap);
-      sonitude::audio::WriteWavFile(output_suppressed_path, tap);
-      std::cout << "Wrote pre-limiter tap to " << output_suppressed_path << '\n';
+      tap.interleaved = suppressed_tap;
+      if (!output_suppressed_path.empty())
+      {
+        sonitude::audio::WriteWavFile(output_suppressed_path, tap);
+        std::cout << "Wrote pre-limiter tap to " << output_suppressed_path << '\n';
+      }
+      if (!output_mono_pre_binaural_path.empty())
+      {
+        sonitude::audio::WriteWavFile(output_mono_pre_binaural_path, tap);
+        std::cout << "Wrote pre-binaural mono tap to " << output_mono_pre_binaural_path << '\n';
+      }
+    }
+    if (!binaural_tap.empty())
+    {
+      sonitude::audio::WavData tap;
+      tap.sample_rate_hz = input_wav.sample_rate_hz;
+      tap.channels = 2;
+      tap.format = sonitude::audio::PcmFormat::FLOAT32_LE;
+      tap.interleaved = std::move(binaural_tap);
+      sonitude::audio::WriteWavFile(output_binaural_path, tap);
+      std::cout << "Wrote binaural stereo (" << binaural_backend << ") to " << output_binaural_path << '\n';
     }
     return 0;
   }

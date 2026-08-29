@@ -23,8 +23,8 @@ flowchart TB
         Passthrough["Passthrough tap\nmics 4 and 5 → L/R"]
         BF["Delay-and-sum beamformer\nfractional delays + crossfade"]
         Suppress["Suppression v1\nM7 implemented"]
-        Limiter["Limiter\nimplemented"]
-        MonoStereo["Mono → duplicate stereo"]
+        Binaural["BinauralRenderer\nmono -> stereo"]
+        Limiter["Stereo limiter\nlinked gain"]
         Asrc["ASRC: PI controller +\nIStereoResampler"]
         AlsaPb["ALSA playback worker"]
     end
@@ -37,7 +37,7 @@ flowchart TB
     end
 
     subgraph offline [Offline / diagnostics]
-        WavReplay["sonitude_wav_replay\n6ch WAV → mono WAV"]
+        WavReplay["sonitude_wav_replay\n6ch WAV → mono + optional stereo binaural"]
         StreamProc["sonitude_stream_process\nprotocol v2 block adapter"]
         Tools["probe / capture_check /\ncalibration_estimate"]
         TestBench["PySide6 test bench\n(testbench/, non-RT)"]
@@ -50,9 +50,8 @@ flowchart TB
     Cal --> Passthrough
     Cal --> BF
     Snap -.->|"az/el + failsafe"| BF
-    BF --> Suppress --> Limiter --> MonoStereo
-    Passthrough --> MonoStereo
-    MonoStereo --> Asrc --> AlsaPb --> DAC
+    BF --> Suppress --> Binaural --> Limiter --> Asrc --> AlsaPb --> DAC
+    Passthrough --> Asrc
 
     Odas --> Parser --> SM --> Snap
 
@@ -77,12 +76,18 @@ flowchart TB
 | **Extract**          | Pull 6 active channels from 8-channel USB container (`MicFrame` = 6 floats)                 |
 | **Calibration**      | Per mic: polarity, DC subtract, gain, high-pass (`CalibrationApplier`)                      |
 | **Beamformer**       | Align mics in time for steering angle; sum with 1/6 weights → mono (M4)                     |
+| **BinauralRenderer** | Converts mono to stereo using selected backend (`mono_reference`, `itd_ild`, HRTF modes)    |
+| **Stereo limiter**   | Final linked stereo peak safety stage after binaural processing                              |
 | **ASRC**             | PI controller adjusts playback resample ratio so capture/playback clock drift does not XRUN |
 | **Passthrough mode** | Today: ear-cup mics 4/5 to L/R, bypasses beamformer (`--mode passthrough`)                  |
 | **Control**          | ODAS/mock → tracker → state machine → atomic snapshot; audio thread reads snapshot only     |
 
 
 **Clock rule:** Pico and DAC clocks are independent (~tens of ppm). Never drop/duplicate samples for drift — use bounded ASRC ratio control (default ±0.5%).
+
+Direction convention for beamformer and binaural renderer is documented in
+`src/spatial/head_frame.hpp`: azimuth `0 deg = front (+Y)`, positive azimuth
+turns clockwise toward listener-right (`+X`).
 
 Full stage-by-stage detail, implementation status, and scope vetoes: `[docs/CodebaseState.md](docs/CodebaseState.md)` (§1 scope, §2 DSP).
 
@@ -128,7 +133,8 @@ Conservative **distractor suppression** after beamforming, with explicit user se
 ### Stage 5 — Mono → stereo
 
 - `--mode passthrough` **(today):** taps ear-cup mics 4 and 5 to L/R in `main.cpp` — no beamformer.
-- `--mode beamform` **(implemented):** duplicate mono beam to both channels (no HRTF in v1).
+- `--mode beamform` on `sonitude_realtime`: still duplicates directional mono to L/R. The Pi playback path is **not** yet wired to `BinauralRenderer`.
+- Portable tools (`sonitude_wav_replay`, `sonitude_stream_process`): `BinauralRenderer` backends `mono_reference`, `itd_ild`, `compact_hrtf`, `full_hrtf_reference`, then linked `StereoPeakLimiter`. Replay `--output` stays mono; stereo is `--output-binaural` or the stream payload. Details: `[docs/binaural_renderer.md](docs/binaural_renderer.md)`.
 
 
 
@@ -315,6 +321,7 @@ tests fail if those binaries are missing. Details: `[testbench/README.md](testbe
 - Linux/ALSA setup and runtime policy: `[docs/device_setup.md](docs/device_setup.md)`
 - Calibration format and tooling roadmap: `[docs/calibration.md](docs/calibration.md)`
 - Latency measurement method and caveats: `[docs/latency_measurement.md](docs/latency_measurement.md)`
+- Binaural renderer (DSP, HRTF tables, protocol v2 tools): `[docs/binaural_renderer.md](docs/binaural_renderer.md)`
 - Full milestone gate checklist and evidence tracking: `[docs/milestones.md](docs/milestones.md)`
 - Algorithm test bench (PySide6, non-RT): `[testbench/README.md](testbench/README.md)`
 

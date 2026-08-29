@@ -57,6 +57,26 @@ def write_steering_script(events: list[SteeringEvent], path: str | Path) -> Path
     return path
 
 
+def binaural_cli_args(request: BinauralRequest, binaural_wav: str | Path) -> list[str]:
+    """CLI flags that map GUI binaural controls onto sonitude_wav_replay."""
+    if not request.enabled:
+        return []
+    args = ["--output-binaural", str(binaural_wav)]
+    if request.backend:
+        args += ["--binaural-backend", request.backend]
+    if request.follow_beamformer_steering:
+        args.append("--binaural-follow-steering")
+    else:
+        args += [
+            "--binaural-fixed-direction",
+            "--binaural-azimuth",
+            f"{request.azimuth_deg:.6f}",
+            "--binaural-elevation",
+            f"{request.elevation_deg:.6f}",
+        ]
+    return args
+
+
 def parse_sonitude_resolved(stderr: str) -> dict:
     """Parse the ``sonitude_resolved {...}`` JSON line from C++ stderr, if present."""
     for line in stderr.splitlines():
@@ -156,10 +176,7 @@ def run_wav_replay(
     ]
     if disable_limiter:
         command.append("--disable-limiter")
-    if binaural_request.enabled:
-        command += ["--output-binaural", str(binaural_wav)]
-        if binaural_request.backend:
-            command += ["--binaural-backend", binaural_request.backend]
+    command += binaural_cli_args(binaural_request, binaural_wav)
 
     proc = subprocess.run(command, capture_output=True, text=True, check=False)
     if proc.returncode != 0:

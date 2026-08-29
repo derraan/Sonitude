@@ -182,6 +182,42 @@ void TestCalibrationDelayClosure()
   Require(with_cal_err < no_cal_err,
           "calibration delay correction should move beam output toward ideal alignment");
 }
+
+void TestLeftRightAzimuthConvention()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 4096;
+  const auto geometry = BuildGeometry();
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, -90.0F, 0.0F, 343.0F);
+
+  // In the head frame, azimuth -90 deg is listener-left and should arrive at
+  // the left-side microphone before the right-side microphone.
+  double lead_sum = 0.0;
+  for (std::size_t i = 1; i < kFrames; ++i)
+  {
+    lead_sum += static_cast<double>(mic[i][4]) * static_cast<double>(mic[i - 1][5]);
+    lead_sum -= static_cast<double>(mic[i][5]) * static_cast<double>(mic[i - 1][4]);
+  }
+  Require(lead_sum > 0.0, "left-side source should lead at left ear channel");
+
+  sonitude::dsp::DelaySumBeamformer left_steer;
+  left_steer.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  left_steer.setTarget({-90.0F, 0.0F});
+  std::vector<float> out_left(kFrames, 0.0F);
+  left_steer.process(mic, out_left);
+
+  sonitude::dsp::DelaySumBeamformer right_steer;
+  right_steer.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  right_steer.setTarget({90.0F, 0.0F});
+  std::vector<float> out_right(kFrames, 0.0F);
+  right_steer.process(mic, out_right);
+
+  const double left_rms = sonitude::tests::support::ComputeRms(out_left, 512);
+  const double right_rms = sonitude::tests::support::ComputeRms(out_right, 512);
+  Require(left_rms > right_rms * 1.2, "listener-left steering should beat listener-right steering");
+}
 }  // namespace
 
 void RunBeamformerTests()
@@ -189,4 +225,5 @@ void RunBeamformerTests()
   TestAlignmentBeatsOffAxis();
   TestClickFreeRetarget();
   TestCalibrationDelayClosure();
+  TestLeftRightAzimuthConvention();
 }

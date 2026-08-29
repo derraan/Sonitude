@@ -48,6 +48,6 @@ inline std::array<double, 3> UnitVectorFromAzElDeg(double azimuth_deg, double el
   const double az = azimuth_deg * (kPi / 180.0);
   const double el = elevation_deg * (kPi / 180.0);
   const double cos_el = std::cos(el);
-  return {cos_el * std::cos(az), cos_el * std::sin(az), std::sin(el)};
+  return {cos_el * std::sin(az), cos_el * std::cos(az), std::sin(el)};
 }
 }  // namespace sonitude::spatial
