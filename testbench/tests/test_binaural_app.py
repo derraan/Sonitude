@@ -9,20 +9,21 @@ from app.storage.models import BinauralRequest
 
 
 def test_preferred_backend_skips_mono_reference_when_hrtf_exists() -> None:
-    available = ["mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference"]
-    assert preferred_binaural_backend(available, "mono_reference") == "compact_hrtf"
+    available = ["array_downmix", "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference"]
+    assert preferred_binaural_backend(available, "mono_reference") == "array_downmix"
     assert preferred_binaural_backend(available, "itd_ild") == "itd_ild"
+    assert preferred_binaural_backend(["array_downmix", "mono_reference"], None) == "array_downmix"
 
 
 def test_parse_capabilities_json_lists_hrtf_backends() -> None:
     caps = parse_capabilities_json(
         {
-            "protocol_version": 2,
+            "protocol_version": 3,
             "suppression": {"modes": ["auto", "on", "off"]},
             "taps": ["beamformed", "suppressed", "processed", "binaural"],
             "binaural": {
                 "available": True,
-                "backends": ["mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference"],
+                "backends": ["array_downmix", "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference"],
                 "unavailable_backends": [],
                 "note": "ITD/ILD and SADIE II D2 HRTF tables are implemented.",
             },
@@ -36,7 +37,7 @@ def test_parse_capabilities_json_lists_hrtf_backends() -> None:
 def test_config_reader_exposes_binaural_yaml() -> None:
     summary = read_runtime_config_summary(DEFAULT_CONFIG_PATH)
     assert summary.binaural.backend
-    assert summary.binaural.follow_steering is True
+    assert summary.binaural.follow_steering is False
     assert "generic_sadie2_d2" in summary.binaural.table_path
 
 

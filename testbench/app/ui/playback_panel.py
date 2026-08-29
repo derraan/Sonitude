@@ -86,12 +86,9 @@ class PlaybackPanel(QWidget):
         self._boost_slider = QSlider(Qt.Orientation.Horizontal)
         self._boost_slider.setRange(0, 40)
         self._boost_slider.setValue(24)
-        self._boost_slider.setToolTip(
-            "Monitor-only gain. This recording is far below 0 dBFS; unity-gain "
-            "playback is inaudible. Does not change saved WAV files."
-        )
         self._boost_slider.valueChanged.connect(self._on_boost_changed)
-        self._boost_label = QLabel("Monitor boost 24 dB")
+        self._boost_label = QLabel("Preamp boost 24 dB")
+        self._sync_boost_label()
 
         self._engine.positionChanged.connect(self._on_position_changed)
         self._engine.durationChanged.connect(self._on_duration_changed)
@@ -121,14 +118,19 @@ class PlaybackPanel(QWidget):
 
     def set_live_mode(self, live: bool) -> None:
         self._live = bool(live)
+        self._sync_boost_label()
         if live:
             self._engine.stop()
+
+    def preamp_db(self) -> float:
+        return float(self._boost_slider.value())
 
     def volume(self) -> float:
         return self._volume_slider.value() / 100.0
 
     def boost_db(self) -> float:
-        return float(self._boost_slider.value())
+        """Compatibility alias for preamp_db()."""
+        return self.preamp_db()
 
     def set_clock(self, position_ms: int, duration_ms: int | None = None) -> None:
         if duration_ms is not None:
@@ -144,9 +146,25 @@ class PlaybackPanel(QWidget):
         self.volumeChanged.emit(value / 100.0)
 
     def _on_boost_changed(self, value: int) -> None:
-        self._boost_label.setText(f"Monitor boost {value} dB")
-        self._engine.set_boost_db(value)
+        self._sync_boost_label(value)
+        if not self._live:
+            self._engine.set_boost_db(value)
         self.boostChanged.emit(float(value))
+
+    def _sync_boost_label(self, value: int | None = None) -> None:
+        db = self._boost_slider.value() if value is None else value
+        if self._live:
+            self._boost_label.setText(f"Preamp boost {db} dB")
+            self._boost_slider.setToolTip(
+                "Common gain applied to all six mic channels before sonitude_stream_process. "
+                "Use this when input levels are too low for suppressor thresholds or beamforming. "
+                "Does not change saved WAV files."
+            )
+        else:
+            self._boost_label.setText(f"Output boost {db} dB")
+            self._boost_slider.setToolTip(
+                "Listen-only gain on the selected plot/residual WAV. Does not change saved files."
+            )
 
     def _on_play(self) -> None:
         if self._live:

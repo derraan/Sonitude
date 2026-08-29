@@ -70,9 +70,9 @@ telemetry:
 
 binaural:
   enabled: true
-  backend: itd_ild
+  backend: array_downmix
   direction:
-    follow_steering: true
+    follow_steering: false
     azimuth_deg: 0.0
     elevation_deg: 0.0
   transition:

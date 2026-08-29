@@ -14,6 +14,76 @@ namespace
 {
 constexpr double kSpeedOfSoundMps = 343.0;
 
+void NormalizeWeights(std::array<float, audio::kMicChannels>& weights)
+{
+  float sum = 0.0F;
+  for (const float w : weights)
+  {
+    sum += w;
+  }
+  if (sum <= 1.0e-12F)
+  {
+    return;
+  }
+  for (float& w : weights)
+  {
+    w /= sum;
+  }
+}
+
+void AssignHemisphereSplit(ArrayDownmixWeights& out)
+{
+  constexpr float kThird = 1.0F / 3.0F;
+  out = {};
+  for (std::size_t i = 0; i < 3; ++i)
+  {
+    out.left[i] = kThird;
+    out.right[i + 3] = kThird;
+  }
+}
+}  // namespace
+
+ArrayDownmixWeights MakeArrayDownmixWeights(const std::span<const double> mic_x_m)
+{
+  ArrayDownmixWeights out{};
+  const std::size_t n = std::min(mic_x_m.size(), audio::kMicChannels);
+  if (n < audio::kMicChannels)
+  {
+    AssignHemisphereSplit(out);
+    return out;
+  }
+
+  double min_x = mic_x_m[0];
+  double max_x = mic_x_m[0];
+  double max_abs = std::fabs(mic_x_m[0]);
+  for (std::size_t i = 1; i < n; ++i)
+  {
+    min_x = std::min(min_x, mic_x_m[i]);
+    max_x = std::max(max_x, mic_x_m[i]);
+    max_abs = std::max(max_abs, std::fabs(mic_x_m[i]));
+  }
+  const double span = max_x - min_x;
+  if (span < 1.0e-9)
+  {
+    AssignHemisphereSplit(out);
+    return out;
+  }
+  const double abs_ref = std::max(max_abs, 1.0e-9);
+
+  for (std::size_t i = 0; i < n; ++i)
+  {
+    const double t = (mic_x_m[i] - min_x) / span;
+    const double presence = 0.35 + (0.65 * (std::fabs(mic_x_m[i]) / abs_ref));
+    out.left[i] = static_cast<float>((1.0 - t) * presence);
+    out.right[i] = static_cast<float>(t * presence);
+  }
+  NormalizeWeights(out.left);
+  NormalizeWeights(out.right);
+  return out;
+}
+
+namespace
+{
 float DbToLinear(const float db)
 {
   return std::pow(10.0F, db / 20.0F);
@@ -101,6 +171,24 @@ void BinauralRenderer::configure(const BinauralConfig& config)
   }
 
   config_ = config;
+  array_weights_ = config.array_downmix;
+  float left_sum = 0.0F;
+  float right_sum = 0.0F;
+  for (std::size_t i = 0; i < audio::kMicChannels; ++i)
+  {
+    left_sum += array_weights_.left[i];
+    right_sum += array_weights_.right[i];
+  }
+  if (config.backend == BinauralBackend::ArrayDownmix && (left_sum <= 1.0e-12F || right_sum <= 1.0e-12F))
+  {
+    AssignHemisphereSplit(array_weights_);
+  }
+  else if (config.backend == BinauralBackend::ArrayDownmix)
+  {
+    NormalizeWeights(array_weights_.left);
+    NormalizeWeights(array_weights_.right);
+  }
+
   ramp_samples_ = std::max<std::size_t>(
       1U, static_cast<std::size_t>((config.transition_ms * 0.001F) * config.sample_rate_hz));
   fade_cursor_ = 0;
@@ -182,6 +270,10 @@ void BinauralRenderer::setDirection(audio::BeamformerSteering direction)
   if (!configured_)
   {
     throw std::runtime_error("Binaural renderer used before configure");
+  }
+  if (config_.backend == BinauralBackend::ArrayDownmix)
+  {
+    return;
   }
 
   direction.azimuth_deg = static_cast<float>(spatial::NormalizeHeadAzimuthDeg(direction.azimuth_deg));
@@ -272,7 +364,8 @@ void BinauralRenderer::process(const std::span<const float> mono,
 
   for (std::size_t i = 0; i < mono.size(); ++i)
   {
-    if (config_.backend == BinauralBackend::MonoReference)
+    if (config_.backend == BinauralBackend::MonoReference ||
+        config_.backend == BinauralBackend::ArrayDownmix)
     {
       left[i] = mono[i];
       right[i] = mono[i];
@@ -328,6 +421,33 @@ void BinauralRenderer::process(const std::span<const float> mono,
   }
 }
 
+void BinauralRenderer::processArray(const std::span<const audio::MicFrame> frames,
+                                    const std::span<float> left,
+                                    const std::span<float> right)
+{
+  if (!configured_)
+  {
+    throw std::runtime_error("Binaural renderer used before configure");
+  }
+  if (left.size() < frames.size() || right.size() < frames.size())
+  {
+    throw std::runtime_error("Binaural renderer output spans are too small");
+  }
+
+  for (std::size_t i = 0; i < frames.size(); ++i)
+  {
+    float l = 0.0F;
+    float r = 0.0F;
+    for (std::size_t ch = 0; ch < audio::kMicChannels; ++ch)
+    {
+      l += array_weights_.left[ch] * frames[i][ch];
+      r += array_weights_.right[ch] * frames[i][ch];
+    }
+    left[i] = l;
+    right[i] = r;
+  }
+}
+
 std::size_t BinauralRenderer::stateBytes() const
 {
   std::size_t bytes = 0;
@@ -357,7 +477,8 @@ std::size_t BinauralRenderer::coefficientBytes() const
 
 std::size_t BinauralRenderer::algorithmicLatencySamples() const
 {
-  if (config_.backend == BinauralBackend::MonoReference)
+  if (config_.backend == BinauralBackend::MonoReference ||
+      config_.backend == BinauralBackend::ArrayDownmix)
   {
     return 0;
   }

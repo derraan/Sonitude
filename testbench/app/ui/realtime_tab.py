@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QSpinBox,
     QSplitter,
     QVBoxLayout,
@@ -30,11 +31,11 @@ from app.audio_io.device_manager import InputDeviceInfo, list_input_devices
 from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.realtime_controller import RealtimeWorker
 from app.processing.capabilities import query_tool_capabilities
-from app.processing.suppression import SuppressionMode
 from app.ui.binaural_controls import BinauralControls
 from app.ui.layout_persist import KEY_REALTIME_H, REALTIME_H_DEFAULT, restore_splitter, save_splitter
 from app.ui.level_meter import DbfsMeter
 from app.ui.steering_controls import SteeringControls
+from app.ui.suppressor_controls import SuppressorControls
 from app.ui.visualization_panel import VisualizationPanel
 
 
@@ -106,11 +107,14 @@ class RealtimeTab(QWidget):
         self._queue_status_label = QLabel("Queue: depth 0 / dropped 0 / overrun no")
         self._queue_status_label.setWordWrap(True)
 
-        self._suppression_combo = QComboBox()
-        _compact_combo(self._suppression_combo)
-        self._suppression_combo.addItem("AUTO (use YAML)", userData=SuppressionMode.AUTO.value)
-        self._suppression_combo.addItem("ON (force on)", userData=SuppressionMode.ON.value)
-        self._suppression_combo.addItem("OFF (force off, overrides YAML)", userData=SuppressionMode.OFF.value)
+        self._preamp_slider = QSlider(Qt.Orientation.Horizontal)
+        self._preamp_slider.setRange(0, 40)
+        self._preamp_slider.setValue(24)
+        self._preamp_slider.setToolTip(
+            "Common gain applied to all six mic channels before sonitude_stream_process."
+        )
+        self._preamp_label = QLabel("Preamp boost 24 dB")
+        self._preamp_slider.valueChanged.connect(self._on_preamp_changed)
 
         device_box = QGroupBox("Device")
         device_form = QFormLayout(device_box)
@@ -127,11 +131,19 @@ class RealtimeTab(QWidget):
         device_form.addRow("Buffer (frames):", self._block_size_spin)
         device_form.addRow("Capture queue capacity:", self._queue_capacity_spin)
         device_form.addRow(self._queue_status_label)
-        device_form.addRow("Suppression:", self._suppression_combo)
+        preamp_row = QWidget()
+        preamp_layout = QHBoxLayout(preamp_row)
+        preamp_layout.setContentsMargins(0, 0, 0, 0)
+        preamp_layout.addWidget(self._preamp_label)
+        preamp_layout.addWidget(self._preamp_slider)
+        device_form.addRow("Input gain:", preamp_row)
 
-        self._steering = SteeringControls("Steering (live)")
+        self._steering = SteeringControls("Beamformer steering (delay-and-sum)")
         self._steering.azimuthChanged.connect(self._on_steering_changed)
         self._steering.blendChanged.connect(self._on_blend_changed)
+
+        self._suppressor = SuppressorControls()
+        self._suppressor.changed.connect(self._push_suppressor)
 
         self._binaural = BinauralControls(self._capabilities)
         self._binaural.changed.connect(self._push_binaural)
@@ -151,6 +163,7 @@ class RealtimeTab(QWidget):
         config_layout = QVBoxLayout(config_inner)
         config_layout.addWidget(device_box)
         config_layout.addWidget(self._steering)
+        config_layout.addWidget(self._suppressor)
         config_layout.addWidget(self._binaural)
         config_layout.addWidget(meters_box)
         config_layout.addStretch(1)
@@ -210,6 +223,15 @@ class RealtimeTab(QWidget):
     def _push_binaural(self) -> None:
         if self._worker is not None:
             self._worker.set_binaural(self._binaural.request())
+
+    def _push_suppressor(self) -> None:
+        if self._worker is not None:
+            self._worker.set_suppressor(self._suppressor.request())
+
+    def _on_preamp_changed(self, value: int) -> None:
+        self._preamp_label.setText(f"Preamp boost {value} dB")
+        if self._worker is not None:
+            self._worker.set_preamp_db(float(value))
 
     def _refresh_devices(self) -> None:
         self._devices = list_input_devices()
@@ -274,11 +296,13 @@ class RealtimeTab(QWidget):
             config_summary.capture_sample_rate_hz,
             active_channel_map=config_summary.active_channel_map,
             block_size=self._block_size_spin.value(),
-            suppression=self._suppression_combo.currentData() or SuppressionMode.AUTO.value,
+            suppression=self._suppressor.suppression_mode(),
             queue_capacity=self._queue_capacity_spin.value(),
             binaural=self._binaural.request(),
+            suppressor=self._suppressor.request(),
         )
         worker.set_steering(self._steering.commanded_azimuth_deg(), 0.0, self._steering.width_deg())
+        worker.set_preamp_db(float(self._preamp_slider.value()))
         worker.levelsUpdated.connect(self._on_levels_updated)
         worker.blockProcessed.connect(self._on_block_processed)
         worker.queueStatus.connect(self._on_queue_status)

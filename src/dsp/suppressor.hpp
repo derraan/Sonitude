@@ -12,6 +12,8 @@ struct SuppressorConfig
   float fade_ms = 120.0F;
   float activity_threshold = 0.03F;
   float confidence_threshold = 0.6F;
+  float envelope_attack_coeff = 0.35F;
+  float envelope_release_coeff = 0.01F;
 };
 
 class ISuppressor

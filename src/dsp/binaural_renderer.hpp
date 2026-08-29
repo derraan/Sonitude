@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -17,7 +18,19 @@ enum class BinauralBackend
   ItdIld,
   CompactHrtf,
   FullHrtfReference,
+  ArrayDownmix,
 };
+
+// Geometry-weighted 6-mic → stereo downmix (Atmos-style fold of the array
+// onto the two ears). Ear-side mics dominate; arc/top mics fill the same
+// hemisphere. This is not a mono→HRTF virtualizer.
+struct ArrayDownmixWeights
+{
+  std::array<float, audio::kMicChannels> left{};
+  std::array<float, audio::kMicChannels> right{};
+};
+
+ArrayDownmixWeights MakeArrayDownmixWeights(std::span<const double> mic_x_m);
 
 struct ItdIldModelConfig
 {
@@ -33,6 +46,7 @@ struct BinauralConfig
   std::size_t max_block_frames = 0;
   ItdIldModelConfig itd_ild{};
   const HrtfTable* table = nullptr;
+  ArrayDownmixWeights array_downmix{};
 };
 
 class BinauralRenderer
@@ -42,6 +56,9 @@ class BinauralRenderer
   void reset();
   void setDirection(audio::BeamformerSteering direction);
   void process(std::span<const float> mono, std::span<float> left, std::span<float> right);
+  void processArray(std::span<const audio::MicFrame> frames,
+                    std::span<float> left,
+                    std::span<float> right);
 
   BinauralBackend resolvedBackend() const { return config_.backend; }
   // Heap RAM: 4 delay-line buffers + 4 FIR ring buffers + working FIR copies.
@@ -87,6 +104,7 @@ class BinauralRenderer
   std::size_t fade_cursor_ = 0;
   bool crossfading_ = false;
   double base_delay_samples_ = 0.0;
+  ArrayDownmixWeights array_weights_{};
 
   PathParams current_params_{};
   PathParams pending_params_{};

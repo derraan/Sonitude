@@ -11,8 +11,8 @@ from app.processing.protocol import PROTOCOL_VERSION
 from app.processing.sonitude_binary_locator import find_binary
 
 
-KNOWN_BINAURAL_BACKENDS = ("mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference")
-PREFERRED_BINAURAL_BACKENDS = ("compact_hrtf", "itd_ild", "full_hrtf_reference", "mono_reference")
+KNOWN_BINAURAL_BACKENDS = ("array_downmix", "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference")
+PREFERRED_BINAURAL_BACKENDS = ("array_downmix", "compact_hrtf", "itd_ild", "full_hrtf_reference", "mono_reference")
 
 
 @dataclass

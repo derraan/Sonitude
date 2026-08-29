@@ -1,4 +1,4 @@
-"""Adapter around sonitude_stream_process using protocol v2."""
+"""Adapter around sonitude_stream_process using protocol v3."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from app.processing.protocol import (
 )
 from app.processing.sonitude_binary_locator import find_binary
 from app.processing.suppression import SuppressionMode, cli_args_for, parse_suppression_mode
+from app.storage.models import SuppressorRequest
 
 
 class StreamProtocolError(ProtocolError):
@@ -97,6 +98,7 @@ class StreamProcessor:
         binaural_azimuth_deg: float = 0.0,
         binaural_elevation_deg: float = 0.0,
         binaural_backend: str | None = None,
+        suppressor: SuppressorRequest | None = None,
     ) -> int:
         """Send one 6-channel float32 block. Returns the sequence number."""
         if self._process.stdin is None:
@@ -111,6 +113,8 @@ class StreamProcessor:
         blend = width_deg if directivity_blend_deg is None else directivity_blend_deg
         payload = np.ascontiguousarray(mic_pcm, dtype="<f4").tobytes()
         sequence = self._next_sequence
+        sup = suppressor or SuppressorRequest()
+        focus_active = sup.focus_active if suppressor is not None else suppression_focus_active
         header = pack_input_header(
             sequence=sequence,
             frame_count=frame_count,
@@ -118,12 +122,19 @@ class StreamProcessor:
             azimuth_deg=azimuth_deg,
             elevation_deg=elevation_deg,
             directivity_blend_deg=blend,
-            suppression_focus_active=suppression_focus_active,
+            suppression_focus_active=focus_active,
             binaural_enabled=binaural_enabled,
             binaural_follow_steering=binaural_follow_steering,
             binaural_azimuth_deg=binaural_azimuth_deg,
             binaural_elevation_deg=binaural_elevation_deg,
             binaural_backend=backend_id(binaural_backend) if binaural_backend else BACKEND_NONE,
+            suppression_ambient_floor_linear=sup.ambient_floor_linear,
+            suppression_fade_ms=sup.fade_ms,
+            suppression_activity_threshold=sup.activity_threshold,
+            suppression_confidence_threshold=sup.confidence_threshold,
+            suppression_envelope_attack_coeff=sup.envelope_attack_coeff,
+            suppression_envelope_release_coeff=sup.envelope_release_coeff,
+            suppression_confidence=sup.confidence,
         )
         try:
             self._process.stdin.write(header)

@@ -3,7 +3,10 @@
 Qt Multimedia was advancing the playhead on this machine but the processed
 capture sits around -60 dBFS, and QAudioOutput cannot apply gain above unity.
 This engine streams PCM through the same default output device as live mode
-and applies a monitor-only boost (clipped) so quiet recordings are audible.
+and applies a listen-only output boost (clipped) so quiet saved WAVs are audible.
+
+Live workers use preamp_gain_linear / apply_preamp on six-channel input before
+sonitude_stream_process instead of boosting only the monitor output.
 """
 
 from __future__ import annotations
@@ -17,10 +20,22 @@ import soundfile as sf
 from PySide6.QtCore import QObject, QTimer, Signal
 
 
+def preamp_gain_linear(boost_db: float) -> float:
+    boost_db = max(0.0, min(48.0, float(boost_db)))
+    return float(10.0 ** (boost_db / 20.0))
+
+
+def apply_preamp(block: np.ndarray, boost_db: float) -> np.ndarray:
+    """Apply common gain to all channels before the DSP chain (clipped to ±1)."""
+    gain = preamp_gain_linear(boost_db)
+    if gain == 1.0:
+        return block
+    return np.clip(block * gain, -1.0, 1.0).astype(np.float32, copy=False)
+
+
 def monitor_gain_linear(volume_0_to_1: float, boost_db: float) -> float:
     volume = max(0.0, min(1.0, float(volume_0_to_1)))
-    boost_db = max(0.0, min(48.0, float(boost_db)))
-    return volume * float(10.0 ** (boost_db / 20.0))
+    return volume * preamp_gain_linear(boost_db)
 
 
 class PlaybackEngine(QObject):

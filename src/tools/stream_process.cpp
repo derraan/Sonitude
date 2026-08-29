@@ -2,11 +2,11 @@
 // calibration -> beamformer -> suppressor -> limiter chain, plus optional
 // binaural rendering.
 //
-// Protocol v2 (little-endian). See testbench/app/processing/protocol.py.
+// Protocol v3 (little-endian). See testbench/app/processing/protocol.py.
 //
-// Input header (48 bytes):
+// Input header (76 bytes):
 //   u32 magic              = 0x32424253 ("SBB2")
-//   u16 protocol_version   = 2
+//   u16 protocol_version   = 3
 //   u16 message_type       = AUDIO_BLOCK(1) | SHUTDOWN(2)
 //   u32 sequence
 //   u32 frame_count
@@ -19,11 +19,18 @@
 //   f32 binaural_elevation_deg
 //   u8  binaural_backend
 //   u8  reserved[3]
+//   f32 suppression_ambient_floor_linear
+//   f32 suppression_fade_ms
+//   f32 suppression_activity_threshold
+//   f32 suppression_confidence_threshold
+//   f32 suppression_envelope_attack_coeff
+//   f32 suppression_envelope_release_coeff
+//   f32 suppression_confidence
 //   f32 pcm[frame_count * 6]    // only if payload_length > 0
 //
 // Output header (24 bytes):
 //   u32 magic              = 0x324F4253 ("SBO2")
-//   u16 protocol_version   = 2
+//   u16 protocol_version   = 3
 //   u16 message_type
 //   u32 sequence           // echoes the request
 //   u32 frame_count
@@ -70,7 +77,7 @@ namespace
 {
 constexpr std::uint32_t kInputMagic = 0x32424253U;
 constexpr std::uint32_t kOutputMagic = 0x324F4253U;
-constexpr std::uint16_t kProtocolVersion = 2;
+constexpr std::uint16_t kProtocolVersion = 3;
 constexpr std::uint16_t kMsgAudioBlock = 1;
 constexpr std::uint16_t kMsgShutdown = 2;
 constexpr std::uint16_t kMsgError = 3;
@@ -87,6 +94,7 @@ constexpr std::uint8_t kBackendMonoReference = 1;
 constexpr std::uint8_t kBackendItdIld = 2;
 constexpr std::uint8_t kBackendCompactHrtf = 3;
 constexpr std::uint8_t kBackendFullHrtfReference = 4;
+constexpr std::uint8_t kBackendArrayDownmix = 5;
 
 enum class SuppressionMode
 {
@@ -120,17 +128,18 @@ void PrintUsage()
 void PrintCapabilities()
 {
   std::cout << "{"
-            << "\"protocol_version\":2,"
+            << "\"protocol_version\":3,"
             << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"]},"
             << "\"taps\":[\"processed\"],"
             << "\"binaural\":{"
             << "\"available\":true,"
-            << "\"backends\":[\"mono_reference\",\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
+            << "\"backends\":[\"array_downmix\",\"mono_reference\",\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
             << "\"unavailable_backends\":[],"
-            << "\"note\":\"ITD/ILD and SADIE II D2 HRTF tables are implemented. "
-               "compact_16/32/64 are experimental raw-HRIR prefix candidates, not a "
-               "validated edge representation. Unavailable at runtime only if the "
-               "requested HRTF table cannot be loaded.\""
+            << "\"note\":\"array_downmix folds calibrated 6-mic capture to stereo using "
+               "geometry-weighted ear hemispheres (faithful headphone reproduction). "
+               "itd_ild/compact_hrtf/full_hrtf virtualize beamformed mono instead. "
+               "compact_16/32/64 are experimental raw-HRIR prefix candidates. "
+               "Unavailable at runtime only if the requested HRTF table cannot be loaded.\""
             << "}"
             << "}\n";
 }
@@ -170,6 +179,46 @@ bool ResolveSuppression(const SuppressionMode mode, const bool yaml_enabled)
     return false;
   }
   return yaml_enabled;
+}
+
+struct LiveSuppressorParams
+{
+  float ambient_floor_linear = 0.25F;
+  float fade_ms = 120.0F;
+  float activity_threshold = 0.03F;
+  float confidence_threshold = 0.6F;
+  float envelope_attack_coeff = 0.35F;
+  float envelope_release_coeff = 0.01F;
+  float confidence = 1.0F;
+};
+
+bool NearlyEqual(const float a, const float b, const float epsilon = 1.0e-4F)
+{
+  return std::fabs(a - b) <= epsilon;
+}
+
+bool SameSuppressorParams(const LiveSuppressorParams& a, const LiveSuppressorParams& b)
+{
+  return NearlyEqual(a.ambient_floor_linear, b.ambient_floor_linear) &&
+         NearlyEqual(a.fade_ms, b.fade_ms) &&
+         NearlyEqual(a.activity_threshold, b.activity_threshold) &&
+         NearlyEqual(a.confidence_threshold, b.confidence_threshold) &&
+         NearlyEqual(a.envelope_attack_coeff, b.envelope_attack_coeff) &&
+         NearlyEqual(a.envelope_release_coeff, b.envelope_release_coeff);
+}
+
+void ConfigureSuppressor(sonitude::dsp::ConservativeSuppressor& suppressor,
+                       const LiveSuppressorParams& params,
+                       const std::uint32_t sample_rate_hz)
+{
+  suppressor.configure(
+      {.ambient_floor_linear = std::clamp(params.ambient_floor_linear, 0.0F, 1.0F),
+       .fade_ms = std::max(1.0F, params.fade_ms),
+       .activity_threshold = std::max(0.0F, params.activity_threshold),
+       .confidence_threshold = std::clamp(params.confidence_threshold, 0.0F, 1.0F),
+       .envelope_attack_coeff = params.envelope_attack_coeff,
+       .envelope_release_coeff = params.envelope_release_coeff},
+      sample_rate_hz);
 }
 
 std::string SiblingFile(const std::string& path, const std::string& filename)
@@ -216,6 +265,9 @@ bool BackendFromByte(const std::uint8_t value, sonitude::dsp::BinauralBackend& b
     case kBackendFullHrtfReference:
       backend = sonitude::dsp::BinauralBackend::FullHrtfReference;
       return true;
+    case kBackendArrayDownmix:
+      backend = sonitude::dsp::BinauralBackend::ArrayDownmix;
+      return true;
     default:
       return false;
   }
@@ -243,6 +295,11 @@ bool BackendFromName(const std::string& name, sonitude::dsp::BinauralBackend& ba
     backend = sonitude::dsp::BinauralBackend::FullHrtfReference;
     return true;
   }
+  if (name == "array_downmix")
+  {
+    backend = sonitude::dsp::BinauralBackend::ArrayDownmix;
+    return true;
+  }
   return false;
 }
 
@@ -258,6 +315,8 @@ std::uint8_t BackendToByte(const sonitude::dsp::BinauralBackend backend)
       return kBackendCompactHrtf;
     case sonitude::dsp::BinauralBackend::FullHrtfReference:
       return kBackendFullHrtfReference;
+    case sonitude::dsp::BinauralBackend::ArrayDownmix:
+      return kBackendArrayDownmix;
   }
   return kBackendNone;
 }
@@ -291,7 +350,7 @@ bool BackendReady(const BinauralRuntime& runtime, const sonitude::dsp::BinauralB
 
 std::string AvailableBackendsJson(const BinauralRuntime& runtime)
 {
-  std::string json = "[\"mono_reference\",\"itd_ild\"";
+  std::string json = "[\"array_downmix\",\"mono_reference\",\"itd_ild\"";
   if (runtime.compact_table && !runtime.compact_table->empty())
   {
     json += ",\"compact_hrtf\"";
@@ -302,6 +361,18 @@ std::string AvailableBackendsJson(const BinauralRuntime& runtime)
   }
   json += "]";
   return json;
+}
+
+sonitude::dsp::ArrayDownmixWeights ArrayDownmixForGeometry(
+    const sonitude::app::GeometryConfig& geometry)
+{
+  std::vector<double> mic_x;
+  mic_x.reserve(geometry.microphones.size());
+  for (const auto& mic : geometry.microphones)
+  {
+    mic_x.push_back(mic.x);
+  }
+  return sonitude::dsp::MakeArrayDownmixWeights(mic_x);
 }
 }  // namespace
 
@@ -391,12 +462,19 @@ int main(int argc, char** argv)
 
     const bool suppression_enabled = ResolveSuppression(suppression_mode, runtime.suppression.enabled);
     sonitude::dsp::ConservativeSuppressor suppressor;
-    suppressor.configure(
-        {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
-         .fade_ms = runtime.suppression.fade_ms,
-         .activity_threshold = runtime.suppression.activity_threshold,
-         .confidence_threshold = runtime.suppression.confidence_threshold},
-        sample_rate_hz);
+    bool have_live_suppressor_params = false;
+    LiveSuppressorParams last_live_suppressor{};
+    LiveSuppressorParams default_live_suppressor{
+        .ambient_floor_linear = runtime.steering.ambient_floor_linear,
+        .fade_ms = runtime.suppression.fade_ms,
+        .activity_threshold = runtime.suppression.activity_threshold,
+        .confidence_threshold = runtime.suppression.confidence_threshold,
+        .envelope_attack_coeff = 0.35F,
+        .envelope_release_coeff = 0.01F,
+        .confidence = 1.0F};
+    ConfigureSuppressor(suppressor, default_live_suppressor, sample_rate_hz);
+    have_live_suppressor_params = true;
+    last_live_suppressor = default_live_suppressor;
 
     sonitude::dsp::PeakLimiter limiter;
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, sample_rate_hz);
@@ -412,7 +490,7 @@ int main(int argc, char** argv)
     const char* requested = suppression_mode == SuppressionMode::On
                                 ? "on"
                                 : (suppression_mode == SuppressionMode::Off ? "off" : "auto");
-    std::cerr << "sonitude_resolved {\"protocol_version\":2,\"suppression_requested\":\"" << requested
+    std::cerr << "sonitude_resolved {\"protocol_version\":3,\"suppression_requested\":\"" << requested
               << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
               << ",\"limiter_disabled\":" << (disable_limiter ? "true" : "false")
               << ",\"binaural_backends\":" << AvailableBackendsJson(binaural_runtime) << "}\n";
@@ -460,6 +538,13 @@ int main(int argc, char** argv)
       float binaural_el = 0.0F;
       std::uint8_t binaural_backend = 0;
       std::uint8_t reserved[3] = {0, 0, 0};
+      float suppression_ambient_floor = 0.25F;
+      float suppression_fade_ms = 120.0F;
+      float suppression_activity_threshold = 0.03F;
+      float suppression_confidence_threshold = 0.6F;
+      float suppression_envelope_attack = 0.35F;
+      float suppression_envelope_release = 0.01F;
+      float suppression_confidence = 1.0F;
       if (!ReadExact(std::cin, &version, sizeof(version)) ||
           !ReadExact(std::cin, &message_type, sizeof(message_type)) ||
           !ReadExact(std::cin, &sequence, sizeof(sequence)) ||
@@ -472,7 +557,14 @@ int main(int argc, char** argv)
           !ReadExact(std::cin, &binaural_az, sizeof(binaural_az)) ||
           !ReadExact(std::cin, &binaural_el, sizeof(binaural_el)) ||
           !ReadExact(std::cin, &binaural_backend, sizeof(binaural_backend)) ||
-          !ReadExact(std::cin, reserved, sizeof(reserved)))
+          !ReadExact(std::cin, reserved, sizeof(reserved)) ||
+          !ReadExact(std::cin, &suppression_ambient_floor, sizeof(suppression_ambient_floor)) ||
+          !ReadExact(std::cin, &suppression_fade_ms, sizeof(suppression_fade_ms)) ||
+          !ReadExact(std::cin, &suppression_activity_threshold, sizeof(suppression_activity_threshold)) ||
+          !ReadExact(std::cin, &suppression_confidence_threshold, sizeof(suppression_confidence_threshold)) ||
+          !ReadExact(std::cin, &suppression_envelope_attack, sizeof(suppression_envelope_attack)) ||
+          !ReadExact(std::cin, &suppression_envelope_release, sizeof(suppression_envelope_release)) ||
+          !ReadExact(std::cin, &suppression_confidence, sizeof(suppression_confidence)))
       {
         std::cerr << "stream_process: truncated header, aborting\n";
         return 1;
@@ -567,7 +659,21 @@ int main(int argc, char** argv)
       if (suppression_enabled)
       {
         const bool focus_active = (flags & kFlagSuppressionFocus) != 0;
-        suppressor.setControl(focus_active, focus_active ? 1.0F : 0.0F);
+        const LiveSuppressorParams live{
+            .ambient_floor_linear = suppression_ambient_floor,
+            .fade_ms = suppression_fade_ms,
+            .activity_threshold = suppression_activity_threshold,
+            .confidence_threshold = suppression_confidence_threshold,
+            .envelope_attack_coeff = suppression_envelope_attack,
+            .envelope_release_coeff = suppression_envelope_release,
+            .confidence = std::clamp(suppression_confidence, 0.0F, 1.0F)};
+        if (!have_live_suppressor_params || !SameSuppressorParams(live, last_live_suppressor))
+        {
+          ConfigureSuppressor(suppressor, live, sample_rate_hz);
+          last_live_suppressor = live;
+          have_live_suppressor_params = true;
+        }
+        suppressor.setControl(focus_active, focus_active ? live.confidence : 0.0F);
         suppressor.process(std::span<float>(mono.data(), frame_count));
         out_flags |= kOutSuppressionApplied;
       }
@@ -615,7 +721,8 @@ int main(int argc, char** argv)
                  .max_block_frames = max_block_frames,
                  .itd_ild = {.head_radius_m = runtime.binaural.model.head_radius_m,
                              .max_ild_db = runtime.binaural.model.max_ild_db},
-                 .table = TableFor(binaural_runtime, backend)});
+                 .table = TableFor(binaural_runtime, backend),
+                 .array_downmix = ArrayDownmixForGeometry(geometry)});
             binaural_runtime.configured_backend = backend;
             binaural_runtime.renderer_configured = true;
           }
@@ -631,17 +738,27 @@ int main(int argc, char** argv)
       right.assign(frame_count, 0.0F);
       if (binaural_active && !unavailable)
       {
-        const sonitude::audio::BeamformerSteering binaural_dir =
-            follow_steering
-                ? target
-                : (protocol_binaural
-                       ? sonitude::audio::BeamformerSteering{binaural_az, binaural_el}
-                       : sonitude::audio::BeamformerSteering{runtime.binaural.direction.azimuth_deg,
-                                                             runtime.binaural.direction.elevation_deg});
-        binaural_runtime.renderer.setDirection(binaural_dir);
-        binaural_runtime.renderer.process(std::span<const float>(mono.data(), frame_count),
-                                          std::span<float>(left.data(), frame_count),
-                                          std::span<float>(right.data(), frame_count));
+        if (backend == sonitude::dsp::BinauralBackend::ArrayDownmix)
+        {
+          binaural_runtime.renderer.processArray(
+              std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+              std::span<float>(left.data(), frame_count),
+              std::span<float>(right.data(), frame_count));
+        }
+        else
+        {
+          const sonitude::audio::BeamformerSteering binaural_dir =
+              follow_steering
+                  ? target
+                  : (protocol_binaural
+                         ? sonitude::audio::BeamformerSteering{binaural_az, binaural_el}
+                         : sonitude::audio::BeamformerSteering{runtime.binaural.direction.azimuth_deg,
+                                                               runtime.binaural.direction.elevation_deg});
+          binaural_runtime.renderer.setDirection(binaural_dir);
+          binaural_runtime.renderer.process(std::span<const float>(mono.data(), frame_count),
+                                            std::span<float>(left.data(), frame_count),
+                                            std::span<float>(right.data(), frame_count));
+        }
         if (!disable_limiter)
         {
           if (!binaural_runtime.stereo_limiter_configured)

@@ -89,7 +89,7 @@ struct TelemetryConfig
 
 struct BinauralDirectionConfig
 {
-  bool follow_steering = true;
+  bool follow_steering = false;
   float azimuth_deg = 0.0F;
   float elevation_deg = 0.0F;
 };

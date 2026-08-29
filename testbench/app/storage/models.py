@@ -79,7 +79,7 @@ class BinauralRequest:
     backend: str | None = None
     azimuth_deg: float = 0.0
     elevation_deg: float = 0.0
-    follow_beamformer_steering: bool = True
+    follow_beamformer_steering: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -88,6 +88,32 @@ class BinauralRequest:
             "azimuth_deg": self.azimuth_deg,
             "elevation_deg": self.elevation_deg,
             "follow_beamformer_steering": self.follow_beamformer_steering,
+        }
+
+
+@dataclass
+class SuppressorRequest:
+    """Live conservative suppressor tuning (protocol v3 per audio block)."""
+
+    ambient_floor_linear: float = 0.25
+    fade_ms: float = 120.0
+    activity_threshold: float = 0.03
+    confidence_threshold: float = 0.6
+    envelope_attack_coeff: float = 0.35
+    envelope_release_coeff: float = 0.01
+    confidence: float = 1.0
+    focus_active: bool = True
+
+    def as_dict(self) -> dict:
+        return {
+            "ambient_floor_linear": self.ambient_floor_linear,
+            "fade_ms": self.fade_ms,
+            "activity_threshold": self.activity_threshold,
+            "confidence_threshold": self.confidence_threshold,
+            "envelope_attack_coeff": self.envelope_attack_coeff,
+            "envelope_release_coeff": self.envelope_release_coeff,
+            "confidence": self.confidence,
+            "focus_active": self.focus_active,
         }
 
 

@@ -26,14 +26,17 @@ void ConservativeSuppressor::configure(const SuppressorConfig& config, const std
   config_.confidence_threshold = Clamp01(config_.confidence_threshold);
   config_.activity_threshold = std::max(0.0F, config_.activity_threshold);
   config_.fade_ms = std::max(1.0F, config_.fade_ms);
+  config_.envelope_attack_coeff =
+      std::clamp(config_.envelope_attack_coeff, 0.001F, 1.0F);
+  config_.envelope_release_coeff =
+      std::clamp(config_.envelope_release_coeff, 0.0001F, 1.0F);
 
   const float fade_samples =
       std::max(1.0F, (config_.fade_ms * 0.001F) * static_cast<float>(sample_rate_hz));
   gain_step_per_sample_ = 1.0F / fade_samples;
 
-  // Keep envelope memory short to follow speech on period-scale blocks.
-  envelope_attack_coeff_ = 0.35F;
-  envelope_release_coeff_ = 0.01F;
+  envelope_attack_coeff_ = config_.envelope_attack_coeff;
+  envelope_release_coeff_ = config_.envelope_release_coeff;
 
   focus_active_ = false;
   confidence_ = 0.0F;

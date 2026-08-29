@@ -60,6 +60,10 @@ sonitude::dsp::BinauralBackend ParseBinauralBackend(const std::string& backend)
   {
     return sonitude::dsp::BinauralBackend::FullHrtfReference;
   }
+  if (backend == "array_downmix")
+  {
+    return sonitude::dsp::BinauralBackend::ArrayDownmix;
+  }
   return sonitude::dsp::BinauralBackend::MonoReference;
 }
 
@@ -71,6 +75,18 @@ std::string SiblingFile(const std::string& path, const std::string& filename)
     return filename;
   }
   return path.substr(0, pos + 1U) + filename;
+}
+
+sonitude::dsp::ArrayDownmixWeights ArrayDownmixForGeometry(
+    const sonitude::app::GeometryConfig& geometry)
+{
+  std::vector<double> mic_x;
+  mic_x.reserve(geometry.microphones.size());
+  for (const auto& mic : geometry.microphones)
+  {
+    mic_x.push_back(mic.x);
+  }
+  return sonitude::dsp::MakeArrayDownmixWeights(mic_x);
 }
 
 std::unique_ptr<sonitude::dsp::HrtfTable> TryLoadHrtfTable(const std::string& path)
@@ -323,7 +339,8 @@ int main(int argc, char** argv)
                                        .max_block_frames = period_frames,
                                        .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
                                                    .max_ild_db = runtime_config.binaural.model.max_ild_db},
-                                       .table = table});
+                                       .table = table,
+                                       .array_downmix = ArrayDownmixForGeometry(geometry)});
           stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
           binaural_renderer_ready = true;
           std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
@@ -452,16 +469,26 @@ int main(int argc, char** argv)
             std::memory_order_relaxed);
         if (binaural_renderer_ready)
         {
-          const sonitude::audio::BeamformerSteering binaural_dir =
-              runtime_config.binaural.direction.follow_steering
-                  ? snapshot.target
-                  : sonitude::audio::BeamformerSteering{
-                        runtime_config.binaural.direction.azimuth_deg,
-                        runtime_config.binaural.direction.elevation_deg};
-          binaural_renderer.setDirection(binaural_dir);
-          binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
-                                    std::span<float>(binaural_left.data(), frame_count),
-                                    std::span<float>(binaural_right.data(), frame_count));
+          if (binaural_backend == sonitude::dsp::BinauralBackend::ArrayDownmix)
+          {
+            binaural_renderer.processArray(
+                std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+                std::span<float>(binaural_left.data(), frame_count),
+                std::span<float>(binaural_right.data(), frame_count));
+          }
+          else
+          {
+            const sonitude::audio::BeamformerSteering binaural_dir =
+                runtime_config.binaural.direction.follow_steering
+                    ? snapshot.target
+                    : sonitude::audio::BeamformerSteering{
+                          runtime_config.binaural.direction.azimuth_deg,
+                          runtime_config.binaural.direction.elevation_deg};
+            binaural_renderer.setDirection(binaural_dir);
+            binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
+                                      std::span<float>(binaural_left.data(), frame_count),
+                                      std::span<float>(binaural_right.data(), frame_count));
+          }
           stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
                                  std::span<float>(binaural_right.data(), frame_count));
           for (std::size_t i = 0; i < frame_count; ++i)

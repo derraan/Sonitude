@@ -336,8 +336,8 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     }
   }
 
-  static const std::array<const char*, 4> kKnownBinauralBackends = {
-      "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference"};
+  static const std::array<const char*, 5> kKnownBinauralBackends = {
+      "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference", "array_downmix"};
   const bool known_backend = std::any_of(
       kKnownBinauralBackends.begin(),
       kKnownBinauralBackends.end(),

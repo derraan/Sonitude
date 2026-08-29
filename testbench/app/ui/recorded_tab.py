@@ -33,7 +33,6 @@ from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.batch_controller import BatchWorker
 from app.controller.file_preview_controller import FilePreviewWorker
 from app.processing.capabilities import query_tool_capabilities
-from app.processing.suppression import SuppressionMode
 from app.storage.models import SteeringEvent
 from app.storage.result_store import ResultStore
 from app.ui.binaural_controls import BinauralControls
@@ -49,6 +48,7 @@ from app.ui.metrics_panel import MetricsPanel
 from app.ui.playback_panel import PlaybackPanel
 from app.ui.secondary_note import apply_secondary_note
 from app.ui.steering_controls import SteeringControls
+from app.ui.suppressor_controls import SuppressorControls
 from app.ui.visualization_panel import VisualizationPanel
 
 _METADATA_FIELDS = [
@@ -151,16 +151,9 @@ class RecordedDataTab(QWidget):
         input_layout.addWidget(metadata_box)
         input_layout.addWidget(self._validation_label)
 
-        self._steering = SteeringControls("Steering (live while playing)")
+        self._steering = SteeringControls("Beamformer steering (delay-and-sum)")
 
-        suppression_box = QGroupBox("Suppression (requested vs YAML)")
-        self._suppression_combo = QComboBox()
-        _compact_combo(self._suppression_combo)
-        self._suppression_combo.addItem("AUTO (use YAML)", userData=SuppressionMode.AUTO.value)
-        self._suppression_combo.addItem("ON (force on)", userData=SuppressionMode.ON.value)
-        self._suppression_combo.addItem("OFF (force off, overrides YAML)", userData=SuppressionMode.OFF.value)
-        suppression_layout = QVBoxLayout(suppression_box)
-        suppression_layout.addWidget(self._suppression_combo)
+        self._suppressor = SuppressorControls()
 
         export_box = QGroupBox("Final result export")
         self._export_combo = QComboBox()
@@ -200,7 +193,7 @@ class RecordedDataTab(QWidget):
         config_layout = QVBoxLayout(config_inner)
         config_layout.addWidget(self._steering)
         config_layout.addWidget(self._live_dsp)
-        config_layout.addWidget(suppression_box)
+        config_layout.addWidget(self._suppressor)
         config_layout.addWidget(export_box)
         config_layout.addWidget(self._binaural)
         config_layout.addWidget(steering_test_box)
@@ -274,6 +267,7 @@ class RecordedDataTab(QWidget):
         self.playback_panel.boostChanged.connect(self._on_live_boost)
         self._steering.azimuthChanged.connect(self._push_live_params)
         self._steering.blendChanged.connect(lambda _w: self._push_live_params())
+        self._suppressor.changed.connect(self._push_live_params)
         self._binaural.changed.connect(self._push_live_params)
         self.visualization_panel = VisualizationPanel()
         self.visualization_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -306,12 +300,6 @@ class RecordedDataTab(QWidget):
 
         outer = QVBoxLayout(self)
         outer.addWidget(self._main_splitter)
-
-        try:
-            if read_runtime_config_summary(self._config_path).suppression_enabled:
-                self._suppression_combo.setCurrentIndex(0)
-        except Exception:  # noqa: BLE001
-            pass
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -411,7 +399,7 @@ class RecordedDataTab(QWidget):
             paths,
             self._config_path,
             steering_events,
-            suppression=self._suppression_combo.currentData() or SuppressionMode.AUTO.value,
+            suppression=self._suppressor.suppression_mode(),
             output_container=self._export_combo.currentData() or "wav",
             binaural=self._binaural.request(),
             steering_test_expected_azimuth_deg=expected_azimuth,
@@ -478,14 +466,15 @@ class RecordedDataTab(QWidget):
             return
         self._preview.set_steering(self._steering.commanded_azimuth_deg(), 0.0, self._steering.width_deg())
         self._preview.set_binaural(self._binaural.request())
+        self._preview.set_suppressor(self._suppressor.request())
 
     def _on_live_volume(self, volume: float) -> None:
         if self._preview is not None:
             self._preview.set_volume(volume)
 
-    def _on_live_boost(self, boost_db: float) -> None:
+    def _on_live_boost(self, preamp_db: float) -> None:
         if self._preview is not None:
-            self._preview.set_boost_db(boost_db)
+            self._preview.set_preamp_db(preamp_db)
 
     def _on_live_play(self) -> None:
         if self._preview is not None and self._preview.isRunning():
@@ -506,12 +495,13 @@ class RecordedDataTab(QWidget):
             self._config_path,
             config.capture_sample_rate_hz,
             active_channel_map=config.active_channel_map,
-            suppression=self._suppression_combo.currentData() or SuppressionMode.AUTO.value,
+            suppression=self._suppressor.suppression_mode(),
             binaural=self._binaural.request(),
+            suppressor=self._suppressor.request(),
         )
         worker.set_steering(self._steering.commanded_azimuth_deg(), 0.0, self._steering.width_deg())
         worker.set_volume(self.playback_panel.volume())
-        worker.set_boost_db(self.playback_panel.boost_db())
+        worker.set_preamp_db(self.playback_panel.preamp_db())
         worker.positionChanged.connect(
             lambda ms: self.playback_panel.set_clock(ms, worker.duration_ms())
         )

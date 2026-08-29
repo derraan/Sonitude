@@ -10,7 +10,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 INPUT_MAGIC = 0x32424253  # "SBB2"
 OUTPUT_MAGIC = 0x324F4253  # "SBO2"
 
@@ -32,6 +32,7 @@ BACKEND_MONO_REFERENCE = 1
 BACKEND_ITD_ILD = 2
 BACKEND_COMPACT_HRTF = 3
 BACKEND_FULL_HRTF_REFERENCE = 4
+BACKEND_ARRAY_DOWNMIX = 5
 
 BACKEND_NAMES = {
     BACKEND_NONE: None,
@@ -39,11 +40,14 @@ BACKEND_NAMES = {
     BACKEND_ITD_ILD: "itd_ild",
     BACKEND_COMPACT_HRTF: "compact_hrtf",
     BACKEND_FULL_HRTF_REFERENCE: "full_hrtf_reference",
+    BACKEND_ARRAY_DOWNMIX: "array_downmix",
 }
 
 # magic I, version H, type H, seq I, frames I, flags I, payload I,
-# az f, el f, blend f, bin_az f, bin_el f, backend B, pad 3x
-INPUT_HEADER = struct.Struct("<IHHIIII fffff B3x")
+# az f, el f, blend f, bin_az f, bin_el f, backend B, pad 3x,
+# suppressor: ambient_floor f, fade_ms f, activity f, confidence_thresh f,
+#             env_attack f, env_release f, confidence f
+INPUT_HEADER = struct.Struct("<IHHIIII fffff B3x7f")
 # magic I, version H, type H, seq I, frames I, flags I, payload I
 OUTPUT_HEADER = struct.Struct("<IHHIIII")
 
@@ -70,6 +74,13 @@ class InputBlockHeader:
     binaural_azimuth_deg: float
     binaural_elevation_deg: float
     binaural_backend: int
+    suppression_ambient_floor_linear: float
+    suppression_fade_ms: float
+    suppression_activity_threshold: float
+    suppression_confidence_threshold: float
+    suppression_envelope_attack_coeff: float
+    suppression_envelope_release_coeff: float
+    suppression_confidence: float
 
 
 @dataclass
@@ -93,10 +104,17 @@ def pack_input_header(
     directivity_blend_deg: float,
     suppression_focus_active: bool,
     binaural_enabled: bool = False,
-    binaural_follow_steering: bool = True,
+    binaural_follow_steering: bool = False,
     binaural_azimuth_deg: float = 0.0,
     binaural_elevation_deg: float = 0.0,
     binaural_backend: int = BACKEND_NONE,
+    suppression_ambient_floor_linear: float = 0.25,
+    suppression_fade_ms: float = 120.0,
+    suppression_activity_threshold: float = 0.03,
+    suppression_confidence_threshold: float = 0.6,
+    suppression_envelope_attack_coeff: float = 0.35,
+    suppression_envelope_release_coeff: float = 0.01,
+    suppression_confidence: float = 1.0,
     message_type: int = MSG_AUDIO_BLOCK,
 ) -> bytes:
     flags = 0
@@ -121,6 +139,13 @@ def pack_input_header(
         float(binaural_azimuth_deg),
         float(binaural_elevation_deg),
         binaural_backend,
+        float(suppression_ambient_floor_linear),
+        float(suppression_fade_ms),
+        float(suppression_activity_threshold),
+        float(suppression_confidence_threshold),
+        float(suppression_envelope_attack_coeff),
+        float(suppression_envelope_release_coeff),
+        float(suppression_confidence),
     )
 
 

@@ -1,4 +1,4 @@
-"""Protocol v2 unit tests. Fail on nearby-but-wrong properties (wrong seq, old size)."""
+"""Protocol v3 unit tests. Fail on nearby-but-wrong properties (wrong seq, old size)."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ from app.processing.protocol import (
 )
 
 
-def test_input_header_is_48_bytes_not_legacy_24() -> None:
-    assert INPUT_HEADER.size == 48
-    assert INPUT_HEADER.size != 24
+def test_input_header_is_76_bytes_not_legacy_48() -> None:
+    assert INPUT_HEADER.size == 76
+    assert INPUT_HEADER.size != 48
 
 
 def test_output_header_is_24_bytes_not_legacy_8() -> None:
@@ -40,6 +40,13 @@ def test_input_header_pack_unpack_round_trip() -> None:
         suppression_focus_active=True,
         binaural_enabled=True,
         binaural_backend=1,
+        suppression_ambient_floor_linear=0.2,
+        suppression_fade_ms=80.0,
+        suppression_activity_threshold=0.02,
+        suppression_confidence_threshold=0.5,
+        suppression_envelope_attack_coeff=0.4,
+        suppression_envelope_release_coeff=0.008,
+        suppression_confidence=0.95,
     )
     header = unpack_input_header(packed)
     assert header.magic == INPUT_MAGIC
@@ -48,6 +55,9 @@ def test_input_header_pack_unpack_round_trip() -> None:
     assert header.frame_count == 128
     assert header.azimuth_deg == pytest.approx(45.0)
     assert header.directivity_blend_deg == pytest.approx(30.0)
+    assert header.suppression_ambient_floor_linear == pytest.approx(0.2)
+    assert header.suppression_fade_ms == pytest.approx(80.0)
+    assert header.suppression_confidence == pytest.approx(0.95)
 
 
 def test_invalid_magic_is_rejected() -> None:

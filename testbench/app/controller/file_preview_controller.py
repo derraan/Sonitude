@@ -16,11 +16,11 @@ import sounddevice as sd
 import soundfile as sf
 from PySide6.QtCore import QThread, Signal
 
-from app.audio_io.playback_engine import monitor_gain_linear
-from app.config_reader import binaural_request_from_config
+from app.audio_io.playback_engine import apply_preamp
+from app.config_reader import binaural_request_from_config, suppressor_request_from_config
 from app.processing.stream_adapter import StreamProcessor, StreamProtocolError
 from app.processing.suppression import SuppressionMode, parse_suppression_mode
-from app.storage.models import BinauralRequest
+from app.storage.models import BinauralRequest, SuppressorRequest
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ class FilePreviewWorker(QThread):
         block_size: int = 1024,
         suppression: SuppressionMode | str = SuppressionMode.AUTO,
         binaural: BinauralRequest | None = None,
+        suppressor: SuppressorRequest | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -53,11 +54,12 @@ class FilePreviewWorker(QThread):
         self._active_channel_map = list(active_channel_map) if active_channel_map else [0, 1, 2, 3, 4, 5]
         self._lock = threading.Lock()
         self._binaural = binaural or binaural_request_from_config(config_path)
+        self._suppressor = suppressor or suppressor_request_from_config(config_path)
         self._azimuth_deg = 0.0
         self._elevation_deg = 0.0
         self._width_deg = 0.0
         self._volume = 0.8
-        self._boost_db = 24.0
+        self._preamp_db = 24.0
         self._seek_frame: int | None = None
         self._stop = threading.Event()
         self._pause = threading.Event()
@@ -74,13 +76,21 @@ class FilePreviewWorker(QThread):
         with self._lock:
             self._binaural = request
 
+    def set_suppressor(self, request: SuppressorRequest) -> None:
+        with self._lock:
+            self._suppressor = request
+
     def set_volume(self, volume_0_to_1: float) -> None:
         with self._lock:
             self._volume = max(0.0, min(1.0, float(volume_0_to_1)))
 
-    def set_boost_db(self, boost_db: float) -> None:
+    def set_preamp_db(self, preamp_db: float) -> None:
         with self._lock:
-            self._boost_db = max(0.0, min(48.0, float(boost_db)))
+            self._preamp_db = max(0.0, min(48.0, float(preamp_db)))
+
+    def set_boost_db(self, boost_db: float) -> None:
+        """Compatibility alias for set_preamp_db."""
+        self.set_preamp_db(boost_db)
 
     def seek_ms(self, position_ms: int) -> None:
         frame = int(max(0, position_ms) * self._sample_rate_hz / 1000)
@@ -141,7 +151,9 @@ class FilePreviewWorker(QThread):
                     elevation = self._elevation_deg
                     width = self._width_deg
                     binaural = self._binaural
-                    gain = monitor_gain_linear(self._volume, self._boost_db)
+                    suppressor = self._suppressor
+                    volume = self._volume
+                    preamp_db = self._preamp_db
                 if seek is not None:
                     reader.seek(min(max(0, seek), max(0, self._frames_total - 1)))
                     self._frame_index = reader.tell()
@@ -149,28 +161,30 @@ class FilePreviewWorker(QThread):
                 if len(block) == 0:
                     break
                 raw = np.ascontiguousarray(block[:, self._active_channel_map], dtype=np.float32)
+                dsp_input = apply_preamp(raw, preamp_db)
                 bin_az = azimuth if binaural.follow_beamformer_steering else binaural.azimuth_deg
                 bin_el = elevation if binaural.follow_beamformer_steering else binaural.elevation_deg
                 processor.send_block(
-                    raw,
+                    dsp_input,
                     azimuth,
                     elevation,
-                    True,
+                    suppressor.focus_active,
                     width,
                     binaural_enabled=binaural.enabled,
                     binaural_follow_steering=binaural.follow_beamformer_steering,
                     binaural_azimuth_deg=bin_az,
                     binaural_elevation_deg=bin_el,
                     binaural_backend=binaural.backend,
+                    suppressor=suppressor,
                 )
                 processed, _seq = processor.recv_block()
-                output_stream.write(np.clip(processed * gain, -1.0, 1.0).astype(np.float32))
+                output_stream.write(np.clip(processed * volume, -1.0, 1.0).astype(np.float32))
                 self._frame_index += len(block)
                 self.positionChanged.emit(int(self._frame_index * 1000 / self._sample_rate_hz))
                 now = time.monotonic()
                 if now - last_plot >= 0.05:
                     last_plot = now
-                    self.blockProcessed.emit(raw, processed)
+                    self.blockProcessed.emit(dsp_input, processed)
         except (StreamProtocolError, sd.PortAudioError, OSError, ValueError, RuntimeError) as exc:
             logger.exception("Live DSP preview failed")
             self.errorOccurred.emit(str(exc))

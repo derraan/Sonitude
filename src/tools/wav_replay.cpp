@@ -94,6 +94,10 @@ sonitude::dsp::BinauralBackend ParseBinauralBackend(const std::string& backend)
   {
     return sonitude::dsp::BinauralBackend::FullHrtfReference;
   }
+  if (backend == "array_downmix")
+  {
+    return sonitude::dsp::BinauralBackend::ArrayDownmix;
+  }
   throw std::runtime_error("Unknown binaural backend: " + backend);
 }
 
@@ -105,6 +109,18 @@ std::string SiblingFile(const std::string& path, const std::string& filename)
     return filename;
   }
   return path.substr(0, pos + 1U) + filename;
+}
+
+sonitude::dsp::ArrayDownmixWeights ArrayDownmixForGeometry(
+    const sonitude::app::GeometryConfig& geometry)
+{
+  std::vector<double> mic_x;
+  mic_x.reserve(geometry.microphones.size());
+  for (const auto& mic : geometry.microphones)
+  {
+    mic_x.push_back(mic.x);
+  }
+  return sonitude::dsp::MakeArrayDownmixWeights(mic_x);
 }
 
 std::string TablePathForBackend(const sonitude::app::BinauralConfig& binaural,
@@ -133,12 +149,12 @@ void PrintCapabilities()
             << "\"taps\":[\"beamformed\",\"suppressed\",\"processed\",\"binaural\"],"
             << "\"binaural\":{"
             << "\"available\":true,"
-            << "\"backends\":[\"mono_reference\",\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
+            << "\"backends\":[\"array_downmix\",\"mono_reference\",\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
             << "\"unavailable_backends\":[],"
-            << "\"note\":\"ITD/ILD and SADIE II D2 HRTF tables are implemented. "
-               "compact_16/32/64 are experimental raw-HRIR prefix candidates, not a "
-               "validated edge representation. mono_reference remains L=R of processed "
-               "mono; --output stays 1ch.\""
+            << "\"note\":\"array_downmix folds calibrated 6-mic capture to stereo using "
+               "geometry-weighted ear hemispheres. itd_ild/HRTF backends virtualize "
+               "beamformed mono instead. compact_16/32/64 are experimental raw-HRIR prefix "
+               "candidates. mono_reference remains L=R of processed mono; --output stays 1ch.\""
             << "}"
             << "}\n";
 }
@@ -432,10 +448,14 @@ int main(int argc, char** argv)
                           .max_block_frames = kBlock,
                           .itd_ild = {.head_radius_m = runtime.binaural.model.head_radius_m,
                                       .max_ild_db = runtime.binaural.model.max_ild_db},
-                          .table = hrtf_table.get()});
-      binaural.setDirection(binaural_follow
-                                ? events.front().target
-                                : sonitude::audio::BeamformerSteering{binaural_az, binaural_el});
+                          .table = hrtf_table.get(),
+                          .array_downmix = ArrayDownmixForGeometry(geometry)});
+      if (backend != sonitude::dsp::BinauralBackend::ArrayDownmix)
+      {
+        binaural.setDirection(binaural_follow
+                                  ? events.front().target
+                                  : sonitude::audio::BeamformerSteering{binaural_az, binaural_el});
+      }
     }
 
     std::cerr << "sonitude_resolved {\"protocol_version\":2,\"suppression_requested\":\"" << requested
@@ -538,9 +558,18 @@ int main(int argc, char** argv)
       }
       if (binaural_enabled)
       {
-        binaural.process(std::span<const float>(mono.data() + start, count),
-                         std::span<float>(left.data() + start, count),
-                         std::span<float>(right.data() + start, count));
+        if (backend == sonitude::dsp::BinauralBackend::ArrayDownmix)
+        {
+          binaural.processArray(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
+                                std::span<float>(left.data() + start, count),
+                                std::span<float>(right.data() + start, count));
+        }
+        else
+        {
+          binaural.process(std::span<const float>(mono.data() + start, count),
+                           std::span<float>(left.data() + start, count),
+                           std::span<float>(right.data() + start, count));
+        }
         if (!disable_limiter)
         {
           stereo_limiter.process(std::span<float>(left.data() + start, count),
