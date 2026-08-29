@@ -1,37 +1,93 @@
-"""Unit tests for the stream_adapter wire format that don't require the
-actual sonitude_stream_process subprocess (see test_integration_stream_process.py
-for an end-to-end test that runs when the binary is built).
-"""
+"""Protocol v2 unit tests. Fail on nearby-but-wrong properties (wrong seq, old size)."""
 
 from __future__ import annotations
 
-from app.processing.stream_adapter import _INPUT_HEADER, _INPUT_MAGIC, _OUTPUT_HEADER, _OUTPUT_MAGIC
+import pytest
+
+from app.processing.protocol import (
+    INPUT_HEADER,
+    INPUT_MAGIC,
+    MSG_AUDIO_BLOCK,
+    OUTPUT_HEADER,
+    OUTPUT_MAGIC,
+    PROTOCOL_VERSION,
+    ProtocolError,
+    assert_response_sequence,
+    pack_input_header,
+    unpack_input_header,
+    unpack_output_header,
+)
 
 
-def test_input_header_size_matches_cpp_wire_format() -> None:
-    # magic(4) + frame_count(4) + azimuth(4) + elevation(4) + width(4) +
-    # suppression_flag(1) + 3 pad bytes = 24 bytes, matching the field-by-field
-    # reads in src/tools/stream_process.cpp's main loop.
-    assert _INPUT_HEADER.size == 24
+def test_input_header_is_48_bytes_not_legacy_24() -> None:
+    assert INPUT_HEADER.size == 48
+    assert INPUT_HEADER.size != 24
 
 
-def test_output_header_size_matches_cpp_wire_format() -> None:
-    assert _OUTPUT_HEADER.size == 8
+def test_output_header_is_24_bytes_not_legacy_8() -> None:
+    assert OUTPUT_HEADER.size == 24
+    assert OUTPUT_HEADER.size != 8
 
 
 def test_input_header_pack_unpack_round_trip() -> None:
-    packed = _INPUT_HEADER.pack(_INPUT_MAGIC, 128, 45.0, 0.0, 30.0, 1)
-    magic, frame_count, azimuth, elevation, width, flag = _INPUT_HEADER.unpack(packed)
-    assert magic == _INPUT_MAGIC
-    assert frame_count == 128
-    assert azimuth == 45.0
-    assert elevation == 0.0
-    assert width == 30.0
-    assert flag == 1
+    packed = pack_input_header(
+        sequence=7,
+        frame_count=128,
+        payload_length=128 * 6 * 4,
+        azimuth_deg=45.0,
+        elevation_deg=5.0,
+        directivity_blend_deg=30.0,
+        suppression_focus_active=True,
+        binaural_enabled=True,
+        binaural_backend=1,
+    )
+    header = unpack_input_header(packed)
+    assert header.magic == INPUT_MAGIC
+    assert header.protocol_version == PROTOCOL_VERSION
+    assert header.sequence == 7
+    assert header.frame_count == 128
+    assert header.azimuth_deg == pytest.approx(45.0)
+    assert header.directivity_blend_deg == pytest.approx(30.0)
 
 
-def test_output_header_pack_unpack_round_trip() -> None:
-    packed = _OUTPUT_HEADER.pack(_OUTPUT_MAGIC, 256)
-    magic, frame_count = _OUTPUT_HEADER.unpack(packed)
-    assert magic == _OUTPUT_MAGIC
-    assert frame_count == 256
+def test_invalid_magic_is_rejected() -> None:
+    packed = OUTPUT_HEADER.pack(0xDEADBEEF, PROTOCOL_VERSION, MSG_AUDIO_BLOCK, 0, 1, 0, 8)
+    with pytest.raises(ProtocolError, match="invalid magic"):
+        unpack_output_header(packed)
+
+
+def test_unsupported_version_is_rejected() -> None:
+    packed = OUTPUT_HEADER.pack(OUTPUT_MAGIC, 99, MSG_AUDIO_BLOCK, 0, 1, 0, 8)
+    with pytest.raises(ProtocolError, match="unsupported protocol version"):
+        unpack_output_header(packed)
+
+
+def test_truncated_message_is_rejected() -> None:
+    with pytest.raises(ProtocolError, match="truncated"):
+        unpack_output_header(b"\x00\x01\x02\x03")
+
+
+def test_invalid_payload_length_is_rejected() -> None:
+    packed = OUTPUT_HEADER.pack(OUTPUT_MAGIC, PROTOCOL_VERSION, MSG_AUDIO_BLOCK, 1, 2, 0, 3)
+    with pytest.raises(ProtocolError, match="invalid payload length"):
+        unpack_output_header(packed)
+
+
+def test_invalid_frame_count_is_rejected() -> None:
+    packed = OUTPUT_HEADER.pack(OUTPUT_MAGIC, PROTOCOL_VERSION, MSG_AUDIO_BLOCK, 1, 2_000_000, 0, 8)
+    with pytest.raises(ProtocolError, match="invalid frame count"):
+        unpack_output_header(packed)
+
+
+def test_unexpected_sequence_is_rejected() -> None:
+    with pytest.raises(ProtocolError, match="skipped/unexpected sequence"):
+        assert_response_sequence(actual=9, expected=8)
+
+
+def test_stale_or_duplicate_sequence_is_rejected() -> None:
+    with pytest.raises(ProtocolError, match="stale/duplicate"):
+        assert_response_sequence(actual=7, expected=8)
+
+
+def test_matching_sequence_passes() -> None:
+    assert_response_sequence(actual=4, expected=4)

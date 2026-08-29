@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.analysis import steering_error
 from app.processing.batch_adapter import write_steering_script
 from app.storage.models import SteeringEvent
@@ -53,3 +55,28 @@ def test_compute_steering_error_with_estimate() -> None:
     samples = steering_error.compute_steering_error(commanded, estimated)
     assert samples[0].estimate_available is True
     assert samples[0].azimuth_error_deg == -2.0
+
+
+def test_circular_error_wraps_near_plus_minus_180() -> None:
+    assert steering_error.circular_error_deg(-179.0, 179.0) == pytest.approx(2.0)
+    assert abs(steering_error.circular_error_deg(-179.0, 179.0)) != pytest.approx(358.0)
+
+
+def test_circular_error_is_not_linear_subtraction() -> None:
+    linear = -179.0 - 179.0
+    circular = steering_error.circular_error_deg(-179.0, 179.0)
+    assert linear == pytest.approx(-358.0)
+    assert circular == pytest.approx(2.0)
+
+
+def test_circular_error_180_and_minus_180_are_same_direction() -> None:
+    assert steering_error.circular_error_deg(180.0, -180.0) == pytest.approx(0.0)
+    assert steering_error.circular_error_deg(-180.0, 180.0) == pytest.approx(0.0)
+
+
+def test_steering_error_sample_uses_circular_distance() -> None:
+    commanded = [SteeringEvent(0.0, 179.0, 0.0)]
+    estimated = [SteeringEvent(0.0, -179.0, 0.0)]
+    samples = steering_error.compute_steering_error(commanded, estimated)
+    assert samples[0].azimuth_error_deg == pytest.approx(2.0)
+

@@ -18,3 +18,6 @@ testbench/__pycache__/
 testbench/**/__pycache__/
 testbench/.pytest_cache/
 testbench/data/
+
+# Local capture files for test-bench replay (large; do not commit)
+/test_data/
