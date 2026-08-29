@@ -16,6 +16,7 @@ import numpy as np
 import soundfile as sf
 
 from app.controller.realtime_controller import RealtimeWorker
+from app.storage.models import BinauralRequest, SuppressorRequest
 
 
 def _make_worker(active_channel_map: list[int]) -> RealtimeWorker:
@@ -26,6 +27,8 @@ def _make_worker(active_channel_map: list[int]) -> RealtimeWorker:
         config_path="unused.yaml",
         sample_rate_hz=44100,
         active_channel_map=active_channel_map,
+        binaural=BinauralRequest(),
+        suppressor=SuppressorRequest(),
     )
 
 
