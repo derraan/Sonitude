@@ -26,7 +26,7 @@
 #include "dsp/limiter.hpp"
 #include "dsp/calibration_applier.hpp"
 #include "dsp/resampler.hpp"
-#include "dsp/suppressor.hpp"
+#include "dsp/suppression_stage.hpp"
 #include "rt/param_snapshot.hpp"
 #include "rt/spsc_ring.hpp"
 #include "rt/telemetry.hpp"
@@ -288,13 +288,21 @@ int main(int argc, char** argv)
     sonitude::dsp::DelaySumBeamformer beamformer;
     beamformer.configure(
         geometry, runtime_config.steering, calibration, dsp_sample_rate_hz, 4096);
-    sonitude::dsp::ConservativeSuppressor suppressor;
+    sonitude::dsp::SuppressionStage suppressor;
+    const auto suppression_backend = sonitude::dsp::ResolveEnabledBackend(
+        runtime_config.suppression.enabled, runtime_config.suppression.backend);
     suppressor.configure(
-        {.ambient_floor_linear = runtime_config.steering.ambient_floor_linear,
-         .fade_ms = runtime_config.suppression.fade_ms,
-         .activity_threshold = runtime_config.suppression.activity_threshold,
-         .confidence_threshold = runtime_config.suppression.confidence_threshold},
-        dsp_sample_rate_hz);
+        {.backend = suppression_backend,
+         .sample_rate_hz = dsp_sample_rate_hz,
+         .maximum_block_frames = cap_worker.periodFrames(),
+         .conservative = {.ambient_floor_linear = runtime_config.steering.ambient_floor_linear,
+                          .fade_ms = runtime_config.suppression.fade_ms,
+                          .activity_threshold = runtime_config.suppression.activity_threshold,
+                          .confidence_threshold = runtime_config.suppression.confidence_threshold},
+         .spectral = {.enabled = true,
+                      .fft_size = runtime_config.suppression.spectral.fft_size,
+                      .hop_size = runtime_config.suppression.spectral.hop_size,
+                      .gain_floor_db = runtime_config.suppression.spectral.gain_floor_db}});
     sonitude::dsp::PeakLimiter limiter;
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
 
@@ -418,11 +426,13 @@ int main(int argc, char** argv)
                   << '\n';
       }
     });
+    bool hold_estimator_after_xrun = false;
     while (g_running.load(std::memory_order_relaxed))
     {
       std::size_t frame_count = 0;
       if (!cap_worker.readBlock(std::span<sonitude::audio::MicFrame>(mic_frames), &frame_count))
       {
+        hold_estimator_after_xrun = true;
         continue;
       }
 
@@ -452,16 +462,14 @@ int main(int argc, char** argv)
         std::fill(mono.begin(), mono.begin() + static_cast<std::ptrdiff_t>(frame_count), 0.0F);
         beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
                            std::span<float>(mono.data(), frame_count));
-        if (runtime_config.suppression.enabled)
+        if (suppression_backend != sonitude::dsp::SuppressionBackend::Off)
         {
           const bool focus_active = !snapshot.failsafe;
           const float confidence = focus_active ? 1.0F : 0.0F;
+          suppressor.setEstimatorHold(hold_estimator_after_xrun);
+          hold_estimator_after_xrun = false;
           suppressor.setControl(focus_active, confidence);
           suppressor.process(std::span<float>(mono.data(), frame_count));
-        }
-        else
-        {
-          suppressor.setControl(false, 0.0F);
         }
         limiter.process(std::span<float>(mono.data(), frame_count));
         counters.suppressor_gain_milli.store(

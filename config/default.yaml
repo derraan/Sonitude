@@ -32,9 +32,14 @@ steering:
 
 suppression:
   enabled: false
+  backend: conservative
   fade_ms: 120.0
   activity_threshold: 0.03
   confidence_threshold: 0.6
+  spectral:
+    fft_size: 128
+    hop_size: 32
+    gain_floor_db: -12.0
 
 state_machine:
   activation_hold_ms: 400

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "dsp/suppression_stage.hpp"
 #include "dsp/suppressor.hpp"
 
 namespace
@@ -78,9 +79,38 @@ void TestLowConfidenceBypassesSuppression()
 }
 }  // namespace
 
+void TestSuppressionStageOffIsExactCopy()
+{
+  sonitude::dsp::SuppressionStage stage;
+  stage.configure({.backend = sonitude::dsp::SuppressionBackend::Off,
+                   .sample_rate_hz = 44100,
+                   .maximum_block_frames = 64});
+  Require(stage.algorithmicDelaySamples() == 0, "off backend must not add spectral delay");
+  auto mono = ConstantBlock(64, 0.37F);
+  const auto original = mono;
+  stage.process(mono);
+  Require(mono == original, "off backend must preserve samples exactly");
+}
+
+void TestSuppressionStageDoesNotPrepareSpectralWhenOff()
+{
+  sonitude::dsp::SuppressionStage stage;
+  stage.configure({.backend = sonitude::dsp::SuppressionBackend::Conservative,
+                   .sample_rate_hz = 1000,
+                   .maximum_block_frames = 80,
+                   .conservative = {.ambient_floor_linear = 0.25F,
+                                    .fade_ms = 10.0F,
+                                    .activity_threshold = 0.01F,
+                                    .confidence_threshold = 0.6F}});
+  Require(stage.spectral() == nullptr, "conservative backend must not expose a live spectral instance");
+  Require(stage.algorithmicDelaySamples() == 0, "conservative delay must remain 0");
+}
+
 void RunSuppressorTests()
 {
   TestFloorClampAndAttenuation();
   TestFallbackRampToUnity();
   TestLowConfidenceBypassesSuppression();
+  TestSuppressionStageOffIsExactCopy();
+  TestSuppressionStageDoesNotPrepareSpectralWhenOff();
 }

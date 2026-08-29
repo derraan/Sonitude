@@ -21,7 +21,7 @@
 #include "dsp/calibration_applier.hpp"
 #include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
-#include "dsp/suppressor.hpp"
+#include "dsp/suppression_stage.hpp"
 
 namespace
 {
@@ -145,7 +145,10 @@ void PrintCapabilities()
 {
   std::cout << "{"
             << "\"protocol_version\":2,"
-            << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"]},"
+            << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"],"
+               "\"backends\":[\"off\",\"conservative\",\"spectral\"],"
+               "\"default_backend\":\"conservative\","
+               "\"implementation_status\":\"EXPERIMENTAL\"},"
             << "\"taps\":[\"beamformed\",\"suppressed\",\"processed\",\"binaural\"],"
             << "\"binaural\":{"
             << "\"available\":true,"
@@ -165,6 +168,7 @@ void PrintUsage()
             << "  sonitude_wav_replay --input <six_channel_wav> --config <runtime_yaml>\n"
             << "                      --script <steering_csv> --output <mono_wav>\n"
             << "                      [--suppression auto|on|off]\n"
+            << "                      [--suppression-backend off|conservative|spectral]\n"
             << "                      [--enable-suppression] [--disable-suppression] [--disable-limiter]\n"
             << "                      [--output-beamformed <mono_wav>]\n"
             << "                      [--output-suppressed <mono_wav>]\n"
@@ -261,6 +265,7 @@ int main(int argc, char** argv)
   std::optional<float> binaural_azimuth_override;
   std::optional<float> binaural_elevation_override;
   SuppressionMode suppression_mode = SuppressionMode::Auto;
+  std::optional<std::string> suppression_backend_override;
   bool disable_limiter = false;
 
   for (int i = 1; i < argc; ++i)
@@ -331,6 +336,10 @@ int main(int argc, char** argv)
     else if (arg == "--suppression" && i + 1 < argc)
     {
       suppression_mode = ParseSuppressionMode(argv[++i]);
+    }
+    else if (arg == "--suppression-backend" && i + 1 < argc)
+    {
+      suppression_backend_override = argv[++i];
     }
     else if (arg == "--enable-suppression")
     {
@@ -416,6 +425,10 @@ int main(int argc, char** argv)
     const char* requested = suppression_mode == SuppressionMode::On
                                 ? "on"
                                 : (suppression_mode == SuppressionMode::Off ? "off" : "auto");
+    const std::string backend_name =
+        suppression_backend_override.value_or(runtime.suppression.backend);
+    const auto suppression_backend =
+        sonitude::dsp::ResolveEnabledBackend(suppression_enabled, backend_name);
     const bool binaural_enabled = !output_binaural_path.empty();
     const bool binaural_follow =
         binaural_follow_override.value_or(runtime.binaural.direction.follow_steering);
@@ -424,6 +437,7 @@ int main(int argc, char** argv)
     const float binaural_el =
         binaural_elevation_override.value_or(runtime.binaural.direction.elevation_deg);
     sonitude::dsp::BinauralBackend backend = sonitude::dsp::BinauralBackend::MonoReference;
+    constexpr std::size_t kBlock = 256;
 
     std::unique_ptr<sonitude::dsp::HrtfTable> hrtf_table;
     sonitude::dsp::BinauralRenderer binaural;
@@ -441,7 +455,6 @@ int main(int argc, char** argv)
         hrtf_table = std::make_unique<sonitude::dsp::HrtfTable>(
             sonitude::dsp::LoadHrtfTableFromFile(table_path));
       }
-      constexpr std::size_t kBlock = 256;
       binaural.configure({.sample_rate_hz = input_wav.sample_rate_hz,
                           .backend = backend,
                           .transition_ms = runtime.binaural.transition.duration_ms,
@@ -460,18 +473,36 @@ int main(int argc, char** argv)
 
     std::cerr << "sonitude_resolved {\"protocol_version\":2,\"suppression_requested\":\"" << requested
               << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
+              << ",\"suppression_backend_requested\":\"" << backend_name << "\""
+              << ",\"suppression_backend_resolved\":\""
+              << sonitude::dsp::SuppressionBackendName(suppression_backend) << "\""
+              << ",\"suppression_fft_size\":" << runtime.suppression.spectral.fft_size
+              << ",\"suppression_hop_size\":" << runtime.suppression.spectral.hop_size
+              << ",\"suppression_gain_floor_db\":" << runtime.suppression.spectral.gain_floor_db
+              << ",\"suppression_algorithmic_delay_samples\":"
+              << (suppression_backend == sonitude::dsp::SuppressionBackend::Spectral
+                      ? (runtime.suppression.spectral.fft_size == 0
+                             ? 0
+                             : runtime.suppression.spectral.fft_size - 1)
+                      : 0)
+              << ",\"suppression_implementation_status\":\"EXPERIMENTAL\""
               << ",\"limiter_disabled\":" << (disable_limiter ? "true" : "false")
               << ",\"binaural_backend\":\"" << binaural_backend << "\",\"binaural_available\":true"
               << ",\"binaural_follow_steering\":" << (binaural_follow ? "true" : "false")
               << ",\"binaural_azimuth_deg\":" << binaural_az
               << ",\"binaural_elevation_deg\":" << binaural_el << "}\n";
-    sonitude::dsp::ConservativeSuppressor suppressor;
-    suppressor.configure(
-        {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
-         .fade_ms = runtime.suppression.fade_ms,
-         .activity_threshold = runtime.suppression.activity_threshold,
-         .confidence_threshold = runtime.suppression.confidence_threshold},
-        input_wav.sample_rate_hz);
+    sonitude::dsp::SuppressionStage suppressor;
+    suppressor.configure({.backend = suppression_backend,
+                          .sample_rate_hz = input_wav.sample_rate_hz,
+                          .maximum_block_frames = kBlock,
+                          .conservative = {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
+                                           .fade_ms = runtime.suppression.fade_ms,
+                                           .activity_threshold = runtime.suppression.activity_threshold,
+                                           .confidence_threshold = runtime.suppression.confidence_threshold},
+                          .spectral = {.enabled = true,
+                                       .fft_size = runtime.suppression.spectral.fft_size,
+                                       .hop_size = runtime.suppression.spectral.hop_size,
+                                       .gain_floor_db = runtime.suppression.spectral.gain_floor_db}});
     sonitude::dsp::PeakLimiter limiter;
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
     sonitude::dsp::StereoPeakLimiter stereo_limiter;
@@ -505,8 +536,8 @@ int main(int argc, char** argv)
     }
 
     std::size_t event_index = 1;
-    constexpr std::size_t kBlock = 256;
-    for (std::size_t start = 0; start < frames; start += kBlock)
+    constexpr std::size_t kProcessBlock = kBlock;
+    for (std::size_t start = 0; start < frames; start += kProcessBlock)
     {
       while (event_index < events.size() && events[event_index].frame_index <= start)
       {
@@ -518,7 +549,7 @@ int main(int argc, char** argv)
         current_width_deg = events[event_index].width_deg;
         ++event_index;
       }
-      const std::size_t count = std::min(kBlock, frames - start);
+      const std::size_t count = std::min(kProcessBlock, frames - start);
       beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
                          std::span<float>(mono.data() + start, count));
       if (current_width_deg > 0.0F)

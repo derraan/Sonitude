@@ -51,6 +51,7 @@ add_library(
   src/dsp/fft_radix2.cpp
   src/dsp/streaming_stft.cpp
   src/dsp/spectral_postfilter.cpp
+  src/dsp/suppression_stage.cpp
   src/dsp/suppressor.cpp
   src/rt/rt_thread.cpp
   src/spatial/mock_doa_provider.cpp

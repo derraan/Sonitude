@@ -196,3 +196,52 @@ def test_compact_hrtf_binaural_is_stereo_and_not_lr_duplicate(
     assert not np.allclose(stereo[:, 0], stereo[:, 1], atol=1e-6), (
         "compact_hrtf must not be an L=R duplicate of directional mono"
     )
+
+
+def test_spectral_backend_is_experimental_and_off_is_bit_exact(
+    six_channel_fixture: Path, tmp_path: Path, wav_replay_binary: Path
+) -> None:
+    events = [SteeringEvent(time_s=0.0, azimuth_deg=0.0, elevation_deg=0.0)]
+    off = run_wav_replay(
+        six_channel_fixture,
+        DEFAULT_CONFIG_PATH,
+        events,
+        tmp_path / "off",
+        suppression="off",
+        binary_path=wav_replay_binary,
+    )
+    spectral = run_wav_replay(
+        six_channel_fixture,
+        DEFAULT_CONFIG_PATH,
+        events,
+        tmp_path / "spectral",
+        suppression="on",
+        suppression_backend="spectral",
+        binary_path=wav_replay_binary,
+        disable_limiter=True,
+    )
+    conservative = run_wav_replay(
+        six_channel_fixture,
+        DEFAULT_CONFIG_PATH,
+        events,
+        tmp_path / "cons",
+        suppression="on",
+        suppression_backend="conservative",
+        binary_path=wav_replay_binary,
+        disable_limiter=True,
+    )
+    assert off.resolved.get("suppression_backend_resolved") == "off"
+    assert off.resolved.get("suppression_algorithmic_delay_samples") in (0, 0.0)
+    assert spectral.resolved.get("suppression_backend_resolved") == "spectral"
+    assert spectral.resolved.get("suppression_implementation_status") == "EXPERIMENTAL"
+    assert spectral.resolved.get("suppression_fft_size") == 128
+    assert spectral.resolved.get("suppression_hop_size") == 32
+    assert spectral.resolved.get("suppression_algorithmic_delay_samples") == 127
+    beam_off, _ = audio_loader.load_wav(off.beamformed_wav)
+    supp_off, _ = audio_loader.load_wav(off.suppressed_wav)
+    assert np.array_equal(beam_off, supp_off), "disabled backend must match the beamformed tap exactly"
+    supp_spec, _ = audio_loader.load_wav(spectral.suppressed_wav)
+    supp_cons, _ = audio_loader.load_wav(conservative.suppressed_wav)
+    assert not np.allclose(supp_spec, supp_cons, atol=1e-6), (
+        "spectral and conservative backends must not be identical when both are on"
+    )

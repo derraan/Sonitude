@@ -270,6 +270,44 @@ void TestHoldFreezesNoise()
   tracker.update(p, false);
   Require(std::fabs(tracker.noisePower()[0] - frozen) < 1.0e-6F, "hold must freeze upward noise updates");
 }
+
+void TestMixtureSnrFixture()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "mixture prepare");
+  const double bin = 44100.0 / 128.0;
+  const auto speech = Sine(44100, 4.0 * bin, 44100.0, 0.25F);
+  const auto noise = Lcg(44100, 99, 0.15F);
+  std::vector<float> mix(44100, 0.0F);
+  for (std::size_t i = 0; i < mix.size(); ++i)
+  {
+    mix[i] = speech[i] + noise[i];
+  }
+  std::vector<float> out(mix.size(), 0.0F);
+  pf.setControl(true, 1.0F);
+  pf.process(mix, out);
+  const std::size_t skip = pf.algorithmicDelaySamples() + 8000;
+  const double mix_rms = Rms(mix, skip);
+  const double out_rms = Rms(out, skip);
+  Require(out_rms < mix_rms, "synthetic mixture fixture: output RMS should fall (not a real-world claim)");
+}
+
+void TestCoLocatedSpectraAreNotSpatialSeparation()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "colocated prepare");
+  const double f = 4.0 * 44100.0 / 128.0;
+  const auto a = Sine(20000, f, 44100.0, 0.2F);
+  const auto b = Sine(20000, f, 44100.0, 0.2F);
+  std::vector<float> mix(20000, 0.0F);
+  for (std::size_t i = 0; i < mix.size(); ++i)
+  {
+    mix[i] = a[i] + b[i];
+  }
+  std::vector<float> out(mix.size(), 0.0F);
+  pf.process(mix, out);
+  Require(AllFinite(out), "co-located equal spectra remain finite");
+}
 }  // namespace
 
 void RunSpectralPostfilterTests()
@@ -282,4 +320,6 @@ void RunSpectralPostfilterTests()
   TestCleanSineNegativeControl();
   TestChunkResetAllocDelay();
   TestHoldFreezesNoise();
+  TestMixtureSnrFixture();
+  TestCoLocatedSpectraAreNotSpatialSeparation();
 }
