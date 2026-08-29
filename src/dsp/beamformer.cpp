@@ -129,6 +129,13 @@ void DelaySumBeamformer::setTarget(const audio::BeamformerSteering target)
   {
     throw std::runtime_error("beamformer used before configure");
   }
+  if (spatial::SteeringApproximatelyEqual(target.azimuth_deg,
+                                          target.elevation_deg,
+                                          current_target_.azimuth_deg,
+                                          current_target_.elevation_deg))
+  {
+    return;
+  }
   pending_delays_ = computeDelaysForTarget(target);
   current_target_ = target;
   crossfading_ = true;

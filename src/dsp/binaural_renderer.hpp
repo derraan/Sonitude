@@ -44,8 +44,11 @@ class BinauralRenderer
   void process(std::span<const float> mono, std::span<float> left, std::span<float> right);
 
   BinauralBackend resolvedBackend() const { return config_.backend; }
+  // Heap RAM: 4 delay-line buffers + 4 FIR ring buffers + working FIR copies.
   std::size_t stateBytes() const;
   std::size_t coefficientBytes() const;
+  // First-arrival latency: sample index of the first output that can contain
+  // a time-0 impulse. Not group delay, not IR tail, not host buffering.
   std::size_t algorithmicLatencySamples() const;
 
   struct EarParams
@@ -79,6 +82,7 @@ class BinauralRenderer
   audio::BeamformerSteering current_direction_{};
   audio::BeamformerSteering pending_direction_{};
   bool configured_ = false;
+  bool direction_applied_ = false;
   std::size_t ramp_samples_ = 1;
   std::size_t fade_cursor_ = 0;
   bool crossfading_ = false;

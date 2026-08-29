@@ -19,6 +19,13 @@ from app.processing.capabilities import ToolCapabilities, preferred_binaural_bac
 from app.storage.models import BinauralRequest
 from app.ui.secondary_note import apply_secondary_note
 
+BACKEND_LABELS = {
+    "mono_reference": "mono_reference (L=R bypass)",
+    "itd_ild": "itd_ild",
+    "compact_hrtf": "compact_hrtf (experimental HRIR prefix)",
+    "full_hrtf_reference": "full_hrtf_reference",
+}
+
 
 class BinauralControls(QWidget):
     changed = Signal()
@@ -117,7 +124,7 @@ class BinauralControls(QWidget):
             return
 
         for name in caps.backends:
-            self._backend.addItem(name, userData=name)
+            self._backend.addItem(BACKEND_LABELS.get(name, name), userData=name)
         yaml_backend = yaml_binaural.backend if yaml_binaural is not None else None
         chosen = preferred_binaural_backend(caps.backends, yaml_backend)
         if chosen is not None:
@@ -138,5 +145,7 @@ class BinauralControls(QWidget):
         unavailable = ", ".join(caps.unavailable_backends) or "none"
         binary = f" Binary: {self._capabilities.binary_path}." if self._capabilities.binary_path else ""
         self._note.setText(
-            f"{caps.note} Unavailable backends (not offered): {unavailable}.{binary}"
+            f"{caps.note} compact_hrtf uses a raw HRIR prefix, not a measured compact "
+            f"approximation, and is not signed off for Pico/STM32. Unavailable backends "
+            f"(not offered): {unavailable}.{binary}"
         )

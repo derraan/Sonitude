@@ -53,9 +53,11 @@ void RunBench(const std::string& label,
   const double rt_factor = sps / static_cast<double>(cfg.sample_rate_hz);
 
   std::cout << label << ": samples_per_sec=" << sps << " block_us=" << block_us
-            << " realtime_factor=" << rt_factor << " state_bytes=" << renderer.stateBytes()
+            << " realtime_factor=" << rt_factor
+            << " state_bytes=" << renderer.stateBytes()
+            << " (delay+FIR+working copies)"
             << " coeff_bytes=" << renderer.coefficientBytes()
-            << " latency_samples=" << renderer.algorithmicLatencySamples() << '\n';
+            << " first_arrival_samples=" << renderer.algorithmicLatencySamples() << '\n';
 }
 }  // namespace
 

@@ -136,7 +136,9 @@ void PrintCapabilities()
             << "\"backends\":[\"mono_reference\",\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
             << "\"unavailable_backends\":[],"
             << "\"note\":\"ITD/ILD and SADIE II D2 HRTF tables are implemented. "
-               "mono_reference remains L=R of processed mono; --output stays 1ch.\""
+               "compact_16/32/64 are experimental raw-HRIR prefix candidates, not a "
+               "validated edge representation. mono_reference remains L=R of processed "
+               "mono; --output stays 1ch.\""
             << "}"
             << "}\n";
 }

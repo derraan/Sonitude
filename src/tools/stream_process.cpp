@@ -128,7 +128,9 @@ void PrintCapabilities()
             << "\"backends\":[\"mono_reference\",\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
             << "\"unavailable_backends\":[],"
             << "\"note\":\"ITD/ILD and SADIE II D2 HRTF tables are implemented. "
-               "Unavailable at runtime only if the requested HRTF table cannot be loaded.\""
+               "compact_16/32/64 are experimental raw-HRIR prefix candidates, not a "
+               "validated edge representation. Unavailable at runtime only if the "
+               "requested HRTF table cannot be loaded.\""
             << "}"
             << "}\n";
 }

@@ -22,9 +22,11 @@ ConservativeSuppressor → PeakLimiter`, plus optional `BinauralRenderer` in
 the portable CLI tools (not yet in `sonitude_realtime`). Python never
 implements HRTF/ITD. Binaural controls are **capability-gated** from
 `--capabilities`. This tree implements `mono_reference`, `itd_ild`,
-`compact_hrtf`, and `full_hrtf_reference`. Rebuild the CLI tools after
-checkout; an older binary that only advertises `mono_reference` still
-gates HRTF. `--output` stays mono; listen to the **Binaural** DSP stage.
+`compact_hrtf`, and `full_hrtf_reference`. `compact_hrtf` is an
+**experimental raw-HRIR prefix**, not a selected Pico/STM32 table.
+Rebuild the CLI tools after checkout; an older binary that only advertises
+`mono_reference` still gates HRTF. `--output` stays mono; listen to the
+**Binaural** DSP stage.
 
 ## Building the C++ tools
 
@@ -103,7 +105,7 @@ Uncheck **Live DSP** to listen to already-written result files instead.
 | RAM | Decodes the file, then the C++ tool holds it | Block reads; the file is never fully loaded |
 | Taps | `beamformed.wav`, `suppressed.wav`, residuals, optional sweep | Stereo/mono PCM_16 writes only — **no** DSP-tap residuals, **no** objective sweep |
 | Binaural | `--output-binaural` float WAV | Optional `binaural_stereo.wav` as it streams |
-| Export container | Final WAV/FLAC choice does not change DSP | Same; streaming intermediates are PCM_16 so Qt can play them |
+| Export container | Final WAV/FLAC choice does not change DSP | Same; streaming intermediates are PCM_16, then a block-wise lossless transcode writes `processed_export.wav` or `processed_export.flac` |
 
 MP3 export is not supported. Overview plots hop-seek across the file
 (`PLOT_MAX_POINTS` waveform samples, STFT windows spaced over the true

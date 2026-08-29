@@ -2,7 +2,9 @@
 """
 Prepare Sonitude HRTF tables from a SOFA file.
 
-This tool emits Sonitude SNHR v1 tables for reference and compact candidates.
+This tool emits Sonitude SNHR v1 tables for a 256-tap reference and for
+experimental compact-HRIR *candidates* (first N raw samples). Compact tables
+are not a validated edge representation until reference-error measurements exist.
 """
 
 from __future__ import annotations
@@ -14,8 +16,17 @@ import pathlib
 import struct
 import zlib
 
-import h5py
 import numpy as np
+
+
+def resolve_target_rate(source_rate: int, target_rate: int) -> int:
+    """Reject relabel-without-resample. HRIR resampling is not implemented."""
+    if int(target_rate) != int(source_rate):
+        raise RuntimeError(
+            f"--target-rate {target_rate} does not match SOFA sample rate {source_rate}. "
+            "HRIR resampling is not implemented; omit --target-rate or pass the source rate."
+        )
+    return int(source_rate)
 
 
 def normalize_azimuth_deg(az: float) -> float:
@@ -30,10 +41,14 @@ def normalize_azimuth_deg(az: float) -> float:
 def build_table(
     sofa_path: pathlib.Path, out_path: pathlib.Path, taps: int, target_rate: int, sonitude_step_deg: int
 ) -> dict:
+    import h5py
+
     with h5py.File(sofa_path, "r") as f:
         sr = int(np.asarray(f["Data.SamplingRate"])[0])
         ir = np.asarray(f["Data.IR"])  # [M, R, N]
         pos = np.asarray(f["SourcePosition"])  # [M,3] deg,deg,m
+
+    target_rate = resolve_target_rate(sr, target_rate)
 
     if ir.shape[1] != 2:
         raise RuntimeError("SOFA must contain exactly 2 receiver channels")
@@ -84,6 +99,13 @@ def build_table(
         "target_sample_rate_hz": target_rate,
         "direction_count": len(directions),
         "taps_per_ear": taps,
+        "reduction_method": "raw_hrir_prefix_truncation" if taps < 256 else "full_hrir_prefix",
+        "status": (
+            "experimental_compact_hrir_candidate"
+            if taps < 256
+            else "full_hrtf_reference"
+        ),
+        "edge_ready": False,
         "crc32": f"0x{crc:08x}",
         "path": str(out_path.as_posix()),
     }
@@ -117,8 +139,12 @@ def main() -> int:
         "license": "Apache-2.0",
         "source_format": "SOFA/AES69",
         "preparation_tool": "tools/hrtf/prepare_hrtf.py",
-        "preparation_version": "1",
+        "preparation_version": "2",
         "azimuth_mapping": "sonitude_az = normalize(-sadie_az)",
+        "compact_note": (
+            "compact_16/32/64 are the first N raw HRIR samples with explicit ITD left at "
+            "zero. They are experimental candidates, not a selected edge representation."
+        ),
         "outputs": outputs,
     }
     (out_dir / "provenance.json").write_text(json.dumps(provenance, indent=2), encoding="utf-8")

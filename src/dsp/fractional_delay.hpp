@@ -16,6 +16,9 @@ class FractionalDelayLine
  public:
   static constexpr std::size_t kTaps = 8;
   static constexpr std::size_t kPhases = 64;
+  // Hann window is zero at tap 0 and tap N-1, so the first non-zero
+  // interpolator tap is 1. First-arrival latency is floor(delay) + this.
+  static constexpr std::size_t kFirstArrivalTapOffset = 1;
 
   void configure(double max_delay_samples)
   {
@@ -35,6 +38,8 @@ class FractionalDelayLine
     std::fill(buffer_.begin(), buffer_.end(), 0.0F);
     write_index_ = 0;
   }
+
+  std::size_t stateBytes() const { return buffer_.size() * sizeof(float); }
 
   float process(float input, double delay_samples)
   {

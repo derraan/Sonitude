@@ -31,6 +31,16 @@ inline double AngularDistanceAbsDeg(double a_deg, double b_deg)
   return std::fabs(SignedAngularDistanceDeg(a_deg, b_deg));
 }
 
+inline bool SteeringApproximatelyEqual(double azimuth_a_deg,
+                                       double elevation_a_deg,
+                                       double azimuth_b_deg,
+                                       double elevation_b_deg,
+                                       double eps_deg = 1.0e-4)
+{
+  return AngularDistanceAbsDeg(azimuth_a_deg, azimuth_b_deg) <= eps_deg &&
+         std::fabs(elevation_a_deg - elevation_b_deg) <= eps_deg;
+}
+
 inline bool AngleWithinIntervalDeg(double angle_deg, double min_deg, double max_deg)
 {
   const double a = NormalizeAzimuthDeg(angle_deg);

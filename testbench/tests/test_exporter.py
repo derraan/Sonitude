@@ -6,8 +6,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import soundfile as sf
 
-from app.audio_io.exporter import ExportError, export_pcm, read_back
+from app.audio_io.exporter import ExportError, export_pcm, read_back, transcode_lossless
 
 
 def test_wav_float32_roundtrip_matches_pcm(tmp_path: Path, sample_rate: int) -> None:
@@ -32,6 +33,23 @@ def test_flac_roundtrip_compares_decoded_pcm(tmp_path: Path, sample_rate: int) -
     quantized = np.round(original * (2**23)) / (2**23)
     np.testing.assert_allclose(decoded, quantized, atol=2 / (2**23))
     assert not np.allclose(decoded, np.zeros_like(decoded))
+
+
+def test_transcode_flac_keeps_frames_channels_rate(tmp_path: Path, sample_rate: int) -> None:
+    rng = np.random.default_rng(13)
+    original = rng.normal(0, 0.2, (4096, 2)).astype(np.float32)
+    source = export_pcm(tmp_path / "in.wav", original, sample_rate, container="wav", subtype="PCM_16")
+    dest = transcode_lossless(source, tmp_path / "out.flac", container="flac")
+    info = sf.info(str(dest))
+    assert info.format == "FLAC"
+    assert info.frames == 4096
+    assert info.channels == 2
+    assert info.samplerate == sample_rate
+    decoded, sr = read_back(dest)
+    assert sr == sample_rate
+    wav_decoded, _ = read_back(source)
+    quantized = np.round(wav_decoded * (2**23)) / (2**23)
+    np.testing.assert_allclose(decoded, quantized, atol=2 / (2**23))
 
 
 def test_mp3_export_is_rejected(tmp_path: Path, sample_rate: int) -> None:

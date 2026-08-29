@@ -11,6 +11,8 @@ import soundfile as sf
 from app.audio_io import audio_loader
 from app.audio_io.audio_loader import CodecCapabilityError, CodecError
 
+STEREO_MP3 = Path(__file__).resolve().parent / "fixtures" / "stereo_tone.mp3"
+
 
 def test_read_wav_metadata(six_channel_wav: Path, sample_rate: int) -> None:
     metadata = audio_loader.read_wav_metadata(six_channel_wav)
@@ -111,6 +113,29 @@ def test_mp3_capability_error_when_unsupported(tmp_path: Path) -> None:
     else:
         with pytest.raises(CodecCapabilityError, match="MP3 decode is not available"):
             audio_loader.load_audio(fake)
+
+
+def test_valid_stereo_mp3_decodes_and_preserves_channels(sample_rate: int) -> None:
+    if not audio_loader.mp3_decode_supported():
+        pytest.skip("installed libsndfile cannot decode MP3")
+    assert STEREO_MP3.exists(), "commit testbench/tests/fixtures/stereo_tone.mp3"
+    data, metadata = audio_loader.load_audio(STEREO_MP3)
+    assert metadata.container == "mp3"
+    assert metadata.channels == 2
+    assert data.shape[1] == 2
+    assert data.dtype == np.float32
+    assert metadata.sample_rate_hz == sample_rate
+    assert data.shape[0] == metadata.num_samples
+    assert np.all(np.isfinite(data))
+    assert np.max(np.abs(data)) > 1e-3
+    result = audio_loader.validate_audio_file(
+        STEREO_MP3,
+        expected_sample_rate_hz=sample_rate,
+        active_channel_map=[0, 1, 2, 3, 4, 5],
+    )
+    assert result.error_kind == "dsp_input"
+    assert not result.ok
+    assert any("Decoded successfully with 2 channel" in e for e in result.errors)
 
 
 def test_corrupt_wav_is_codec_error_not_dsp(tmp_path: Path) -> None:

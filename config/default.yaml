@@ -79,6 +79,8 @@ binaural:
     duration_ms: 150.0
   profile:
     id: generic_sadie2_d2
+    # Experimental compact-HRIR candidate (raw 32-sample prefix). Not a
+    # selected Pico/STM32 representation; no reference-error study yet.
     table_path: "../data/hrtf/generic_sadie2_d2/compact_32.shrf"
   model:
     head_radius_m: 0.0875

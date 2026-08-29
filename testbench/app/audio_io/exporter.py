@@ -42,6 +42,45 @@ def export_pcm(
     return path
 
 
+def transcode_lossless(
+    source: str | Path,
+    dest: str | Path,
+    *,
+    container: str,
+    subtype: str | None = None,
+    block_frames: int = 8192,
+) -> Path:
+    """Copy PCM into WAV or FLAC without loading the whole file into RAM."""
+    source = Path(source)
+    dest = Path(dest)
+    container = container.lower().lstrip(".")
+    if container not in LOSSLESS_FORMATS:
+        raise ExportError(f"Unsupported export container {container!r}; use wav or flac (no MP3 output)")
+    if subtype is None:
+        subtype = "FLOAT" if container == "wav" else "PCM_24"
+    try:
+        with sf.SoundFile(str(source)) as reader:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with sf.SoundFile(
+                str(dest),
+                mode="w",
+                samplerate=reader.samplerate,
+                channels=reader.channels,
+                format=container.upper(),
+                subtype=subtype,
+            ) as writer:
+                while True:
+                    block = reader.read(block_frames, dtype="float32", always_2d=True)
+                    if len(block) == 0:
+                        break
+                    writer.write(block)
+    except ExportError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ExportError(f"Failed to transcode {source.name} to {container}: {exc}") from exc
+    return dest
+
+
 def read_back(path: str | Path) -> tuple[np.ndarray, int]:
     data, sample_rate = sf.read(str(path), dtype="float32", always_2d=True)
     return data, int(sample_rate)

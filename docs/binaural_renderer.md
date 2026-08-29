@@ -39,6 +39,12 @@ Direction changes use dual-path crossfade:
 - render pending path in parallel
 - linearly crossfade over `transition_ms`
 - swap active path at fade completion
+- **identical `setDirection()` calls are ignored** so a live tool that
+  restates the same azimuth every block cannot restart the fade
+
+`sonitude_stream_process` currently calls `setDirection()` on every block.
+The renderer, not the caller, is responsible for treating a repeated target
+as a no-op. The same rule applies to `DelaySumBeamformer::setTarget()`.
 
 This matches the click-safe strategy already used by the beamformer.
 
@@ -47,6 +53,11 @@ This matches the click-safe strategy already used by the beamformer.
 ## HRTF backends
 
 - `CompactHrtf` and `FullHrtfReference` are both data-driven from `HrtfTable`.
+- Compact tables (`compact_16/32/64.shrf`) are **experimental raw-HRIR prefix
+  candidates**: the preparation tool copies the first N samples of each SADIE
+  II D2 HRIR and writes explicit left/right delays as zero. They are **not**
+  a measured compact approximation and **not** a selected Pico/STM32
+  representation.
 - If a table is unavailable, configuration fails with a clear error.
 - No synthetic fallback is silently selected.
 - Runtime renderer API remains independent from SOFA parsing and filesystem I/O.
@@ -66,20 +77,29 @@ Source summary:
 
 Generated artifacts:
 
-- `compact_16.shrf`
-- `compact_32.shrf`
-- `compact_64.shrf`
-- `reference.shrf`
+- `compact_16.shrf` — experimental 16-tap HRIR prefix candidate
+- `compact_32.shrf` — experimental 32-tap HRIR prefix candidate (YAML default)
+- `compact_64.shrf` — experimental 64-tap HRIR prefix candidate
+- `reference.shrf` — 256-tap full-HRIR reference
 - `provenance.json`
 - `LICENSE`
 - `NOTICE`
 
+`tools/hrtf/prepare_hrtf.py --target-rate` must equal the SOFA sample rate.
+Resampling is not implemented; a mismatched rate is rejected rather than
+relabelling coefficients.
+
 ## Latency and memory
 
 - ITD/ILD uses a non-negative base delay plus per-ear fractional delays.
-- Fixed algorithmic latency is queryable via `algorithmicLatencySamples()`.
-- Estimated state RAM and coefficient storage are queryable via
-  `stateBytes()` and `coefficientBytes()`.
+- `algorithmicLatencySamples()` is **first-arrival latency**: the sample
+  index of the first output that can contain a time-0 impulse, including the
+  8-tap Hann interpolator's first non-zero tap (`kFirstArrivalTapOffset = 1`)
+  and the first non-zero FIR tap. It is not group delay, not IR tail
+  (`taps-1`), and not host buffering. Unit tests compare it to an impulse.
+- `stateBytes()` sums four fractional-delay buffers, four FIR ring buffers,
+  and the working FIR coefficient copies. It is renderer heap RAM, not a
+  Pico/STM32 measurement.
 
 ## Configuration
 
@@ -156,6 +176,7 @@ the Binaural stage or the live preview.
 
 - ITD/ILD is a generic spherical-head model only.
 - No perceptual equivalence claim vs full HRTF.
+- Compact 16/32/64 tables are prefix truncations, not validated compact HRTFs.
 - No hardware realtime claim for Pico 2W or STM32 yet.
 - HRTF direction lookup currently uses nearest-neighbour selection.
   `TODO(TBD_FROM_MEASUREMENT): evaluate interpolation strategy.`

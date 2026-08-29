@@ -19,7 +19,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.analysis import noise_suppression, residual, sii, steering_error, steering_sweep
 from app.audio_io import audio_loader, downmix
-from app.audio_io.exporter import export_pcm
+from app.audio_io.exporter import export_pcm, transcode_lossless
 from app.audio_io.stream_io import COPY_BYTES_LIMIT, should_stream_batch
 from app.config_reader import read_runtime_config_summary
 from app.processing.batch_adapter import BatchProcessingError, run_stream_batch, run_wav_replay
@@ -361,7 +361,13 @@ class BatchWorker(QThread):
         sample_rate = batch_result.sample_rate_hz or (
             validation.metadata.sample_rate_hz if validation.metadata is not None else 0
         )
-        test.processed_export = test.processed_stereo_wav
+        export_suffix = "flac" if self._output_container == "flac" else "wav"
+        export_path = test.root / f"processed_export.{export_suffix}"
+        if export_suffix == "flac":
+            transcode_lossless(test.processed_stereo_wav, export_path, container="flac")
+            test.processed_export = export_path
+        else:
+            test.processed_export = test.processed_stereo_wav
         if batch_result.binaural_wav is not None:
             test.binaural_wav = batch_result.binaural_wav
 
@@ -461,7 +467,7 @@ class BatchWorker(QThread):
                 else None,
             },
             "limiter_disabled": self._disable_limiter,
-            "output_format": "wav",
+            "output_format": export_suffix,
             "stream_protocol_version": PROTOCOL_VERSION,
             "capabilities_protocol_version": PROTOCOL_VERSION,
             "sonitude_version": read_algorithm_version() or None,

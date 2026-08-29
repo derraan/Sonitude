@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <cmath>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -117,6 +119,44 @@ void TestClickFreeRetarget()
   Require(jump < 0.8, "retargeting introduced click-like discontinuity");
 }
 
+void TestRepeatedIdenticalSetTargetSettles()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr float kTransitionMs = 150.0F;
+  const std::size_t ramp =
+      std::max<std::size_t>(1U, static_cast<std::size_t>((kTransitionMs * 0.001F) * kFs));
+  const std::size_t frames = ramp + 512;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  const auto source = sonitude::tests::support::GenerateSine(frames, kFs, 600.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::DelaySumBeamformer settled;
+  settled.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  settled.setTarget({45.0F, 0.0F});
+  std::vector<float> settled_out(frames, 0.0F);
+  settled.process(std::span<const sonitude::audio::MicFrame>(mic.data(), frames),
+                  std::span<float>(settled_out.data(), frames));
+
+  sonitude::dsp::DelaySumBeamformer live;
+  live.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  std::vector<float> live_out(frames, 0.0F);
+  for (std::size_t start = 0; start < frames; start += 256)
+  {
+    live.setTarget({45.0F, 0.0F});
+    const std::size_t count = std::min<std::size_t>(256, frames - start);
+    live.process(std::span<const sonitude::audio::MicFrame>(mic.data() + start, count),
+                 std::span<float>(live_out.data() + start, count));
+  }
+  for (std::size_t i = ramp; i < frames; ++i)
+  {
+    Require(std::fabs(live_out[i] - settled_out[i]) < 1e-5F,
+            "repeated identical setTarget must not restart the beamformer crossfade");
+  }
+}
+
 void TestCalibrationDelayClosure()
 {
   constexpr std::uint32_t kFs = 16000;
@@ -224,6 +264,7 @@ void RunBeamformerTests()
 {
   TestAlignmentBeatsOffAxis();
   TestClickFreeRetarget();
+  TestRepeatedIdenticalSetTargetSettles();
   TestCalibrationDelayClosure();
   TestLeftRightAzimuthConvention();
 }

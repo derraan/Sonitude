@@ -134,7 +134,7 @@ Conservative **distractor suppression** after beamforming, with explicit user se
 
 - `--mode passthrough` **(today):** taps ear-cup mics 4 and 5 to L/R in `main.cpp` — no beamformer.
 - `--mode beamform` on `sonitude_realtime`: still duplicates directional mono to L/R. The Pi playback path is **not** yet wired to `BinauralRenderer`.
-- Portable tools (`sonitude_wav_replay`, `sonitude_stream_process`): `BinauralRenderer` backends `mono_reference`, `itd_ild`, `compact_hrtf`, `full_hrtf_reference`, then linked `StereoPeakLimiter`. Replay `--output` stays mono; stereo is `--output-binaural` or the stream payload. Details: `[docs/binaural_renderer.md](docs/binaural_renderer.md)`.
+- Portable tools (`sonitude_wav_replay`, `sonitude_stream_process`): `BinauralRenderer` backends `mono_reference`, `itd_ild`, `compact_hrtf`, `full_hrtf_reference`, then linked `StereoPeakLimiter`. `compact_hrtf` uses experimental raw-HRIR prefix tables, not a validated edge representation. Replay `--output` stays mono; stereo is `--output-binaural` or the stream payload. Details: `[docs/binaural_renderer.md](docs/binaural_renderer.md)`.
 
 
 

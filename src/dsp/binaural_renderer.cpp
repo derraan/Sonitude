@@ -150,6 +150,7 @@ void BinauralRenderer::configure(const BinauralConfig& config)
   make_path(pending_params_, pending_state_);
 
   configured_ = true;
+  direction_applied_ = false;
   setDirection({0.0F, 0.0F});
   current_params_ = pending_params_;
   ResetPathState(current_state_);
@@ -166,6 +167,7 @@ void BinauralRenderer::reset()
   }
   current_direction_ = {};
   pending_direction_ = {};
+  direction_applied_ = false;
   fade_cursor_ = 0;
   crossfading_ = false;
   ResetPathState(current_state_);
@@ -183,6 +185,15 @@ void BinauralRenderer::setDirection(audio::BeamformerSteering direction)
   }
 
   direction.azimuth_deg = static_cast<float>(spatial::NormalizeHeadAzimuthDeg(direction.azimuth_deg));
+  if (direction_applied_ &&
+      spatial::SteeringApproximatelyEqual(direction.azimuth_deg,
+                                          direction.elevation_deg,
+                                          pending_direction_.azimuth_deg,
+                                          pending_direction_.elevation_deg))
+  {
+    return;
+  }
+  direction_applied_ = true;
   pending_direction_ = direction;
   pending_params_.left.gain = 1.0F;
   pending_params_.right.gain = 1.0F;
@@ -320,10 +331,18 @@ void BinauralRenderer::process(const std::span<const float> mono,
 std::size_t BinauralRenderer::stateBytes() const
 {
   std::size_t bytes = 0;
+  bytes += current_state_.left.delay.stateBytes();
+  bytes += current_state_.right.delay.stateBytes();
+  bytes += pending_state_.left.delay.stateBytes();
+  bytes += pending_state_.right.delay.stateBytes();
   bytes += current_state_.left.fir_state.size() * sizeof(float);
   bytes += current_state_.right.fir_state.size() * sizeof(float);
   bytes += pending_state_.left.fir_state.size() * sizeof(float);
   bytes += pending_state_.right.fir_state.size() * sizeof(float);
+  bytes += current_params_.left.fir.size() * sizeof(float);
+  bytes += current_params_.right.fir.size() * sizeof(float);
+  bytes += pending_params_.left.fir.size() * sizeof(float);
+  bytes += pending_params_.right.fir.size() * sizeof(float);
   return bytes;
 }
 
@@ -338,12 +357,31 @@ std::size_t BinauralRenderer::coefficientBytes() const
 
 std::size_t BinauralRenderer::algorithmicLatencySamples() const
 {
-  std::size_t fir_latency = 0;
-  if (config_.backend == BinauralBackend::CompactHrtf ||
-      config_.backend == BinauralBackend::FullHrtfReference)
+  if (config_.backend == BinauralBackend::MonoReference)
   {
-    fir_latency = config_.table->taps_per_ear > 0 ? (config_.table->taps_per_ear - 1U) : 0U;
+    return 0;
   }
-  return static_cast<std::size_t>(std::ceil(base_delay_samples_)) + fir_latency;
+
+  auto fir_onset = [](const std::vector<float>& fir) -> std::size_t {
+    for (std::size_t tap = 0; tap < fir.size(); ++tap)
+    {
+      if (std::fabs(fir[tap]) > 1.0e-6F)
+      {
+        return tap;
+      }
+    }
+    return 0;
+  };
+
+  const double min_delay =
+      std::min(current_params_.left.delay_samples, current_params_.right.delay_samples);
+  std::size_t onset = 0;
+  if (!current_params_.left.fir.empty() || !current_params_.right.fir.empty())
+  {
+    onset = std::min(fir_onset(current_params_.left.fir), fir_onset(current_params_.right.fir));
+  }
+  const std::size_t delay_floor =
+      static_cast<std::size_t>(std::floor(std::max(0.0, min_delay)));
+  return delay_floor + FractionalDelayLine::kFirstArrivalTapOffset + onset;
 }
 }  // namespace sonitude::dsp

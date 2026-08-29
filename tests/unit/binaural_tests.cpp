@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -284,6 +285,115 @@ void TestHrtfTableUsage()
   Require(renderer.coefficientBytes() == table.fir.size() * sizeof(float), "coefficientBytes mismatch");
 }
 
+void TestRepeatedIdenticalSetDirectionSettles()
+{
+  constexpr std::uint32_t kFs = 48000;
+  constexpr float kTransitionMs = 150.0F;
+  const std::size_t ramp =
+      std::max<std::size_t>(1U, static_cast<std::size_t>((kTransitionMs * 0.001F) * kFs));
+  const std::size_t frames = ramp + 2048;
+  const auto x = sonitude::tests::support::GenerateSine(frames, kFs, 700.0);
+
+  dsp::BinauralRenderer settled;
+  settled.configure({.sample_rate_hz = kFs,
+                     .backend = dsp::BinauralBackend::ItdIld,
+                     .transition_ms = kTransitionMs,
+                     .max_block_frames = 256});
+  settled.setDirection({45.0F, 0.0F});
+  std::vector<float> settled_l(frames, 0.0F);
+  std::vector<float> settled_r(frames, 0.0F);
+  settled.process(x, settled_l, settled_r);
+
+  dsp::BinauralRenderer live;
+  live.configure({.sample_rate_hz = kFs,
+                  .backend = dsp::BinauralBackend::ItdIld,
+                  .transition_ms = kTransitionMs,
+                  .max_block_frames = 256});
+  std::vector<float> live_l(frames, 0.0F);
+  std::vector<float> live_r(frames, 0.0F);
+  for (std::size_t start = 0; start < frames; start += 256)
+  {
+    live.setDirection({45.0F, 0.0F});
+    const std::size_t count = std::min<std::size_t>(256, frames - start);
+    live.process(std::span<const float>(x.data() + start, count),
+                 std::span<float>(live_l.data() + start, count),
+                 std::span<float>(live_r.data() + start, count));
+  }
+
+  for (std::size_t i = ramp; i < frames; ++i)
+  {
+    Require(std::fabs(live_l[i] - settled_l[i]) < 1e-5F,
+            "repeated identical setDirection must not restart the 150 ms crossfade (left)");
+    Require(std::fabs(live_r[i] - settled_r[i]) < 1e-5F,
+            "repeated identical setDirection must not restart the 150 ms crossfade (right)");
+  }
+}
+
+void TestFirstArrivalLatencyMatchesImpulse()
+{
+  auto measure = [](dsp::BinauralRenderer& renderer, const std::size_t frames) {
+    const auto impulse = GenerateImpulse(frames);
+    std::vector<float> left(frames, 0.0F);
+    std::vector<float> right(frames, 0.0F);
+    renderer.process(impulse, left, right);
+    std::size_t first = frames;
+    float peak = 0.0F;
+    for (std::size_t i = 0; i < frames; ++i)
+    {
+      peak = std::max(peak, std::max(std::fabs(left[i]), std::fabs(right[i])));
+    }
+    Require(peak > 1.0e-3F, "impulse response must have measurable energy");
+    const float threshold = peak * 1.0e-4F;
+    for (std::size_t i = 0; i < frames; ++i)
+    {
+      if (std::max(std::fabs(left[i]), std::fabs(right[i])) > threshold)
+      {
+        first = i;
+        break;
+      }
+    }
+    Require(first < frames, "impulse never appeared in the output");
+    Require(first == renderer.algorithmicLatencySamples(),
+            "algorithmicLatencySamples must equal measured first-arrival latency");
+  };
+
+  dsp::BinauralRenderer mono;
+  mono.configure({.sample_rate_hz = 48000,
+                  .backend = dsp::BinauralBackend::MonoReference,
+                  .transition_ms = 10.0F,
+                  .max_block_frames = 256});
+  Require(mono.algorithmicLatencySamples() == 0, "mono_reference first-arrival latency is 0");
+  measure(mono, 64);
+
+  dsp::BinauralRenderer itd;
+  itd.configure({.sample_rate_hz = 48000,
+                 .backend = dsp::BinauralBackend::ItdIld,
+                 .transition_ms = 10.0F,
+                 .max_block_frames = 256});
+  measure(itd, 256);
+
+  auto table = BuildSyntheticTable(48000, 16);
+  dsp::BinauralRenderer hrtf;
+  hrtf.configure({.sample_rate_hz = 48000,
+                  .backend = dsp::BinauralBackend::CompactHrtf,
+                  .transition_ms = 10.0F,
+                  .max_block_frames = 256,
+                  .table = &table});
+  measure(hrtf, 256);
+}
+
+void TestStateBytesIncludesDelayLines()
+{
+  dsp::BinauralRenderer renderer;
+  renderer.configure({.sample_rate_hz = 48000,
+                      .backend = dsp::BinauralBackend::ItdIld,
+                      .transition_ms = 10.0F,
+                      .max_block_frames = 256});
+  const std::size_t fir_only = 4U * sizeof(float);
+  Require(renderer.stateBytes() > fir_only * 8U,
+          "stateBytes must include fractional-delay buffers, not only FIR rings");
+}
+
 void TestHrtfTableIntegrity()
 {
   const std::filesystem::path table_path =
@@ -330,5 +440,8 @@ void RunBinauralTests()
   TestDirectionTransitionNoHardDiscontinuity();
   TestInvalidConfigurationRejects();
   TestHrtfTableUsage();
+  TestRepeatedIdenticalSetDirectionSettles();
+  TestFirstArrivalLatencyMatchesImpulse();
+  TestStateBytesIncludesDelayLines();
   TestHrtfTableIntegrity();
 }
