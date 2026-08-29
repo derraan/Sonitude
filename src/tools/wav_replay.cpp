@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -36,25 +38,79 @@ struct SteeringEvent
 // is untouched. See testbench/README.md, "Steering width definition".
 constexpr float kMaxWidthDeg = 180.0F;
 
+enum class SuppressionMode
+{
+  Auto,
+  On,
+  Off
+};
+
+SuppressionMode ParseSuppressionMode(const std::string& value)
+{
+  if (value == "on" || value == "enable" || value == "enabled")
+  {
+    return SuppressionMode::On;
+  }
+  if (value == "off" || value == "disable" || value == "disabled")
+  {
+    return SuppressionMode::Off;
+  }
+  return SuppressionMode::Auto;
+}
+
+bool ResolveSuppression(const SuppressionMode mode, const bool yaml_enabled)
+{
+  if (mode == SuppressionMode::On)
+  {
+    return true;
+  }
+  if (mode == SuppressionMode::Off)
+  {
+    return false;
+  }
+  return yaml_enabled;
+}
+
+void PrintCapabilities()
+{
+  std::cout << "{"
+            << "\"protocol_version\":2,"
+            << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"]},"
+            << "\"taps\":[\"beamformed\",\"suppressed\",\"processed\",\"binaural_mono_reference\"],"
+            << "\"binaural\":{"
+            << "\"available\":true,"
+            << "\"backends\":[\"mono_reference\"],"
+            << "\"unavailable_backends\":[\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
+            << "\"note\":\"HRTF/ITD DSP is not in this build; mono_reference is L=R duplicate of directional mono.\""
+            << "}"
+            << "}\n";
+}
+
 void PrintUsage()
 {
   std::cout << "Usage:\n"
             << "  sonitude_wav_replay --input <six_channel_wav> --config <runtime_yaml>\n"
             << "                      --script <steering_csv> --output <mono_wav>\n"
-            << "                      [--enable-suppression] [--disable-limiter]\n"
+            << "                      [--suppression auto|on|off]\n"
+            << "                      [--enable-suppression] [--disable-suppression] [--disable-limiter]\n"
             << "                      [--output-beamformed <mono_wav>]\n"
             << "                      [--output-suppressed <mono_wav>]\n"
+            << "                      [--output-binaural <stereo_wav>] [--binaural-backend <name>]\n"
+            << "                      [--capabilities]\n"
             << "\n"
             << "  --output-beamformed writes the mono signal immediately after the\n"
-            << "  beamformer (including the width blend, see below), before suppression\n"
+            << "  beamformer (including the directional/omni blend), before suppression\n"
             << "  or limiting are applied.\n"
             << "  --output-suppressed writes the mono signal after suppression (if\n"
             << "  enabled) but before limiting. Both are diagnostic taps only; they do\n"
             << "  not change the final --output render.\n"
+            << "  --output-binaural writes stereo. This build only implements\n"
+            << "  mono_reference (L=R duplicate). Other backends are reported unavailable.\n"
             << "\n"
-            << "  Steering script columns: time_s,azimuth_deg,elevation_deg[,width_deg]\n"
-            << "  width_deg (0-" << kMaxWidthDeg << ", default 0) blends the beamformer\n"
-            << "  output toward an omnidirectional average; see --help text above.\n";
+            << "  Steering script columns: time_s,azimuth_deg,elevation_deg[,directivity_blend_deg]\n"
+            << "  directivity_blend_deg (0-" << kMaxWidthDeg
+            << ", default 0) mixes beamformer output toward\n"
+            << "  a six-microphone average. This is NOT measured physical beamwidth.\n";
 }
 
 std::vector<SteeringEvent> LoadSteeringScript(const std::string& path, const std::uint32_t sample_rate_hz)
@@ -120,7 +176,9 @@ int main(int argc, char** argv)
   std::string output_path;
   std::string output_beamformed_path;
   std::string output_suppressed_path;
-  bool enable_suppression = false;
+  std::string output_binaural_path;
+  std::string binaural_backend = "mono_reference";
+  SuppressionMode suppression_mode = SuppressionMode::Auto;
   bool disable_limiter = false;
 
   for (int i = 1; i < argc; ++i)
@@ -150,14 +208,35 @@ int main(int argc, char** argv)
     {
       output_suppressed_path = argv[++i];
     }
+    else if (arg == "--output-binaural" && i + 1 < argc)
+    {
+      output_binaural_path = argv[++i];
+    }
+    else if (arg == "--binaural-backend" && i + 1 < argc)
+    {
+      binaural_backend = argv[++i];
+    }
     else if (arg == "--help")
     {
       PrintUsage();
       return 0;
     }
+    else if (arg == "--capabilities")
+    {
+      PrintCapabilities();
+      return 0;
+    }
+    else if (arg == "--suppression" && i + 1 < argc)
+    {
+      suppression_mode = ParseSuppressionMode(argv[++i]);
+    }
     else if (arg == "--enable-suppression")
     {
-      enable_suppression = true;
+      suppression_mode = SuppressionMode::On;
+    }
+    else if (arg == "--disable-suppression")
+    {
+      suppression_mode = SuppressionMode::Off;
     }
     else if (arg == "--disable-limiter")
     {
@@ -195,6 +274,13 @@ int main(int argc, char** argv)
     {
       throw std::runtime_error("Input WAV must contain at least six channels");
     }
+    for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+    {
+      if (runtime.active_channel_map[ch] >= input_wav.channels)
+      {
+        throw std::runtime_error("active_channel_map index exceeds input WAV channel count");
+      }
+    }
     if (input_wav.sample_rate_hz != runtime.capture.sample_rate_hz)
     {
       throw std::runtime_error("Input WAV sample rate must match runtime capture sample_rate_hz");
@@ -224,10 +310,16 @@ int main(int argc, char** argv)
         geometry, runtime.steering, calibration, input_wav.sample_rate_hz, runtime.capture.period_frames);
     beamformer.setTarget(events.front().target);
     float current_width_deg = events.front().width_deg;
-    // --enable-suppression forces suppression on regardless of config; when
-    // not passed, fall back to the config's own suppression.enabled, the
-    // same precedence sonitude_stream_process and sonitude_realtime use.
-    const bool suppression_enabled = enable_suppression || runtime.suppression.enabled;
+    const bool suppression_enabled = ResolveSuppression(suppression_mode, runtime.suppression.enabled);
+    const char* requested = suppression_mode == SuppressionMode::On
+                                ? "on"
+                                : (suppression_mode == SuppressionMode::Off ? "off" : "auto");
+    const bool binaural_mono_reference = (binaural_backend == "mono_reference" || binaural_backend.empty());
+    std::cerr << "sonitude_resolved {\"protocol_version\":2,\"suppression_requested\":\"" << requested
+              << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
+              << ",\"limiter_disabled\":" << (disable_limiter ? "true" : "false")
+              << ",\"binaural_backend\":\"" << binaural_backend << "\",\"binaural_available\":"
+              << (binaural_mono_reference ? "true" : "false") << "}\n";
     sonitude::dsp::ConservativeSuppressor suppressor;
     suppressor.configure(
         {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
@@ -304,6 +396,28 @@ int main(int argc, char** argv)
     out.sample_rate_hz = input_wav.sample_rate_hz;
     out.channels = 1;
     out.format = sonitude::audio::PcmFormat::FLOAT32_LE;
+    if (!output_binaural_path.empty())
+    {
+      if (!binaural_mono_reference)
+      {
+        throw std::runtime_error(
+            "Requested binaural backend is not implemented in this build (only mono_reference)");
+      }
+      std::vector<float> stereo(frames * 2, 0.0F);
+      for (std::size_t i = 0; i < frames; ++i)
+      {
+        stereo[(i * 2) + 0] = mono[i];
+        stereo[(i * 2) + 1] = mono[i];
+      }
+      sonitude::audio::WavData binaural;
+      binaural.sample_rate_hz = input_wav.sample_rate_hz;
+      binaural.channels = 2;
+      binaural.format = sonitude::audio::PcmFormat::FLOAT32_LE;
+      binaural.interleaved = std::move(stereo);
+      sonitude::audio::WriteWavFile(output_binaural_path, binaural);
+      std::cout << "Wrote mono_reference binaural stereo (L=R, not HRTF) to " << output_binaural_path
+                << '\n';
+    }
     out.interleaved = std::move(mono);
     sonitude::audio::WriteWavFile(output_path, out);
     std::cout << "Rendered beamformed WAV to " << output_path << '\n';
