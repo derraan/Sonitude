@@ -46,6 +46,8 @@ class MetricsPanel(QWidget):
     def _build_group(self, attr_prefix: str, title: str, field_names: list[str]) -> dict[str, QLabel]:
         group = QGroupBox(title)
         form = QFormLayout(group)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         labels: dict[str, QLabel] = {}
         for name in field_names:
             value_label = QLabel("—")

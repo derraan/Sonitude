@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -18,10 +20,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSlider,
+    QScrollArea,
+    QSizePolicy,
     QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -31,23 +32,70 @@ from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.batch_controller import BatchWorker
 from app.processing.capabilities import query_tool_capabilities
 from app.processing.suppression import SuppressionMode
-from app.storage.models import BinauralRequest, SteeringEvent
+from app.storage.models import SteeringEvent
 from app.storage.result_store import ResultStore
+from app.ui.binaural_controls import BinauralControls
+from app.ui.layout_persist import (
+    KEY_RECORDED_H,
+    KEY_RECORDED_V,
+    RECORDED_H_DEFAULT,
+    RECORDED_V_DEFAULT,
+    restore_splitter,
+    save_splitter,
+)
 from app.ui.metrics_panel import MetricsPanel
 from app.ui.playback_panel import PlaybackPanel
-from app.ui.steering_dial import SteeringDial
+from app.ui.secondary_note import apply_secondary_note
+from app.ui.steering_controls import SteeringControls
 from app.ui.visualization_panel import VisualizationPanel
 
 _METADATA_FIELDS = [
-    "filename",
-    "container",
-    "sample_rate_hz",
-    "channels",
-    "bit_depth",
-    "duration_s",
-    "num_samples",
+    ("filename", "Filename"),
+    ("container", "Format"),
+    ("sample_rate_hz", "Sample rate"),
+    ("channels", "Channels"),
+    ("bit_depth", "Bit depth"),
+    ("duration_s", "Duration"),
+    ("num_samples", "Samples"),
 ]
 _AUDIO_FILTER = "Audio files (*.wav *.flac *.mp3);;WAV (*.wav);;FLAC (*.flac);;MP3 (*.mp3)"
+_PLOT_STAGE_ITEMS = (
+    (
+        "Ear-cup preview",
+        "raw_preview_stereo.wav",
+        "Listening-only ear-cup stereo (map 4/5). Not binaural. Never used in residuals.",
+    ),
+    (
+        "Beamformed",
+        "beamformed.wav",
+        "C++ tap, pre-suppression mono (stereo-duplicated for listen).",
+    ),
+    ("Suppressed", "suppressed.wav", "C++ tap, pre-limiter mono."),
+    (
+        "Binaural",
+        "binaural_stereo.wav",
+        "C++ binaural tap if present. Not the ear-cup preview.",
+    ),
+    ("Final output", "processed_stereo.wav", "Post-limiter processed stereo."),
+)
+_RESIDUAL_ITEMS = (
+    ("Beamform residual", "residual_beamform.wav", "beamformed − suppressed"),
+    ("Limiter residual", "residual_limiter.wav", "suppressed − processed"),
+)
+
+
+def _compact_combo(combo: QComboBox) -> None:
+    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(16)
+
+
+def _scroll_area(inner: QWidget) -> QScrollArea:
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    area.setWidget(inner)
+    return area
 
 
 class RecordedDataTab(QWidget):
@@ -59,6 +107,8 @@ class RecordedDataTab(QWidget):
         self._batch_worker: BatchWorker | None = None
         self._last_metrics: dict[str, dict] = {}
         self._capabilities = query_tool_capabilities("sonitude_wav_replay")
+        self._plot_cache: dict = {}
+        self._layout_restored = False
 
         select_row = QHBoxLayout()
         select_file_btn = QPushButton("Select Audio")
@@ -69,35 +119,38 @@ class RecordedDataTab(QWidget):
         select_row.addWidget(select_folder_btn)
 
         self._file_list = QListWidget()
+        self._file_list.setMaximumHeight(140)
         self._file_list.currentRowChanged.connect(self._on_file_row_changed)
 
-        self._metadata_table = QTableWidget(len(_METADATA_FIELDS), 1)
-        self._metadata_table.setVerticalHeaderLabels(_METADATA_FIELDS)
-        self._metadata_table.horizontalHeader().setVisible(False)
-        self._metadata_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._metadata_labels: dict[str, QLabel] = {}
+        metadata_form = QFormLayout()
+        metadata_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        metadata_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        for key, title in _METADATA_FIELDS:
+            value = QLabel("—")
+            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            value.setWordWrap(True)
+            self._metadata_labels[key] = value
+            metadata_form.addRow(title + ":", value)
+        metadata_box = QGroupBox("Input information")
+        metadata_box.setLayout(metadata_form)
+
         self._validation_label = QLabel("")
         self._validation_label.setWordWrap(True)
 
-        steering_box = QGroupBox("Steering (single commanded direction for this batch)")
-        self._steering_dial = SteeringDial()
-        self._steering_readout = QLabel("0°")
-        self._steering_dial.azimuthChanged.connect(lambda az: self._steering_readout.setText(f"{az:.0f}°"))
-        self._blend_slider = QSlider(Qt.Orientation.Horizontal)
-        self._blend_slider.setRange(0, 180)
-        self._blend_label = QLabel("Directional / Omni Blend: 0° (fully directional)")
-        self._blend_slider.valueChanged.connect(self._on_blend_changed)
-        steering_layout = QVBoxLayout(steering_box)
-        steering_layout.addWidget(self._steering_dial)
-        steering_layout.addWidget(self._steering_readout, alignment=Qt.AlignmentFlag.AlignCenter)
-        steering_layout.addWidget(self._blend_label)
-        steering_layout.addWidget(self._blend_slider)
-        blend_note = QLabel("This mixes beamformed audio toward the six-microphone average. It is not measured beamwidth / HPBW.")
-        blend_note.setWordWrap(True)
-        blend_note.setStyleSheet("color: #8a8a8a; font-size: 10px;")
-        steering_layout.addWidget(blend_note)
+        input_widget = QWidget()
+        input_layout = QVBoxLayout(input_widget)
+        input_layout.setContentsMargins(0, 0, 0, 0)
+        input_layout.addLayout(select_row)
+        input_layout.addWidget(self._file_list)
+        input_layout.addWidget(metadata_box)
+        input_layout.addWidget(self._validation_label)
+
+        self._steering = SteeringControls("Steering (single commanded direction for this batch)")
 
         suppression_box = QGroupBox("Suppression (requested vs YAML)")
         self._suppression_combo = QComboBox()
+        _compact_combo(self._suppression_combo)
         self._suppression_combo.addItem("AUTO (use YAML)", userData=SuppressionMode.AUTO.value)
         self._suppression_combo.addItem("ON (force on)", userData=SuppressionMode.ON.value)
         self._suppression_combo.addItem("OFF (force off, overrides YAML)", userData=SuppressionMode.OFF.value)
@@ -106,38 +159,16 @@ class RecordedDataTab(QWidget):
 
         export_box = QGroupBox("Final result export")
         self._export_combo = QComboBox()
+        _compact_combo(self._export_combo)
         self._export_combo.addItem("WAV (float32)", userData="wav")
         self._export_combo.addItem("FLAC (PCM_24 lossless integer)", userData="flac")
-        export_note = QLabel("Export container does not change DSP processing. Intermediates stay WAV.")
-        export_note.setWordWrap(True)
+        export_note = QLabel("Export container does not change DSP. Intermediates stay WAV.")
+        apply_secondary_note(export_note)
         export_layout = QVBoxLayout(export_box)
         export_layout.addWidget(self._export_combo)
         export_layout.addWidget(export_note)
 
-        binaural_box = QGroupBox("Binaural renderer (C++ backend, capability-gated)")
-        self._binaural_enable = QCheckBox("Binaural enabled")
-        self._binaural_backend = QComboBox()
-        self._binaural_follow = QCheckBox("Follow effective beamformer steering")
-        self._binaural_follow.setChecked(True)
-        self._binaural_az = QDoubleSpinBox()
-        self._binaural_az.setRange(-180.0, 180.0)
-        self._binaural_el = QDoubleSpinBox()
-        self._binaural_el.setRange(-90.0, 90.0)
-        self._binaural_note = QLabel("")
-        self._binaural_note.setWordWrap(True)
-        binaural_layout = QVBoxLayout(binaural_box)
-        binaural_layout.addWidget(self._binaural_enable)
-        binaural_layout.addWidget(QLabel("Renderer backend:"))
-        binaural_layout.addWidget(self._binaural_backend)
-        binaural_layout.addWidget(self._binaural_follow)
-        az_row = QHBoxLayout()
-        az_row.addWidget(QLabel("Azimuth:"))
-        az_row.addWidget(self._binaural_az)
-        az_row.addWidget(QLabel("Elevation:"))
-        az_row.addWidget(self._binaural_el)
-        binaural_layout.addLayout(az_row)
-        binaural_layout.addWidget(self._binaural_note)
-        self._populate_binaural_controls()
+        self._binaural = BinauralControls(self._capabilities)
 
         steering_test_box = QGroupBox("Objective Steering Test (optional, slower)")
         self._steering_test_checkbox = QCheckBox("Run steering sweep for this batch")
@@ -148,12 +179,19 @@ class RecordedDataTab(QWidget):
             "Known/expected direction of the dominant source in the recording, used as ground "
             "truth to score the measured beam-response-peak sweep."
         )
-        steering_test_layout = QVBoxLayout(steering_test_box)
-        steering_test_layout.addWidget(self._steering_test_checkbox)
-        expected_row = QHBoxLayout()
-        expected_row.addWidget(QLabel("Expected source direction:"))
-        expected_row.addWidget(self._expected_azimuth_spin)
-        steering_test_layout.addLayout(expected_row)
+        steering_test_layout = QFormLayout(steering_test_box)
+        steering_test_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        steering_test_layout.addRow(self._steering_test_checkbox)
+        steering_test_layout.addRow("Expected source direction:", self._expected_azimuth_spin)
+
+        config_inner = QWidget()
+        config_layout = QVBoxLayout(config_inner)
+        config_layout.addWidget(self._steering)
+        config_layout.addWidget(suppression_box)
+        config_layout.addWidget(export_box)
+        config_layout.addWidget(self._binaural)
+        config_layout.addWidget(steering_test_box)
+        config_layout.addStretch(1)
 
         self._process_selected_btn = QPushButton("Process Selected")
         self._process_batch_btn = QPushButton("Process Batch")
@@ -162,110 +200,106 @@ class RecordedDataTab(QWidget):
         process_row = QHBoxLayout()
         process_row.addWidget(self._process_selected_btn)
         process_row.addWidget(self._process_batch_btn)
-
         self._progress_bar = QProgressBar()
         self._status_label = QLabel("Idle")
+        self._status_label.setWordWrap(True)
+
+        footer = QWidget()
+        footer_layout = QVBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.addLayout(process_row)
+        footer_layout.addWidget(self._progress_bar)
+        footer_layout.addWidget(self._status_label)
 
         left_layout = QVBoxLayout()
-        left_layout.addLayout(select_row)
-        left_layout.addWidget(self._file_list)
-        left_layout.addWidget(QLabel("Input information:"))
-        left_layout.addWidget(self._metadata_table)
-        left_layout.addWidget(self._validation_label)
-        left_layout.addWidget(steering_box)
-        left_layout.addWidget(suppression_box)
-        left_layout.addWidget(export_box)
-        left_layout.addWidget(binaural_box)
-        left_layout.addWidget(steering_test_box)
-        left_layout.addLayout(process_row)
-        left_layout.addWidget(self._progress_bar)
-        left_layout.addWidget(self._status_label)
+        left_layout.addWidget(input_widget)
+        left_layout.addWidget(_scroll_area(config_inner), stretch=1)
+        left_layout.addWidget(footer)
         left_widget = QWidget()
+        left_widget.setMinimumWidth(280)
         left_widget.setLayout(left_layout)
 
         self._results_combo = QComboBox()
+        _compact_combo(self._results_combo)
         self._results_combo.currentTextChanged.connect(self._on_result_selected)
         self._stage_combo = QComboBox()
-        self._stage_combo.addItem(
-            "Listening preview (ear-cup stereo — not binaural, never used in residuals)",
-            userData="raw_preview_stereo.wav",
-        )
-        self._stage_combo.addItem("Beamformed (pre-suppression mono, stereo-duplicated for listen)", userData="beamformed.wav")
-        self._stage_combo.addItem("Suppressed (pre-limiter mono)", userData="suppressed.wav")
-        self._stage_combo.addItem("Binaural stereo (C++ tap if present; not the ear-cup preview)", userData="binaural_stereo.wav")
-        self._stage_combo.addItem("Final processed stereo", userData="processed_stereo.wav")
+        _compact_combo(self._stage_combo)
+        for label, filename, tip in _PLOT_STAGE_ITEMS:
+            self._stage_combo.addItem(label, userData=filename)
+            self._stage_combo.setItemData(self._stage_combo.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
         self._stage_combo.currentIndexChanged.connect(lambda _i: self._on_result_selected(self._results_combo.currentText()))
         self._residual_stage_combo = QComboBox()
-        self._residual_stage_combo.addItem("Beamform stage (beamformed − suppressed)", userData="residual_beamform.wav")
-        self._residual_stage_combo.addItem("Limiter stage (suppressed − processed)", userData="residual_limiter.wav")
-        self._residual_stage_combo.currentIndexChanged.connect(lambda _i: self._on_result_selected(self._results_combo.currentText()))
-        domain_note = QLabel(
-            "The ear-cup stereo file is a listening-only preview. It is never binaural output and is "
-            "never subtracted for residual metrics. DSP stages (beamformed / suppressed / binaural / "
-            "final) come from the C++ taps."
+        _compact_combo(self._residual_stage_combo)
+        for label, filename, tip in _RESIDUAL_ITEMS:
+            self._residual_stage_combo.addItem(label, userData=filename)
+            self._residual_stage_combo.setItemData(self._residual_stage_combo.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
+        self._residual_stage_combo.currentIndexChanged.connect(
+            lambda _i: self._on_result_selected(self._results_combo.currentText())
         )
-        domain_note.setWordWrap(True)
-        domain_note.setStyleSheet("color: #8a8a8a; font-size: 10px;")
+
+        inspect_form = QFormLayout()
+        inspect_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        inspect_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        inspect_form.addRow("Result:", self._results_combo)
+        inspect_form.addRow("Plot stage:", self._stage_combo)
+        inspect_form.addRow("Plot residual:", self._residual_stage_combo)
+
+        domain_note = QLabel(
+            "Plot stage and Plot residual choose which DSP files are plotted and which files the "
+            "Listen-to radios play. Ear-cup preview is listening-only and is never a residual."
+        )
+        apply_secondary_note(domain_note)
+
         self.playback_panel = PlaybackPanel()
+        self.playback_panel.sourceSelected.connect(self._on_listen_source_changed)
         self.visualization_panel = VisualizationPanel()
+        self.visualization_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.metrics_panel = MetricsPanel()
+        metrics_scroll = _scroll_area(self.metrics_panel)
+        metrics_scroll.setMinimumHeight(80)
+
+        self._inspect_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._inspect_splitter.setChildrenCollapsible(False)
+        self._inspect_splitter.addWidget(self.visualization_panel)
+        self._inspect_splitter.addWidget(metrics_scroll)
+        self._inspect_splitter.setStretchFactor(0, 3)
+        self._inspect_splitter.setStretchFactor(1, 1)
 
         right_layout = QVBoxLayout()
-        right_layout.addWidget(QLabel("Result:"))
-        right_layout.addWidget(self._results_combo)
-        right_layout.addWidget(QLabel("DSP / listening stage:"))
-        right_layout.addWidget(self._stage_combo)
-        right_layout.addWidget(QLabel("Residual stage (DSP taps only):"))
-        right_layout.addWidget(self._residual_stage_combo)
+        right_layout.addLayout(inspect_form)
         right_layout.addWidget(domain_note)
         right_layout.addWidget(self.playback_panel)
-        right_layout.addWidget(self.visualization_panel, stretch=1)
-        right_layout.addWidget(self.metrics_panel)
+        right_layout.addWidget(self._inspect_splitter, stretch=1)
         right_widget = QWidget()
+        right_widget.setMinimumWidth(400)
         right_widget.setLayout(right_layout)
 
-        splitter = QSplitter()
-        splitter.addWidget(left_widget)
-        splitter.addWidget(right_widget)
-        splitter.setStretchFactor(1, 1)
+        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._main_splitter.setChildrenCollapsible(False)
+        self._main_splitter.addWidget(left_widget)
+        self._main_splitter.addWidget(right_widget)
+        self._main_splitter.setStretchFactor(0, 38)
+        self._main_splitter.setStretchFactor(1, 62)
 
         outer = QVBoxLayout(self)
-        outer.addWidget(splitter)
+        outer.addWidget(self._main_splitter)
 
         try:
             if read_runtime_config_summary(self._config_path).suppression_enabled:
                 self._suppression_combo.setCurrentIndex(0)
-        except Exception:  # noqa: BLE001 - default AUTO if config can't be read yet
+        except Exception:  # noqa: BLE001
             pass
 
-    def _populate_binaural_controls(self) -> None:
-        caps = self._capabilities.binaural
-        self._binaural_backend.clear()
-        if not caps.available or not self._capabilities.queried:
-            self._binaural_enable.setEnabled(False)
-            self._binaural_backend.setEnabled(False)
-            self._binaural_follow.setEnabled(False)
-            self._binaural_az.setEnabled(False)
-            self._binaural_el.setEnabled(False)
-            if not self._capabilities.queried:
-                self._binaural_note.setText(
-                    "C++ binaural capabilities were not reported (binary missing or older than this protocol). "
-                    "The rest of the test bench remains usable."
-                )
-            else:
-                self._binaural_note.setText("This C++ build reports binaural as unavailable.")
-            return
-        for name in caps.backends:
-            self._binaural_backend.addItem(name, userData=name)
-        unavailable = ", ".join(caps.unavailable_backends) or "none"
-        self._binaural_note.setText(
-            f"{caps.note} Unavailable backends (not offered): {unavailable}."
-        )
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if not self._layout_restored:
+            restore_splitter(self._main_splitter, KEY_RECORDED_H, RECORDED_H_DEFAULT)
+            restore_splitter(self._inspect_splitter, KEY_RECORDED_V, RECORDED_V_DEFAULT)
+            self._layout_restored = True
 
-    def _on_blend_changed(self, blend_deg: int) -> None:
-        descriptor = "fully directional" if blend_deg == 0 else ("fully omnidirectional mix" if blend_deg >= 180 else "blended")
-        self._blend_label.setText(f"Directional / Omni Blend: {blend_deg}° ({descriptor})")
-        self._steering_dial.set_width_deg(blend_deg)
+    def save_layout(self) -> None:
+        save_splitter(self._main_splitter, KEY_RECORDED_H)
+        save_splitter(self._inspect_splitter, KEY_RECORDED_V)
 
     def _on_select_file(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Select 6-channel audio file(s)", filter=_AUDIO_FILTER)
@@ -303,8 +337,11 @@ class RecordedDataTab(QWidget):
 
         if validation.metadata is not None:
             data = validation.metadata.as_dict()
-            for row, field in enumerate(_METADATA_FIELDS):
-                self._metadata_table.setItem(row, 0, QTableWidgetItem(str(data.get(field, ""))))
+            for key, _title in _METADATA_FIELDS:
+                text = str(data.get(key, ""))
+                label = self._metadata_labels[key]
+                label.setText(text)
+                label.setToolTip(text)
 
         if validation.ok:
             self._validation_label.setStyleSheet("color: #4caf50;")
@@ -327,16 +364,6 @@ class RecordedDataTab(QWidget):
             return
         self._run_batch(self._selected_paths)
 
-    def _current_binaural_request(self) -> BinauralRequest:
-        backend = self._binaural_backend.currentData()
-        return BinauralRequest(
-            enabled=self._binaural_enable.isChecked() and self._binaural_enable.isEnabled(),
-            backend=backend if isinstance(backend, str) else None,
-            azimuth_deg=self._binaural_az.value(),
-            elevation_deg=self._binaural_el.value(),
-            follow_beamformer_steering=self._binaural_follow.isChecked(),
-        )
-
     def _run_batch(self, paths: list[Path]) -> None:
         if self._batch_worker is not None and self._batch_worker.isRunning():
             QMessageBox.information(self, "Busy", "A batch is already processing.")
@@ -345,9 +372,9 @@ class RecordedDataTab(QWidget):
         steering_events = [
             SteeringEvent(
                 0.0,
-                self._steering_dial.commanded_azimuth_deg(),
+                self._steering.commanded_azimuth_deg(),
                 0.0,
-                width_deg=self._blend_slider.value(),
+                width_deg=self._steering.width_deg(),
             )
         ]
         self._progress_bar.setRange(0, len(paths))
@@ -363,7 +390,7 @@ class RecordedDataTab(QWidget):
             steering_events,
             suppression=self._suppression_combo.currentData() or SuppressionMode.AUTO.value,
             output_container=self._export_combo.currentData() or "wav",
-            binaural=self._current_binaural_request(),
+            binaural=self._binaural.request(),
             steering_test_expected_azimuth_deg=expected_azimuth,
             result_store=self._result_store,
         )
@@ -384,6 +411,18 @@ class RecordedDataTab(QWidget):
     def _on_file_failed(self, input_path: str, error: str) -> None:
         self._status_label.setText(f"Failed: {Path(input_path).name}: {error}")
 
+    def _on_listen_source_changed(self, name: str) -> None:
+        cache = self._plot_cache
+        if not cache:
+            return
+        self.visualization_panel.plot_waveforms(
+            cache["sample_rate"],
+            raw=cache.get("raw"),
+            processed=cache.get("processed"),
+            residual=cache.get("residual"),
+            emphasize=name,
+        )
+
     def _on_result_selected(self, test_id: str) -> None:
         if not test_id:
             return
@@ -401,14 +440,26 @@ class RecordedDataTab(QWidget):
         self.metrics_panel.update_metrics(metrics)
 
         sweep = metrics.get("steering", {}).get("objective_sweep_test")
-        self._steering_dial.set_estimated_azimuth_deg(sweep["measured_peak_azimuth_deg"] if sweep else None)
+        self._steering.set_estimated_azimuth_deg(sweep["measured_peak_azimuth_deg"] if sweep else None)
 
         try:
             processed_data, sample_rate = audio_loader.load_wav(processed_path)
             raw_data, _ = audio_loader.load_wav(test_root / "raw_preview_stereo.wav")
             residual_data, _ = audio_loader.load_wav(test_root / residual_filename)
-            self.visualization_panel.plot_waveforms(sample_rate, raw=raw_data, processed=processed_data, residual=residual_data)
+            self._plot_cache = {
+                "sample_rate": sample_rate,
+                "raw": raw_data,
+                "processed": processed_data,
+                "residual": residual_data,
+            }
+            self.visualization_panel.plot_waveforms(
+                sample_rate,
+                raw=raw_data,
+                processed=processed_data,
+                residual=residual_data,
+                emphasize=self.playback_panel.listen_source(),
+            )
             self.visualization_panel.plot_spectrogram(processed_data, sample_rate)
             self.visualization_panel.plot_levels(processed_data, sample_rate)
-        except Exception:  # noqa: BLE001 - visualization is best-effort
-            pass
+        except Exception:  # noqa: BLE001
+            self._plot_cache = {}

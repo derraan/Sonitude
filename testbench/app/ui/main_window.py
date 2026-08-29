@@ -22,6 +22,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(tabs)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self.recorded_tab.save_layout()
+        self.realtime_tab.save_layout()
         worker = self.realtime_tab._worker  # noqa: SLF001 - shutdown path only
         if worker is not None and worker.isRunning():
             worker.request_stop()

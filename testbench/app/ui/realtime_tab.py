@@ -4,23 +4,21 @@ output live, and optionally save raw/processed recordings."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QProgressBar,
     QPushButton,
-    QSlider,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -31,15 +29,25 @@ from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.realtime_controller import RealtimeWorker
 from app.processing.capabilities import query_tool_capabilities
 from app.processing.suppression import SuppressionMode
-from app.storage.models import BinauralRequest
-from app.ui.steering_dial import SteeringDial
+from app.ui.binaural_controls import BinauralControls
+from app.ui.layout_persist import KEY_REALTIME_H, REALTIME_H_DEFAULT, restore_splitter, save_splitter
+from app.ui.level_meter import DbfsMeter
+from app.ui.steering_controls import SteeringControls
 from app.ui.visualization_panel import VisualizationPanel
 
-_LEVEL_METER_MIN_DBFS = -60.0
+
+def _compact_combo(combo: QComboBox) -> None:
+    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(16)
 
 
-def _level_to_percent(dbfs: float) -> int:
-    return int(np.clip((dbfs - _LEVEL_METER_MIN_DBFS) / -_LEVEL_METER_MIN_DBFS * 100.0, 0, 100))
+def _scroll_area(inner: QWidget) -> QScrollArea:
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    area.setWidget(inner)
+    return area
 
 
 class RealtimeTab(QWidget):
@@ -50,52 +58,7 @@ class RealtimeTab(QWidget):
         self._devices: list[InputDeviceInfo] = []
         self._active_sample_rate_hz: int = 44100
         self._capabilities = query_tool_capabilities("sonitude_stream_process")
-
-        self._device_combo = QComboBox()
-        self._device_combo.currentIndexChanged.connect(self._on_device_changed)
-        self._refresh_devices_btn = QPushButton("Refresh Devices")
-        self._refresh_devices_btn.clicked.connect(self._refresh_devices)
-
-        self._channels_label = QLabel("Input Channels: —")
-        self._rate_label = QLabel("Sample Rate: —")
-        self._block_size_spin = QSpinBox()
-        self._block_size_spin.setRange(64, 8192)
-        self._block_size_spin.setSingleStep(64)
-        self._block_size_spin.setValue(1024)
-
-        self._queue_capacity_spin = QSpinBox()
-        self._queue_capacity_spin.setRange(1, 16)
-        self._queue_capacity_spin.setValue(DEFAULT_CAPACITY)
-        self._queue_capacity_spin.setToolTip(
-            "Bounded capture queue capacity. Newest-data-wins: when full, the oldest queued "
-            "block is discarded. The default is a starting point, not a universally optimal size."
-        )
-        self._queue_status_label = QLabel("Queue: depth 0 / dropped 0 / overrun no")
-
-        self._suppression_combo = QComboBox()
-        self._suppression_combo.addItem("AUTO (use YAML)", userData=SuppressionMode.AUTO.value)
-        self._suppression_combo.addItem("ON (force on)", userData=SuppressionMode.ON.value)
-        self._suppression_combo.addItem("OFF (force off, overrides YAML)", userData=SuppressionMode.OFF.value)
-
-        device_box = QGroupBox("Device")
-        device_layout = QVBoxLayout(device_box)
-        device_row = QHBoxLayout()
-        device_row.addWidget(self._device_combo, stretch=1)
-        device_row.addWidget(self._refresh_devices_btn)
-        device_layout.addLayout(device_row)
-        device_layout.addWidget(self._channels_label)
-        device_layout.addWidget(self._rate_label)
-        buffer_row = QHBoxLayout()
-        buffer_row.addWidget(QLabel("Buffer (frames):"))
-        buffer_row.addWidget(self._block_size_spin)
-        device_layout.addLayout(buffer_row)
-        queue_row = QHBoxLayout()
-        queue_row.addWidget(QLabel("Capture queue capacity:"))
-        queue_row.addWidget(self._queue_capacity_spin)
-        device_layout.addLayout(queue_row)
-        device_layout.addWidget(self._queue_status_label)
-        device_layout.addWidget(QLabel("Suppression:"))
-        device_layout.addWidget(self._suppression_combo)
+        self._layout_restored = False
 
         self._start_btn = QPushButton("START")
         self._stop_btn = QPushButton("STOP")
@@ -109,11 +72,85 @@ class RealtimeTab(QWidget):
         self._stop_btn.clicked.connect(self._on_stop)
         self._restart_btn.clicked.connect(self._on_restart)
         self._record_btn.toggled.connect(self._on_record_toggled)
-        transport_row = QHBoxLayout()
+        transport = QWidget()
+        transport_row = QHBoxLayout(transport)
+        transport_row.setContentsMargins(0, 0, 0, 0)
         transport_row.addWidget(self._start_btn)
         transport_row.addWidget(self._stop_btn)
         transport_row.addWidget(self._restart_btn)
         transport_row.addWidget(self._record_btn)
+
+        self._device_combo = QComboBox()
+        _compact_combo(self._device_combo)
+        self._device_combo.currentIndexChanged.connect(self._on_device_changed)
+        self._refresh_devices_btn = QPushButton("Refresh Devices")
+        self._refresh_devices_btn.clicked.connect(self._refresh_devices)
+
+        self._channels_label = QLabel("—")
+        self._rate_label = QLabel("—")
+        self._block_size_spin = QSpinBox()
+        self._block_size_spin.setRange(64, 8192)
+        self._block_size_spin.setSingleStep(64)
+        self._block_size_spin.setValue(1024)
+
+        self._queue_capacity_spin = QSpinBox()
+        self._queue_capacity_spin.setRange(1, 16)
+        self._queue_capacity_spin.setValue(DEFAULT_CAPACITY)
+        self._queue_capacity_spin.setToolTip(
+            "Bounded capture queue capacity. Newest-data-wins: when full, the oldest queued "
+            "block is discarded. The default is a starting point, not a universally optimal size."
+        )
+        self._queue_status_label = QLabel("Queue: depth 0 / dropped 0 / overrun no")
+        self._queue_status_label.setWordWrap(True)
+
+        self._suppression_combo = QComboBox()
+        _compact_combo(self._suppression_combo)
+        self._suppression_combo.addItem("AUTO (use YAML)", userData=SuppressionMode.AUTO.value)
+        self._suppression_combo.addItem("ON (force on)", userData=SuppressionMode.ON.value)
+        self._suppression_combo.addItem("OFF (force off, overrides YAML)", userData=SuppressionMode.OFF.value)
+
+        device_box = QGroupBox("Device")
+        device_form = QFormLayout(device_box)
+        device_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        device_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        device_picker = QWidget()
+        device_row = QHBoxLayout(device_picker)
+        device_row.setContentsMargins(0, 0, 0, 0)
+        device_row.addWidget(self._device_combo, stretch=1)
+        device_row.addWidget(self._refresh_devices_btn)
+        device_form.addRow("Input device:", device_picker)
+        device_form.addRow("Input channels:", self._channels_label)
+        device_form.addRow("Sample rate:", self._rate_label)
+        device_form.addRow("Buffer (frames):", self._block_size_spin)
+        device_form.addRow("Capture queue capacity:", self._queue_capacity_spin)
+        device_form.addRow(self._queue_status_label)
+        device_form.addRow("Suppression:", self._suppression_combo)
+
+        self._steering = SteeringControls("Steering (live)")
+        self._steering.azimuthChanged.connect(self._on_steering_changed)
+        self._steering.blendChanged.connect(self._on_blend_changed)
+
+        self._binaural = BinauralControls(self._capabilities)
+        self._binaural.changed.connect(self._push_binaural)
+
+        self._raw_meters = [DbfsMeter(str(i + 1)) for i in range(6)]
+        self._processed_meters = [DbfsMeter("L"), DbfsMeter("R")]
+        meters_box = QGroupBox("Levels")
+        meters_layout = QVBoxLayout(meters_box)
+        meters_layout.addWidget(QLabel("Raw input channels 1–6:"))
+        for meter in self._raw_meters:
+            meters_layout.addWidget(meter)
+        meters_layout.addWidget(QLabel("Processed stereo output:"))
+        for meter in self._processed_meters:
+            meters_layout.addWidget(meter)
+
+        config_inner = QWidget()
+        config_layout = QVBoxLayout(config_inner)
+        config_layout.addWidget(device_box)
+        config_layout.addWidget(self._steering)
+        config_layout.addWidget(self._binaural)
+        config_layout.addWidget(meters_box)
+        config_layout.addStretch(1)
 
         self._save_raw_btn = QPushButton("Save Raw Recording")
         self._save_processed_btn = QPushButton("Save Processed Recording")
@@ -125,121 +162,51 @@ class RealtimeTab(QWidget):
         save_row.addWidget(self._save_raw_btn)
         save_row.addWidget(self._save_processed_btn)
 
-        steering_box = QGroupBox("Steering (live)")
-        self._steering_dial = SteeringDial()
-        self._steering_readout = QLabel("0°")
-        self._steering_dial.azimuthChanged.connect(self._on_steering_changed)
-        self._blend_slider = QSlider(Qt.Orientation.Horizontal)
-        self._blend_slider.setRange(0, 180)
-        self._blend_slider.setValue(0)
-        self._blend_label = QLabel("Directional / Omni Blend: 0° (fully directional)")
-        self._blend_slider.valueChanged.connect(self._on_blend_changed)
-        steering_layout = QVBoxLayout(steering_box)
-        steering_layout.addWidget(self._steering_dial)
-        steering_layout.addWidget(self._steering_readout, alignment=Qt.AlignmentFlag.AlignCenter)
-        steering_layout.addWidget(self._blend_label)
-        steering_layout.addWidget(self._blend_slider)
-        blend_note = QLabel("Mix toward the six-microphone average. Not measured physical beamwidth.")
-        blend_note.setWordWrap(True)
-        blend_note.setStyleSheet("color: #8a8a8a; font-size: 10px;")
-        steering_layout.addWidget(blend_note)
-
-        binaural_box = QGroupBox("Binaural renderer (capability-gated)")
-        self._binaural_enable = QCheckBox("Binaural enabled")
-        self._binaural_backend = QComboBox()
-        self._binaural_follow = QCheckBox("Follow effective beamformer steering")
-        self._binaural_follow.setChecked(True)
-        self._binaural_az = QDoubleSpinBox()
-        self._binaural_az.setRange(-180.0, 180.0)
-        self._binaural_el = QDoubleSpinBox()
-        self._binaural_el.setRange(-90.0, 90.0)
-        self._binaural_note = QLabel("")
-        self._binaural_note.setWordWrap(True)
-        binaural_layout = QVBoxLayout(binaural_box)
-        binaural_layout.addWidget(self._binaural_enable)
-        binaural_layout.addWidget(self._binaural_backend)
-        binaural_layout.addWidget(self._binaural_follow)
-        bin_row = QHBoxLayout()
-        bin_row.addWidget(QLabel("Az:"))
-        bin_row.addWidget(self._binaural_az)
-        bin_row.addWidget(QLabel("El:"))
-        bin_row.addWidget(self._binaural_el)
-        binaural_layout.addLayout(bin_row)
-        binaural_layout.addWidget(self._binaural_note)
-        self._populate_binaural_controls()
-        self._binaural_enable.toggled.connect(self._push_binaural)
-        self._binaural_backend.currentIndexChanged.connect(lambda _i: self._push_binaural())
-        self._binaural_follow.toggled.connect(self._push_binaural)
-        self._binaural_az.valueChanged.connect(lambda _v: self._push_binaural())
-        self._binaural_el.valueChanged.connect(lambda _v: self._push_binaural())
-
-        self._raw_meters = [QProgressBar() for _ in range(6)]
-        self._processed_meters = [QProgressBar() for _ in range(2)]
-        meters_box = QGroupBox("Levels")
-        meters_layout = QVBoxLayout(meters_box)
-        meters_layout.addWidget(QLabel("Raw input channels 1-6:"))
-        for meter in self._raw_meters:
-            meter.setRange(0, 100)
-            meters_layout.addWidget(meter)
-        meters_layout.addWidget(QLabel("Processed stereo output (L, R):"))
-        for meter in self._processed_meters:
-            meter.setRange(0, 100)
-            meters_layout.addWidget(meter)
-
         self._status_label = QLabel("Stopped")
+        self._status_label.setWordWrap(True)
+
+        footer = QWidget()
+        footer_layout = QVBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.addLayout(save_row)
+        footer_layout.addWidget(self._status_label)
 
         left_layout = QVBoxLayout()
-        left_layout.addWidget(device_box)
-        left_layout.addLayout(transport_row)
-        left_layout.addLayout(save_row)
-        left_layout.addWidget(steering_box)
-        left_layout.addWidget(binaural_box)
-        left_layout.addWidget(meters_box)
-        left_layout.addWidget(self._status_label)
-        left_layout.addStretch(1)
+        left_layout.addWidget(transport)
+        left_layout.addWidget(_scroll_area(config_inner), stretch=1)
+        left_layout.addWidget(footer)
         left_widget = QWidget()
+        left_widget.setMinimumWidth(280)
         left_widget.setLayout(left_layout)
 
-        self.visualization_panel = VisualizationPanel()
+        self.visualization_panel = VisualizationPanel(show_spectrogram=False, show_levels=False)
+        self.visualization_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.visualization_panel.setMinimumWidth(360)
 
-        outer = QHBoxLayout(self)
-        outer.addWidget(left_widget)
-        outer.addWidget(self.visualization_panel, stretch=1)
+        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._main_splitter.setChildrenCollapsible(False)
+        self._main_splitter.addWidget(left_widget)
+        self._main_splitter.addWidget(self.visualization_panel)
+        self._main_splitter.setStretchFactor(0, 38)
+        self._main_splitter.setStretchFactor(1, 62)
+
+        outer = QVBoxLayout(self)
+        outer.addWidget(self._main_splitter)
 
         self._refresh_devices()
 
-    def _populate_binaural_controls(self) -> None:
-        caps = self._capabilities.binaural
-        self._binaural_backend.clear()
-        usable = bool(caps.available and self._capabilities.queried and caps.backends)
-        self._binaural_enable.setEnabled(usable)
-        self._binaural_backend.setEnabled(usable)
-        self._binaural_follow.setEnabled(usable)
-        self._binaural_az.setEnabled(usable)
-        self._binaural_el.setEnabled(usable)
-        if not self._capabilities.queried:
-            self._binaural_note.setText(
-                "C++ binaural capabilities were not reported. Live capture still works without HRTF."
-            )
-            return
-        for name in caps.backends:
-            self._binaural_backend.addItem(name, userData=name)
-        unavailable = ", ".join(caps.unavailable_backends) or "none"
-        self._binaural_note.setText(f"{caps.note} Not offered: {unavailable}.")
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if not self._layout_restored:
+            restore_splitter(self._main_splitter, KEY_REALTIME_H, REALTIME_H_DEFAULT)
+            self._layout_restored = True
 
-    def _current_binaural(self) -> BinauralRequest:
-        backend = self._binaural_backend.currentData()
-        return BinauralRequest(
-            enabled=self._binaural_enable.isChecked() and self._binaural_enable.isEnabled(),
-            backend=backend if isinstance(backend, str) else None,
-            azimuth_deg=self._binaural_az.value(),
-            elevation_deg=self._binaural_el.value(),
-            follow_beamformer_steering=self._binaural_follow.isChecked(),
-        )
+    def save_layout(self) -> None:
+        save_splitter(self._main_splitter, KEY_REALTIME_H)
 
     def _push_binaural(self) -> None:
         if self._worker is not None:
-            self._worker.set_binaural(self._current_binaural())
+            self._worker.set_binaural(self._binaural.request())
 
     def _refresh_devices(self) -> None:
         self._devices = list_input_devices()
@@ -248,6 +215,9 @@ class RealtimeTab(QWidget):
         for device in self._devices:
             suffix = "" if device.max_input_channels >= 6 else "  (fewer than 6 channels)"
             self._device_combo.addItem(f"{device.name}{suffix}", userData=device.index)
+            self._device_combo.setItemData(
+                self._device_combo.count() - 1, device.name, Qt.ItemDataRole.ToolTipRole
+            )
         self._device_combo.blockSignals(False)
         if self._devices:
             self._on_device_changed(self._device_combo.currentIndex())
@@ -255,20 +225,20 @@ class RealtimeTab(QWidget):
     def _on_device_changed(self, index: int) -> None:
         if 0 <= index < len(self._devices):
             device = self._devices[index]
-            self._channels_label.setText(f"Input Channels: {device.max_input_channels}")
-            self._rate_label.setText(f"Sample Rate: {int(device.default_sample_rate_hz)} Hz")
+            self._channels_label.setText(str(device.max_input_channels))
+            self._rate_label.setText(f"{int(device.default_sample_rate_hz)} Hz")
 
     def _on_steering_changed(self, azimuth_deg: float) -> None:
-        self._steering_readout.setText(f"{azimuth_deg:.0f}°")
         if self._worker is not None:
-            self._worker.set_steering(azimuth_deg, 0.0, self._blend_slider.value())
+            self._worker.set_steering(azimuth_deg, 0.0, self._steering.width_deg())
 
-    def _on_blend_changed(self, blend_deg: int) -> None:
-        descriptor = "fully directional" if blend_deg == 0 else ("fully omnidirectional mix" if blend_deg >= 180 else "blended")
-        self._blend_label.setText(f"Directional / Omni Blend: {blend_deg}° ({descriptor})")
-        self._steering_dial.set_width_deg(blend_deg)
+    def _on_blend_changed(self, width_deg: float) -> None:
         if self._worker is not None:
-            self._worker.set_steering(self._steering_dial.commanded_azimuth_deg(), 0.0, blend_deg)
+            self._worker.set_steering(self._steering.commanded_azimuth_deg(), 0.0, width_deg)
+
+    def _reset_meters(self) -> None:
+        for meter in (*self._raw_meters, *self._processed_meters):
+            meter.reset_peak()
 
     def _on_start(self) -> None:
         index = self._device_combo.currentIndex()
@@ -294,6 +264,7 @@ class RealtimeTab(QWidget):
             return
 
         self._active_sample_rate_hz = config_summary.capture_sample_rate_hz
+        self._reset_meters()
         worker = RealtimeWorker(
             device.index,
             self._config_path,
@@ -302,9 +273,9 @@ class RealtimeTab(QWidget):
             block_size=self._block_size_spin.value(),
             suppression=self._suppression_combo.currentData() or SuppressionMode.AUTO.value,
             queue_capacity=self._queue_capacity_spin.value(),
-            binaural=self._current_binaural(),
+            binaural=self._binaural.request(),
         )
-        worker.set_steering(self._steering_dial.commanded_azimuth_deg(), 0.0, self._blend_slider.value())
+        worker.set_steering(self._steering.commanded_azimuth_deg(), 0.0, self._steering.width_deg())
         worker.levelsUpdated.connect(self._on_levels_updated)
         worker.blockProcessed.connect(self._on_block_processed)
         worker.queueStatus.connect(self._on_queue_status)
@@ -367,9 +338,9 @@ class RealtimeTab(QWidget):
 
     def _on_levels_updated(self, raw_levels: list, processed_levels: list) -> None:
         for meter, level in zip(self._raw_meters, raw_levels):
-            meter.setValue(_level_to_percent(level))
+            meter.set_dbfs(float(level))
         for meter, level in zip(self._processed_meters, processed_levels):
-            meter.setValue(_level_to_percent(level))
+            meter.set_dbfs(float(level))
 
     def _on_block_processed(self, raw_block, processed_block) -> None:
         self.visualization_panel.plot_waveforms(self._active_sample_rate_hz, raw=raw_block, processed=processed_block)

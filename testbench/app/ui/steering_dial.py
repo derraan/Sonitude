@@ -1,40 +1,52 @@
 """A graphical compass/dial widget for setting and displaying beam steering.
 
-Drag anywhere on the dial (or click) to set the commanded azimuth, matching
-the BeamformerSteering.azimuth_deg convention (0 deg = forward/front,
-positive = right, per config/geometry_soundbubble_initial.yaml's zone
-layout). An optional secondary needle can show an estimated direction when
-one is available — the pipeline does not currently produce one (see
-app/analysis/steering_error.py), so callers simply never set it and the
-needle stays hidden.
+Drag, click, arrow keys, or an adjacent spin box (see SteeringControls) set
+the commanded azimuth, matching BeamformerSteering.azimuth_deg (0 deg =
+forward/front, positive = right). An optional secondary needle can show an
+estimated direction when one is available.
 """
 
 from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPainter, QPaintEvent, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import QPointF, QSize, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPen
+from PySide6.QtWidgets import QSizePolicy, QWidget
 
 _COMMANDED_COLOR = QColor("#2f7de1")
 _ESTIMATED_COLOR = QColor("#e0a300")
 _TICK_COLOR = QColor("#8a8a8a")
 _LABEL_COLOR = QColor("#c8c8c8")
-_WIDTH_WEDGE_COLOR = QColor(47, 125, 225, 60)  # translucent fill, same hue as commanded needle
+_WIDTH_WEDGE_COLOR = QColor(47, 125, 225, 60)
 _MAX_WIDTH_DEG = 180.0
+_MIN_SIDE = 120
+_PREFERRED_SIDE = 180
 
 
 class SteeringDial(QWidget):
-    azimuthChanged = Signal(float)  # emitted while dragging/clicking, degrees
+    azimuthChanged = Signal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumSize(180, 180)
+        self.setMinimumSize(_MIN_SIDE, _MIN_SIDE)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("Commanded steering azimuth")
+        self.setAccessibleDescription(
+            "Circular steering control. Zero degrees is forward. Positive azimuth is to the right. "
+            "Use arrow keys, the azimuth spin box, or click and drag."
+        )
         self._commanded_azimuth_deg = 0.0
         self._estimated_azimuth_deg: float | None = None
         self._width_deg = 0.0
         self._dragging = False
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(_PREFERRED_SIDE, _PREFERRED_SIDE)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(_MIN_SIDE, _MIN_SIDE)
 
     def commanded_azimuth_deg(self) -> float:
         return self._commanded_azimuth_deg
@@ -51,19 +63,21 @@ class SteeringDial(QWidget):
 
     def set_commanded_azimuth_deg(self, azimuth_deg: float, *, emit: bool = False) -> None:
         self._commanded_azimuth_deg = self._normalize(azimuth_deg)
+        self.setAccessibleDescription(
+            f"Commanded steering azimuth {self._commanded_azimuth_deg:.0f} degrees. "
+            "Zero is forward. Positive is to the right. Range minus 180 to plus 180."
+        )
         self.update()
         if emit:
             self.azimuthChanged.emit(self._commanded_azimuth_deg)
 
     def set_estimated_azimuth_deg(self, azimuth_deg: float | None) -> None:
-        """Set/clear the secondary "estimated direction" needle. None hides it."""
         self._estimated_azimuth_deg = None if azimuth_deg is None else self._normalize(azimuth_deg)
         self.update()
 
     @staticmethod
     def _normalize(azimuth_deg: float) -> float:
-        wrapped = ((azimuth_deg + 180.0) % 360.0) - 180.0
-        return wrapped
+        return ((azimuth_deg + 180.0) % 360.0) - 180.0
 
     def _geometry(self) -> tuple[QPointF, float]:
         side = min(self.width(), self.height())
@@ -72,7 +86,6 @@ class SteeringDial(QWidget):
         return center, radius
 
     def _azimuth_to_point(self, azimuth_deg: float, radius: float, center: QPointF) -> QPointF:
-        # 0 deg = up (forward), positive azimuth = clockwise (to the right).
         theta = math.radians(azimuth_deg - 90.0)
         return QPointF(center.x() + radius * math.cos(theta), center.y() + radius * math.sin(theta))
 
@@ -82,11 +95,16 @@ class SteeringDial(QWidget):
         theta_deg = math.degrees(math.atan2(dy, dx)) + 90.0
         return self._normalize(theta_deg)
 
-    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt override
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         center, radius = self._geometry()
+
+        if self.hasFocus():
+            painter.setPen(QPen(_COMMANDED_COLOR, 2, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(self.rect().adjusted(2, 2, -2, -2))
 
         painter.setPen(QPen(_TICK_COLOR, 1.5))
         painter.drawEllipse(center, radius, radius)
@@ -104,8 +122,6 @@ class SteeringDial(QWidget):
             wedge_radius = radius * 0.85
             top_left = QPointF(center.x() - wedge_radius, center.y() - wedge_radius)
             rect = (top_left.x(), top_left.y(), wedge_radius * 2, wedge_radius * 2)
-            # Qt angles are counter-clockwise from 3 o'clock, in 1/16ths of a degree;
-            # our azimuth is clockwise from 12 o'clock, so convert.
             start_qt_angle = int((90.0 - (self._commanded_azimuth_deg + self._width_deg / 2.0)) * 16)
             span_qt_angle = int(self._width_deg * 16)
             painter.setPen(Qt.PenStyle.NoPen)
@@ -123,16 +139,29 @@ class SteeringDial(QWidget):
         painter.setBrush(_COMMANDED_COLOR)
         painter.drawEllipse(center, 5, 5)
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt override
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        step = 15.0 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1.0
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Down):
+            self.set_commanded_azimuth_deg(self._commanded_azimuth_deg - step, emit=True)
+            event.accept()
+            return
+        if event.key() in (Qt.Key.Key_Right, Qt.Key.Key_Up):
+            self.set_commanded_azimuth_deg(self._commanded_azimuth_deg + step, emit=True)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
             self._dragging = True
             self._update_from_mouse(event.position())
 
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt override
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if self._dragging:
             self._update_from_mouse(event.position())
 
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt override
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         del event
         self._dragging = False
 

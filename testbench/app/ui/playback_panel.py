@@ -1,13 +1,13 @@
-"""RAW / PROCESSED / RESIDUAL stereo playback transport: play/pause/stop/seek/volume."""
+"""Listen-to source selector plus play/pause/stop/seek/volume."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -34,9 +34,13 @@ class PlaybackPanel(QWidget):
         self._sources: dict[str, Path] = {}
         self._seeking = False
 
-        self._raw_radio = QRadioButton("Listening preview (ear-cup, not binaural)")
-        self._processed_radio = QRadioButton("Final processed stereo")
-        self._residual_radio = QRadioButton("DSP residual (not preview)")
+        listen_box = QGroupBox("Listen to")
+        self._raw_radio = QRadioButton("Ear-cup preview")
+        self._raw_radio.setToolTip("Uncalibrated ear-cup stereo. Not binaural output. Not used in residuals.")
+        self._processed_radio = QRadioButton("Plot stage")
+        self._processed_radio.setToolTip("The file currently selected in Plot stage.")
+        self._residual_radio = QRadioButton("Plot residual")
+        self._residual_radio.setToolTip("The DSP-tap residual currently selected in Plot residual.")
         self._processed_radio.setChecked(True)
         self._source_group = QButtonGroup(self)
         for name, button in (
@@ -46,6 +50,12 @@ class PlaybackPanel(QWidget):
         ):
             button.toggled.connect(lambda checked, n=name: checked and self._on_source_selected(n))
             self._source_group.addButton(button)
+
+        listen_row = QHBoxLayout(listen_box)
+        listen_row.addWidget(self._raw_radio)
+        listen_row.addWidget(self._processed_radio)
+        listen_row.addWidget(self._residual_radio)
+        listen_row.addStretch(1)
 
         self._play_button = QPushButton("Play")
         self._pause_button = QPushButton("Pause")
@@ -69,12 +79,6 @@ class PlaybackPanel(QWidget):
         self._engine.durationChanged.connect(self._on_duration_changed)
         self._engine.errorOccurred.connect(lambda msg: self._time_label.setText(f"Playback error: {msg}"))
 
-        source_row = QHBoxLayout()
-        source_row.addWidget(self._raw_radio)
-        source_row.addWidget(self._processed_radio)
-        source_row.addWidget(self._residual_radio)
-        source_row.addStretch(1)
-
         transport_row = QHBoxLayout()
         transport_row.addWidget(self._play_button)
         transport_row.addWidget(self._pause_button)
@@ -87,12 +91,15 @@ class PlaybackPanel(QWidget):
         seek_row.addWidget(self._time_label)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(source_row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(listen_box)
         layout.addLayout(transport_row)
         layout.addLayout(seek_row)
 
+    def listen_source(self) -> str:
+        return self._checked_source_name()
+
     def set_sources(self, *, raw: Path | None = None, processed: Path | None = None, residual: Path | None = None) -> None:
-        """Point the panel at the stereo preview files for the current test result."""
         self._sources = {}
         if raw is not None:
             self._sources["raw"] = raw
