@@ -41,7 +41,16 @@ Audio path target order:
 
 ```text
 steering snapshot -> delay-and-sum beamformer -> conservative suppression policy
--> limiter -> mono-to-stereo -> ASRC/drift control -> ALSA playback
+-> binaural renderer -> linked stereo limiter -> ASRC/drift control -> ALSA playback
+```
+
+Direction convention (authoritative for steering and binaural rendering):
+
+```text
+azimuth 0 deg  = front (+Y)
+azimuth +deg   = clockwise toward listener-right (+X)
+elevation +deg = up (+Z)
+wrap range     = (-180, +180]
 ```
 
 Control path target order:

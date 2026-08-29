@@ -27,7 +27,7 @@ void TestOdasParserSplitFrames()
   Require(second.size() == 1, "expected one parsed source from split frame");
   Require(second[0].source_id == 7, "source id mismatch");
   Require(std::fabs(second[0].confidence - 0.8F) < 1e-6F, "confidence parse mismatch");
-  Require(std::fabs(second[0].azimuth_deg) < 1e-3F, "azimuth parse mismatch");
+  Require(std::fabs(second[0].azimuth_deg - 90.0F) < 0.5F, "azimuth parse mismatch");
 }
 
 void TestOdasParserGarbageResync()
@@ -41,7 +41,7 @@ void TestOdasParserGarbageResync()
       R"({"timeStamp":2.0,"src":[{"id":3,"x":0.0,"y":1.0,"z":0.0,"activity":0.5}]})";
   const auto out = parser.feed(payload);
   Require(out.size() == 1, "parser failed to resync after garbage");
-  Require(std::fabs(out[0].azimuth_deg - 90.0F) < 0.5F, "resynced azimuth mismatch");
+  Require(std::fabs(out[0].azimuth_deg) < 1e-3F, "resynced azimuth mismatch");
 }
 
 void TestMockDoaProviderScript()

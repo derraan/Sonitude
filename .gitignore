@@ -1,5 +1,6 @@
 # Build outputs
 /build/
+/build-asan/
 /out/
 
 # IDE and editor files
@@ -18,3 +19,6 @@ testbench/__pycache__/
 testbench/**/__pycache__/
 testbench/.pytest_cache/
 testbench/data/
+
+# Large HRTF source datasets are fetched into local cache only.
+data/hrtf_cache/

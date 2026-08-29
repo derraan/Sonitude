@@ -42,6 +42,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -56,15 +57,35 @@
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/binaural_renderer.hpp"
 #include "dsp/calibration_applier.hpp"
+#include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/suppressor.hpp"
 
 namespace
 {
 constexpr std::uint32_t kInputMagic = 0x31424253U;   // "SBB1" little-endian on disk
+constexpr std::uint32_t kInputMagicV2 = 0x32424253U; // "SBB2" little-endian on disk
 constexpr std::uint32_t kOutputMagic = 0x314F4253U;  // "SBO1" little-endian on disk
 constexpr float kMaxWidthDeg = 180.0F;               // matches sonitude_wav_replay's kMaxWidthDeg
+
+sonitude::dsp::BinauralBackend ParseBinauralBackendByte(const std::uint8_t value)
+{
+  switch (value)
+  {
+    case 0:
+      return sonitude::dsp::BinauralBackend::MonoReference;
+    case 1:
+      return sonitude::dsp::BinauralBackend::ItdIld;
+    case 2:
+      return sonitude::dsp::BinauralBackend::CompactHrtf;
+    case 3:
+      return sonitude::dsp::BinauralBackend::FullHrtfReference;
+    default:
+      throw std::runtime_error("Unknown binaural backend byte");
+  }
+}
 
 void PrintUsage()
 {
@@ -172,7 +193,58 @@ int main(int argc, char** argv)
         sample_rate_hz);
 
     sonitude::dsp::PeakLimiter limiter;
-    limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, sample_rate_hz);
+    sonitude::dsp::StereoPeakLimiter stereo_limiter;
+    const bool runtime_binaural_enabled = runtime.binaural.enabled;
+    std::unique_ptr<sonitude::dsp::HrtfTable> runtime_hrtf_table;
+    sonitude::dsp::BinauralRenderer runtime_binaural;
+    if (runtime_binaural_enabled)
+    {
+      sonitude::dsp::BinauralBackend backend = sonitude::dsp::BinauralBackend::MonoReference;
+      if (runtime.binaural.backend == "mono_reference")
+      {
+        backend = sonitude::dsp::BinauralBackend::MonoReference;
+      }
+      else if (runtime.binaural.backend == "itd_ild")
+      {
+        backend = sonitude::dsp::BinauralBackend::ItdIld;
+      }
+      else if (runtime.binaural.backend == "compact_hrtf")
+      {
+        backend = sonitude::dsp::BinauralBackend::CompactHrtf;
+      }
+      else if (runtime.binaural.backend == "full_hrtf_reference")
+      {
+        backend = sonitude::dsp::BinauralBackend::FullHrtfReference;
+      }
+      else
+      {
+        throw std::runtime_error("Unknown binaural backend: " + runtime.binaural.backend);
+      }
+      if (backend == sonitude::dsp::BinauralBackend::CompactHrtf ||
+          backend == sonitude::dsp::BinauralBackend::FullHrtfReference)
+      {
+        if (runtime.binaural.profile.table_path.empty())
+        {
+          throw std::runtime_error("binaural.profile.table_path is required for HRTF backend");
+        }
+        runtime_hrtf_table = std::make_unique<sonitude::dsp::HrtfTable>(
+            sonitude::dsp::LoadHrtfTableFromFile(runtime.binaural.profile.table_path));
+      }
+      runtime_binaural.configure({.sample_rate_hz = sample_rate_hz,
+                                  .backend = backend,
+                                  .transition_ms = runtime.binaural.transition.duration_ms,
+                                  .max_block_frames = max_block_frames,
+                                  .itd_ild = {.head_radius_m = runtime.binaural.model.head_radius_m,
+                                              .max_ild_db = runtime.binaural.model.max_ild_db},
+                                  .table = runtime_hrtf_table.get()});
+      runtime_binaural.setDirection({runtime.binaural.direction.azimuth_deg,
+                                     runtime.binaural.direction.elevation_deg});
+      stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, sample_rate_hz);
+    }
+    else
+    {
+      limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, sample_rate_hz);
+    }
 
     std::cerr << "sonitude_stream_process ready: sample_rate_hz=" << sample_rate_hz
               << " suppression=" << (suppression_enabled ? "on" : "off")
@@ -183,6 +255,8 @@ int main(int argc, char** argv)
     std::vector<float> mono;
     std::vector<float> input_pcm;
     std::vector<float> output_pcm;
+    std::vector<float> left;
+    std::vector<float> right;
     bool have_target = false;
     sonitude::audio::BeamformerSteering last_target{};
 
@@ -193,11 +267,12 @@ int main(int argc, char** argv)
       {
         break;  // stdin closed: treat as shutdown.
       }
-      if (magic != kInputMagic)
+      if (magic != kInputMagic && magic != kInputMagicV2)
       {
         std::cerr << "stream_process: bad input magic, aborting\n";
         return 1;
       }
+      const bool use_v2 = (magic == kInputMagicV2);
 
       std::uint32_t frame_count = 0;
       float azimuth_deg = 0.0F;
@@ -205,6 +280,12 @@ int main(int argc, char** argv)
       float width_deg = 0.0F;
       std::uint8_t suppression_focus_active = 0;
       std::uint8_t reserved[3] = {0, 0, 0};
+      std::uint8_t binaural_enabled = 0;
+      std::uint8_t binaural_backend = 0;
+      std::uint8_t binaural_follow_steering = 1;
+      std::uint8_t binaural_reserved = 0;
+      float binaural_azimuth_deg = 0.0F;
+      float binaural_elevation_deg = 0.0F;
       if (!ReadExact(std::cin, &frame_count, sizeof(frame_count)) ||
           !ReadExact(std::cin, &azimuth_deg, sizeof(azimuth_deg)) ||
           !ReadExact(std::cin, &elevation_deg, sizeof(elevation_deg)) ||
@@ -214,6 +295,19 @@ int main(int argc, char** argv)
       {
         std::cerr << "stream_process: truncated block header, aborting\n";
         return 1;
+      }
+      if (use_v2)
+      {
+        if (!ReadExact(std::cin, &binaural_enabled, sizeof(binaural_enabled)) ||
+            !ReadExact(std::cin, &binaural_backend, sizeof(binaural_backend)) ||
+            !ReadExact(std::cin, &binaural_follow_steering, sizeof(binaural_follow_steering)) ||
+            !ReadExact(std::cin, &binaural_reserved, sizeof(binaural_reserved)) ||
+            !ReadExact(std::cin, &binaural_azimuth_deg, sizeof(binaural_azimuth_deg)) ||
+            !ReadExact(std::cin, &binaural_elevation_deg, sizeof(binaural_elevation_deg)))
+        {
+          std::cerr << "stream_process: truncated v2 extension header, aborting\n";
+          return 1;
+        }
       }
 
       if (frame_count == 0)
@@ -282,16 +376,61 @@ int main(int argc, char** argv)
         suppressor.setControl(suppression_focus_active != 0, suppression_focus_active != 0 ? 1.0F : 0.0F);
         suppressor.process(std::span<float>(mono.data(), frames));
       }
-      if (!disable_limiter)
+      const bool effective_binaural_enabled = use_v2 ? (binaural_enabled != 0) : runtime_binaural_enabled;
+      left.assign(frames, 0.0F);
+      right.assign(frames, 0.0F);
+      if (effective_binaural_enabled)
       {
-        limiter.process(std::span<float>(mono.data(), frames));
+        if (!runtime_binaural_enabled)
+        {
+          std::cerr << "stream_process: binaural requested but runtime config has binaural disabled\n";
+          return 1;
+        }
+        sonitude::dsp::BinauralBackend active_backend =
+            runtime_binaural_enabled ? runtime_binaural.resolvedBackend()
+                                     : sonitude::dsp::BinauralBackend::MonoReference;
+        if (use_v2 && runtime_binaural_enabled)
+        {
+          const auto requested_backend = ParseBinauralBackendByte(binaural_backend);
+          if (requested_backend != runtime_binaural.resolvedBackend())
+          {
+            std::cerr << "stream_process: requested backend not available, using runtime backend\n";
+          }
+        }
+        const sonitude::audio::BeamformerSteering binaural_target =
+            (use_v2 && binaural_follow_steering == 0)
+                ? sonitude::audio::BeamformerSteering{binaural_azimuth_deg, binaural_elevation_deg}
+                : target;
+        runtime_binaural.setDirection(binaural_target);
+        runtime_binaural.process(
+            std::span<const float>(mono.data(), frames), std::span<float>(left.data(), frames), std::span<float>(right.data(), frames));
+        if (!disable_limiter)
+        {
+          stereo_limiter.process(std::span<float>(left.data(), frames),
+                                 std::span<float>(right.data(), frames));
+        }
+        std::cerr << "binaural backend=" << static_cast<int>(active_backend)
+                  << " az=" << binaural_target.azimuth_deg << " el=" << binaural_target.elevation_deg
+                  << '\n';
+      }
+      else
+      {
+        if (!disable_limiter)
+        {
+          limiter.process(std::span<float>(mono.data(), frames));
+        }
+        for (std::size_t i = 0; i < frames; ++i)
+        {
+          left[i] = mono[i];
+          right[i] = mono[i];
+        }
       }
 
       output_pcm.assign(frames * 2, 0.0F);
       for (std::size_t i = 0; i < frames; ++i)
       {
-        output_pcm[(i * 2) + 0] = mono[i];
-        output_pcm[(i * 2) + 1] = mono[i];
+        output_pcm[(i * 2) + 0] = left[i];
+        output_pcm[(i * 2) + 1] = right[i];
       }
 
       WriteExact(std::cout, &kOutputMagic, sizeof(kOutputMagic));

@@ -2,6 +2,7 @@
 #include <cctype>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -12,7 +13,9 @@
 #include "audio/audio_types.hpp"
 #include "audio/wav_io.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/binaural_renderer.hpp"
 #include "dsp/calibration_applier.hpp"
+#include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/suppressor.hpp"
 
@@ -36,6 +39,27 @@ struct SteeringEvent
 // is untouched. See testbench/README.md, "Steering width definition".
 constexpr float kMaxWidthDeg = 180.0F;
 
+sonitude::dsp::BinauralBackend ParseBinauralBackend(const std::string& backend)
+{
+  if (backend == "mono_reference")
+  {
+    return sonitude::dsp::BinauralBackend::MonoReference;
+  }
+  if (backend == "itd_ild")
+  {
+    return sonitude::dsp::BinauralBackend::ItdIld;
+  }
+  if (backend == "compact_hrtf")
+  {
+    return sonitude::dsp::BinauralBackend::CompactHrtf;
+  }
+  if (backend == "full_hrtf_reference")
+  {
+    return sonitude::dsp::BinauralBackend::FullHrtfReference;
+  }
+  throw std::runtime_error("Unknown binaural backend: " + backend);
+}
+
 void PrintUsage()
 {
   std::cout << "Usage:\n"
@@ -44,6 +68,11 @@ void PrintUsage()
             << "                      [--enable-suppression] [--disable-limiter]\n"
             << "                      [--output-beamformed <mono_wav>]\n"
             << "                      [--output-suppressed <mono_wav>]\n"
+            << "                      [--binaural]\n"
+            << "                      [--binaural-backend <mono_reference|itd_ild|compact_hrtf|full_hrtf_reference>]\n"
+            << "                      [--binaural-profile <id>]\n"
+            << "                      [--output-mono-pre-binaural <mono_wav>]\n"
+            << "                      [--output-binaural <stereo_wav>]\n"
             << "\n"
             << "  --output-beamformed writes the mono signal immediately after the\n"
             << "  beamformer (including the width blend, see below), before suppression\n"
@@ -51,6 +80,7 @@ void PrintUsage()
             << "  --output-suppressed writes the mono signal after suppression (if\n"
             << "  enabled) but before limiting. Both are diagnostic taps only; they do\n"
             << "  not change the final --output render.\n"
+            << "  --output-mono-pre-binaural is an explicit alias for the same tap.\n"
             << "\n"
             << "  Steering script columns: time_s,azimuth_deg,elevation_deg[,width_deg]\n"
             << "  width_deg (0-" << kMaxWidthDeg << ", default 0) blends the beamformer\n"
@@ -120,8 +150,13 @@ int main(int argc, char** argv)
   std::string output_path;
   std::string output_beamformed_path;
   std::string output_suppressed_path;
+  std::string output_mono_pre_binaural_path;
+  std::string output_binaural_path;
+  std::string binaural_backend_override;
+  std::string binaural_profile_override;
   bool enable_suppression = false;
   bool disable_limiter = false;
+  bool force_binaural = false;
 
   for (int i = 1; i < argc; ++i)
   {
@@ -149,6 +184,26 @@ int main(int argc, char** argv)
     else if (arg == "--output-suppressed" && i + 1 < argc)
     {
       output_suppressed_path = argv[++i];
+    }
+    else if (arg == "--output-mono-pre-binaural" && i + 1 < argc)
+    {
+      output_mono_pre_binaural_path = argv[++i];
+    }
+    else if (arg == "--output-binaural" && i + 1 < argc)
+    {
+      output_binaural_path = argv[++i];
+    }
+    else if (arg == "--binaural")
+    {
+      force_binaural = true;
+    }
+    else if (arg == "--binaural-backend" && i + 1 < argc)
+    {
+      binaural_backend_override = argv[++i];
+    }
+    else if (arg == "--binaural-profile" && i + 1 < argc)
+    {
+      binaural_profile_override = argv[++i];
     }
     else if (arg == "--help")
     {
@@ -201,6 +256,7 @@ int main(int argc, char** argv)
     }
 
     const std::size_t frames = input_wav.interleaved.size() / input_wav.channels;
+    constexpr std::size_t kBlock = 256;
     std::vector<sonitude::audio::MicFrame> mic(frames);
     std::vector<sonitude::audio::MicFrame> calibrated(frames);
     for (std::size_t i = 0; i < frames; ++i)
@@ -235,28 +291,84 @@ int main(int argc, char** argv)
          .activity_threshold = runtime.suppression.activity_threshold,
          .confidence_threshold = runtime.suppression.confidence_threshold},
         input_wav.sample_rate_hz);
+    const bool binaural_enabled = force_binaural || runtime.binaural.enabled;
+    const std::string requested_backend =
+        binaural_backend_override.empty() ? runtime.binaural.backend : binaural_backend_override;
+    const std::string requested_profile =
+        binaural_profile_override.empty() ? runtime.binaural.profile.id : binaural_profile_override;
+
+    std::unique_ptr<sonitude::dsp::HrtfTable> hrtf_table;
+    sonitude::dsp::BinauralRenderer binaural;
+    if (binaural_enabled)
+    {
+      const auto backend = ParseBinauralBackend(requested_backend);
+      if (backend == sonitude::dsp::BinauralBackend::CompactHrtf ||
+          backend == sonitude::dsp::BinauralBackend::FullHrtfReference)
+      {
+        if (runtime.binaural.profile.table_path.empty())
+        {
+          throw std::runtime_error("binaural.profile.table_path is required for HRTF backends");
+        }
+        hrtf_table = std::make_unique<sonitude::dsp::HrtfTable>(
+            sonitude::dsp::LoadHrtfTableFromFile(runtime.binaural.profile.table_path));
+      }
+
+      binaural.configure({.sample_rate_hz = input_wav.sample_rate_hz,
+                          .backend = backend,
+                          .transition_ms = runtime.binaural.transition.duration_ms,
+                          .max_block_frames = kBlock,
+                          .itd_ild = {.head_radius_m = runtime.binaural.model.head_radius_m,
+                                      .max_ild_db = runtime.binaural.model.max_ild_db},
+                          .table = hrtf_table.get()});
+      binaural.setDirection(runtime.binaural.direction.follow_steering
+                                ? events.front().target
+                                : sonitude::audio::BeamformerSteering{
+                                      runtime.binaural.direction.azimuth_deg,
+                                      runtime.binaural.direction.elevation_deg});
+      std::cout << "Binaural renderer enabled: backend=" << requested_backend
+                << " profile=" << requested_profile << '\n';
+    }
+
     sonitude::dsp::PeakLimiter limiter;
-    limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
+    sonitude::dsp::StereoPeakLimiter stereo_limiter;
+    if (binaural_enabled)
+    {
+      stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
+    }
+    else
+    {
+      limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
+    }
 
     std::vector<float> mono(frames, 0.0F);
+    std::vector<float> left(frames, 0.0F);
+    std::vector<float> right(frames, 0.0F);
     std::vector<float> beamformed_tap;
     std::vector<float> suppressed_tap;
+    std::vector<float> binaural_tap;
     if (!output_beamformed_path.empty())
     {
       beamformed_tap.resize(frames, 0.0F);
     }
-    if (!output_suppressed_path.empty())
+    if (!output_suppressed_path.empty() || !output_mono_pre_binaural_path.empty())
     {
       suppressed_tap.resize(frames, 0.0F);
     }
+    if (!output_binaural_path.empty())
+    {
+      binaural_tap.resize(frames * 2U, 0.0F);
+    }
 
     std::size_t event_index = 1;
-    constexpr std::size_t kBlock = 256;
     for (std::size_t start = 0; start < frames; start += kBlock)
     {
       while (event_index < events.size() && events[event_index].frame_index <= start)
       {
         beamformer.setTarget(events[event_index].target);
+        if (binaural_enabled && runtime.binaural.direction.follow_steering)
+        {
+          binaural.setDirection(events[event_index].target);
+        }
         current_width_deg = events[event_index].width_deg;
         ++event_index;
       }
@@ -296,15 +408,53 @@ int main(int argc, char** argv)
       }
       if (!disable_limiter)
       {
-        limiter.process(std::span<float>(mono.data() + start, count));
+        if (binaural_enabled)
+        {
+          binaural.process(std::span<const float>(mono.data() + start, count),
+                           std::span<float>(left.data() + start, count),
+                           std::span<float>(right.data() + start, count));
+          if (!binaural_tap.empty())
+          {
+            for (std::size_t i = 0; i < count; ++i)
+            {
+              const std::size_t out_index = (start + i) * 2U;
+              binaural_tap[out_index] = left[start + i];
+              binaural_tap[out_index + 1U] = right[start + i];
+            }
+          }
+          stereo_limiter.process(std::span<float>(left.data() + start, count),
+                                 std::span<float>(right.data() + start, count));
+        }
+        else
+        {
+          limiter.process(std::span<float>(mono.data() + start, count));
+        }
+      }
+      else if (binaural_enabled)
+      {
+        binaural.process(std::span<const float>(mono.data() + start, count),
+                         std::span<float>(left.data() + start, count),
+                         std::span<float>(right.data() + start, count));
       }
     }
 
     sonitude::audio::WavData out;
     out.sample_rate_hz = input_wav.sample_rate_hz;
-    out.channels = 1;
+    out.channels = binaural_enabled ? 2 : 1;
     out.format = sonitude::audio::PcmFormat::FLOAT32_LE;
-    out.interleaved = std::move(mono);
+    if (binaural_enabled)
+    {
+      out.interleaved.resize(frames * 2U, 0.0F);
+      for (std::size_t i = 0; i < frames; ++i)
+      {
+        out.interleaved[(i * 2U)] = left[i];
+        out.interleaved[(i * 2U) + 1U] = right[i];
+      }
+    }
+    else
+    {
+      out.interleaved = std::move(mono);
+    }
     sonitude::audio::WriteWavFile(output_path, out);
     std::cout << "Rendered beamformed WAV to " << output_path << '\n';
 
@@ -325,8 +475,26 @@ int main(int argc, char** argv)
       tap.channels = 1;
       tap.format = sonitude::audio::PcmFormat::FLOAT32_LE;
       tap.interleaved = std::move(suppressed_tap);
-      sonitude::audio::WriteWavFile(output_suppressed_path, tap);
-      std::cout << "Wrote pre-limiter tap to " << output_suppressed_path << '\n';
+      if (!output_suppressed_path.empty())
+      {
+        sonitude::audio::WriteWavFile(output_suppressed_path, tap);
+        std::cout << "Wrote pre-limiter tap to " << output_suppressed_path << '\n';
+      }
+      if (!output_mono_pre_binaural_path.empty())
+      {
+        sonitude::audio::WriteWavFile(output_mono_pre_binaural_path, tap);
+        std::cout << "Wrote pre-binaural mono tap to " << output_mono_pre_binaural_path << '\n';
+      }
+    }
+    if (!binaural_tap.empty())
+    {
+      sonitude::audio::WavData tap;
+      tap.sample_rate_hz = input_wav.sample_rate_hz;
+      tap.channels = 2;
+      tap.format = sonitude::audio::PcmFormat::FLOAT32_LE;
+      tap.interleaved = std::move(binaural_tap);
+      sonitude::audio::WriteWavFile(output_binaural_path, tap);
+      std::cout << "Wrote post-binaural stereo tap to " << output_binaural_path << '\n';
     }
     return 0;
   }
