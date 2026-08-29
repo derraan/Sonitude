@@ -19,6 +19,7 @@ void RunControlLoopTests();
 void RunZoneTests();
 void RunStateMachineTests();
 void RunSuppressorTests();
+void RunStftTests();
 void RunBinauralTests();
 
 namespace
@@ -271,6 +272,7 @@ int main()
     RunCalibrationTests();
     RunBeamformerTests();
     RunSuppressorTests();
+    RunStftTests();
     RunLimiterTests();
     RunStereoLimiterTests();
     RunBinauralTests();
