@@ -323,5 +323,5 @@ tests fail if those binaries are missing. Details: `[testbench/README.md](testbe
 - Latency measurement method and caveats: `[docs/latency_measurement.md](docs/latency_measurement.md)`
 - Binaural renderer (DSP, HRTF tables, protocol v2 tools): `[docs/binaural_renderer.md](docs/binaural_renderer.md)`
 - Full milestone gate checklist and evidence tracking: `[docs/milestones.md](docs/milestones.md)`
-- Algorithm test bench (PySide6, non-RT): `[testbench/README.md](testbench/README.md)`
+- Algorithm test bench (PySide6, non-RT; short-file taps, long-file streaming, live preview): `[testbench/README.md](testbench/README.md)`
 

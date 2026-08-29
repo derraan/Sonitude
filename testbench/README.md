@@ -14,8 +14,8 @@ PySide6 GUI  →  Controller (QThread)  →  subprocess  →  C++ CLI  →  soni
 
 | Tool | Role |
 | --- | --- |
-| `sonitude_wav_replay` | Mode 1 batch: decoded 6-channel WAV + steering script → mono + diagnostic taps |
-| `sonitude_stream_process` | Mode 2 live: protocol v2 stdin/stdout blocks around the same DSP chain |
+| `sonitude_wav_replay` | Short-file batch: decoded 6-channel WAV + steering script → mono + diagnostic taps |
+| `sonitude_stream_process` | Live capture, long-file batch, and Recorded-tab live preview: protocol v2 stdin/stdout |
 
 The C++ chain is `CalibrationApplier → DelaySumBeamformer →
 ConservativeSuppressor → PeakLimiter`, plus optional `BinauralRenderer` in
@@ -89,14 +89,31 @@ decode it). Decode preserves channel count and order; there is **no silent
 downmix**. A stereo file may decode and still fail DSP validation when the
 active configuration requires six microphones.
 
-Python decodes to canonical float32, writes a temp WAV for the C++
-WAV-only tool, then reads back taps. Changing the **final export**
-container (WAV or FLAC) does not change DSP. Intermediate taps stay WAV.
-MP3 export is not supported.
+**Live DSP (default on).** Play the selected 6-channel file through
+`sonitude_stream_process` without waiting for a batch. Steering, blend, and
+binaural controls apply on the next block — same idea as a plugin insert.
+Uncheck **Live DSP** to listen to already-written result files instead.
 
-Per-batch controls: commanded azimuth, **Directional / Omni Blend**
-(compatibility field `width_deg`; not HPBW), suppression AUTO / ON / OFF,
-optional capability-gated binaural request, optional steering sweep.
+**Batch processing** picks a pipeline from file length / size
+(`app/audio_io/stream_io.py`):
+
+| | `sonitude_wav_replay` | `sonitude_stream_process` |
+| --- | --- | --- |
+| When | Duration < 30 s **and** estimated float32 PCM ≤ 24 MiB | Duration ≥ 30 s **or** PCM > 24 MiB |
+| RAM | Decodes the file, then the C++ tool holds it | Block reads; the file is never fully loaded |
+| Taps | `beamformed.wav`, `suppressed.wav`, residuals, optional sweep | Stereo/mono PCM_16 writes only — **no** DSP-tap residuals, **no** objective sweep |
+| Binaural | `--output-binaural` float WAV | Optional `binaural_stereo.wav` as it streams |
+| Export container | Final WAV/FLAC choice does not change DSP | Same; streaming intermediates are PCM_16 so Qt can play them |
+
+MP3 export is not supported. Overview plots hop-seek across the file
+(`PLOT_MAX_POINTS` waveform samples, STFT windows spaced over the true
+duration). Axes are wall-clock time and 0…Nyquist of the original rate —
+not a compressed preview pretending to be a few seconds long.
+
+Per-batch / live-preview controls: commanded azimuth, **Directional / Omni
+Blend** (compatibility field `width_deg`; not HPBW), suppression AUTO / ON /
+OFF, capability-gated binaural request, optional steering sweep (wav_replay
+path only).
 
 Result directory (`testbench/data/results/TEST_<id>/`):
 
@@ -106,12 +123,12 @@ Result directory (`testbench/data/results/TEST_<id>/`):
 ├── processed.wav             # final C++ mono (post-limiter)
 ├── processed_export.wav|.flac
 ├── processed_stereo.wav
-├── beamformed.wav            # DSP tap, pre-suppression
-├── suppressed.wav            # DSP tap, pre-limiter
+├── beamformed.wav            # DSP tap (wav_replay path only)
+├── suppressed.wav            # DSP tap (wav_replay path only)
 ├── binaural_stereo.wav       # present only if requested and the C++ tap ran
 ├── raw_preview_stereo.wav    # ear-cup listening preview — NOT binaural
-├── residual_beamform.wav     # beamformed − suppressed
-├── residual_limiter.wav      # suppressed − processed
+├── residual_beamform.wav     # beamformed − suppressed (wav_replay path only)
+├── residual_limiter.wav      # suppressed − processed (wav_replay path only)
 ├── steering_script.csv
 ├── runtime_config.yaml
 ├── input_metadata.json
@@ -234,9 +251,11 @@ testbench/app/
 │   └── metrics_panel.py
 ├── controller/
 │   ├── batch_controller.py
-│   └── realtime_controller.py
+│   ├── realtime_controller.py
+│   └── file_preview_controller.py  # live DSP while playing a file
 ├── audio_io/
 │   ├── audio_loader.py          # WAV/FLAC/MP3 → float32; codec vs DSP errors
+│   ├── stream_io.py             # block reads + hop-sampled plots
 │   ├── wav_loader.py            # compatibility re-export
 │   ├── exporter.py              # WAV/FLAC only
 │   ├── block_queue.py           # drop-oldest queue
@@ -283,8 +302,9 @@ These tools wrap `sonitude_core`. They do **not** change
 `sonitude_stream_process`:
 
 - Protocol v2 (replaces the old 24-byte header)
-- Same suppression / capabilities / blend behaviour
-- No ALSA; Python owns devices via `sounddevice`
+- Same suppression / capabilities / blend / binaural behaviour
+- Used for live capture, long-file batch, and Recorded-tab live preview
+- No ALSA; Python owns devices and files via `sounddevice` / `soundfile`
 
 ## Known limitations
 
@@ -294,7 +314,10 @@ These tools wrap `sonitude_core`. They do **not** change
 - Intelligibility proxy is experimental and must not gate acceptance.
 - Directional / Omni Blend is a test-bench mix, not physical beamwidth.
 - Optional steering sweep still searches ±90° by default; circular error
-  is used when an estimate exists.
+  is used when an estimate exists. Sweep is skipped on the streaming-batch
+  path.
+- Streaming batch skips DSP-tap residuals and the intelligibility proxy
+  because `sonitude_stream_process` does not emit beamformed/suppressed WAVs.
 - Mode 1 steering / blend / suppression apply per batch, not per file.
 - Hardware array capture has not been used as an automated gate.
 - Crash-before-save realtime recordings can leave temp WAVs in the OS temp
@@ -302,6 +325,7 @@ These tools wrap `sonitude_core`. They do **not** change
 
 ## Related documents
 
-- `docs/pr32_testbench_software_proposal.md` — app-side requirements for this phase
-- `docs/binaural_renderer_dsp_proposal.md` — separate C++ HRTF/ITD work
+- `docs/pr32_testbench_software_proposal.md` — original app-side requirements (implemented on this PR)
+- `docs/binaural_renderer.md` — C++ HRTF/ITD + CLI/GUI wiring
+- `docs/binaural_renderer_dsp_proposal.md` — binaural DSP design spec
 - `docs/architecture.md` — production RT pipeline (this GUI is outside that budget)

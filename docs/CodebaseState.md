@@ -2,7 +2,7 @@
 
 Unified tracker for Sonitude core: **global scope, guardrails, user veto checkboxes**, **DSP signal path**, directory layout, milestone reality, key interfaces, config schema, tests, conventions, ODAS posture, and CMake wiring. Treat this document as the living snapshot; `docs/milestones.md` **remains authoritative for milestone gates**. Unchecked scope vetoes are binding on Cursor; checked vetoes explicitly authorize otherwise-prohibited work.
 
-Last updated: 2026-08-13.
+Last updated: 2026-08-29.
 
 ### Implementation status snapshot (M4–M7)
 
@@ -247,7 +247,7 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 ### Offline vs real-time
 
 - **Real-time:** capture → calibration → beamformer → … → ASRC → ALSA playback on Pi.
-- **Offline:** `sonitude_wav_replay` (M4) renders beamformed mono from a 6-ch file + steering script, with optional `--output-binaural` stereo. `sonitude_stream_process` is a portable stdin/stdout adapter (protocol v2) for the same DSP chain; the PySide6 test bench in `testbench/` drives both tools and is **not** on the RT path.
+- **Offline:** `sonitude_wav_replay` (M4) renders beamformed mono from a 6-ch file + steering script, with optional `--output-binaural` stereo. `sonitude_stream_process` is a portable protocol-v2 stdin/stdout adapter for the same DSP chain. The PySide6 test bench in `testbench/` drives both: short files use wav_replay (taps + optional sweep); files ≥ 30 s or > 24 MiB PCM stream through `stream_process` without loading the capture into RAM; the Recorded tab can also preview a file with live steering/binaural. This GUI is **not** on the RT path.
 - **Tests:** `asrc_sim_tests.cpp` simulates ppm mismatch without wall clock to verify PI stability.
 
 **One-line summary:** align six mics toward the talker (beamformer), clean per-mic errors (calibration), play at a slightly variable rate (ASRC) so independent USB clocks do not XRUN, while a separate control loop sets steering without touching PCM.
@@ -344,7 +344,7 @@ Sonitude/
 | `src/tools/calibration_estimate.cpp`                                       | DC/RMS→YAML estimator                                                          |
 | `src/tools/latency_marker.cpp`                                             | M8 placeholder                                                                 |
 | `src/tools/wav_replay.cpp`                                                 | M4 offline renderer; taps, AUTO/ON/OFF suppression, `--output-binaural`, `--capabilities` |
-| `src/tools/stream_process.cpp`                                             | Portable protocol-v2 stdin/stdout DSP adapter (no ALSA)                        |
+| `src/tools/stream_process.cpp`                                             | Protocol-v2 stdin/stdout DSP adapter (live capture, long-file batch, file preview) |
 | `src/tools/binaural_bench.cpp`                                             | Desktop-only binaural throughput / RAM probe                                   |
 
 

@@ -1,5 +1,14 @@
 # PR #32 — Audio Algorithm Test Bench Software Development Proposal
 
+**Status (2026-08-29, `feature/pyside6-testbench`):** the four work packages
+below are implemented on PR #32. Treat this file as the original
+requirements record, not a to-do list. Current behaviour, including
+hour-scale streaming batch and live steering while playing, is documented
+in `testbench/README.md` and `docs/binaural_renderer.md`.
+
+Python still does not implement production DSP. `sonitude_realtime`
+`--mode beamform` still duplicates mono to both ears.
+
 ## 1. Purpose
 
 This document specifies the next development stage of the Sonitude PySide6 Audio Algorithm Test Bench introduced in PR #32.

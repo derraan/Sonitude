@@ -22,7 +22,7 @@ Sonitude is a **hearable-class** low-latency pipeline, not a robot-audition batc
 
 **Implication:** Any separation or post-filtering block that needs **STFT frames of 8–16 ms+**, or outputs on **128-sample hops @ 16 kHz**, is incompatible with the audio-path target unless it runs **off the RT thread** and only influences slow steering — not live PCM.
 
-The PySide6 algorithm test bench (`testbench/`) is explicitly **outside** this budget. It drives `sonitude_wav_replay` / `sonitude_stream_process` over subprocess IPC for correctness checks. See `testbench/README.md`. Do not treat its block-round-trip latency as an M8 measurement.
+The PySide6 algorithm test bench (`testbench/`) is explicitly **outside** this budget. It drives `sonitude_wav_replay` / `sonitude_stream_process` over subprocess IPC for correctness checks, including hour-scale file streaming and live steering while playing a recording. See `testbench/README.md`. Do not treat its block-round-trip latency as an M8 measurement.
 
 ---
 

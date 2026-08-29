@@ -147,6 +147,10 @@ directional mono (the live test-bench path always consumes stereo).
 Both tools print a one-line JSON object on stdout, including
 `protocol_version: 2` and the implemented binaural backends. The GUI uses this
 to populate backend lists (`testbench/app/processing/capabilities.py`).
+`BinauralControls` defaults to `compact_hrtf` when advertised, passes
+follow/fixed direction into wav_replay CLI flags, and (on the Recorded tab,
+Live DSP) into each `stream_process` block. `--output` stays mono; listen to
+the Binaural stage or the live preview.
 
 ## Known limitations
 
