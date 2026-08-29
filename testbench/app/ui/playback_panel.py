@@ -27,12 +27,19 @@ def _format_ms(ms: int) -> str:
 
 class PlaybackPanel(QWidget):
     sourceSelected = Signal(str)  # "raw" | "processed" | "residual"
+    livePlayRequested = Signal()
+    livePauseRequested = Signal()
+    liveStopRequested = Signal()
+    liveSeekRequested = Signal(int)
+    volumeChanged = Signal(float)
+    boostChanged = Signal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._engine = PlaybackEngine(self)
         self._sources: dict[str, Path] = {}
         self._seeking = False
+        self._live = False
 
         listen_box = QGroupBox("Listen to")
         self._raw_radio = QRadioButton("Ear-cup preview")
@@ -60,9 +67,9 @@ class PlaybackPanel(QWidget):
         self._play_button = QPushButton("Play")
         self._pause_button = QPushButton("Pause")
         self._stop_button = QPushButton("Stop")
-        self._play_button.clicked.connect(self._engine.play)
-        self._pause_button.clicked.connect(self._engine.pause)
-        self._stop_button.clicked.connect(self._engine.stop)
+        self._play_button.clicked.connect(self._on_play)
+        self._pause_button.clicked.connect(self._on_pause)
+        self._stop_button.clicked.connect(self._on_stop)
 
         self._position_slider = QSlider(Qt.Orientation.Horizontal)
         self._position_slider.sliderPressed.connect(lambda: setattr(self, "_seeking", True))
@@ -72,8 +79,19 @@ class PlaybackPanel(QWidget):
         self._volume_slider = QSlider(Qt.Orientation.Horizontal)
         self._volume_slider.setRange(0, 100)
         self._volume_slider.setValue(80)
-        self._volume_slider.valueChanged.connect(lambda v: self._engine.set_volume(v / 100.0))
+        self._volume_slider.valueChanged.connect(self._on_volume_changed)
         self._engine.set_volume(0.8)
+        self._engine.set_boost_db(24.0)
+
+        self._boost_slider = QSlider(Qt.Orientation.Horizontal)
+        self._boost_slider.setRange(0, 40)
+        self._boost_slider.setValue(24)
+        self._boost_slider.setToolTip(
+            "Monitor-only gain. This recording is far below 0 dBFS; unity-gain "
+            "playback is inaudible. Does not change saved WAV files."
+        )
+        self._boost_slider.valueChanged.connect(self._on_boost_changed)
+        self._boost_label = QLabel("Monitor boost 24 dB")
 
         self._engine.positionChanged.connect(self._on_position_changed)
         self._engine.durationChanged.connect(self._on_duration_changed)
@@ -85,6 +103,8 @@ class PlaybackPanel(QWidget):
         transport_row.addWidget(self._stop_button)
         transport_row.addWidget(QLabel("Volume"))
         transport_row.addWidget(self._volume_slider)
+        transport_row.addWidget(self._boost_label)
+        transport_row.addWidget(self._boost_slider)
 
         seek_row = QHBoxLayout()
         seek_row.addWidget(self._position_slider)
@@ -98,6 +118,53 @@ class PlaybackPanel(QWidget):
 
     def listen_source(self) -> str:
         return self._checked_source_name()
+
+    def set_live_mode(self, live: bool) -> None:
+        self._live = bool(live)
+        if live:
+            self._engine.stop()
+
+    def volume(self) -> float:
+        return self._volume_slider.value() / 100.0
+
+    def boost_db(self) -> float:
+        return float(self._boost_slider.value())
+
+    def set_clock(self, position_ms: int, duration_ms: int | None = None) -> None:
+        if duration_ms is not None:
+            self._position_slider.setRange(0, max(0, duration_ms))
+            self._time_label.setText(f"{_format_ms(position_ms)} / {_format_ms(duration_ms)}")
+        else:
+            self._time_label.setText(f"{_format_ms(position_ms)} / {_format_ms(self._engine.duration_ms())}")
+        if not self._seeking:
+            self._position_slider.setValue(position_ms)
+
+    def _on_volume_changed(self, value: int) -> None:
+        self._engine.set_volume(value / 100.0)
+        self.volumeChanged.emit(value / 100.0)
+
+    def _on_boost_changed(self, value: int) -> None:
+        self._boost_label.setText(f"Monitor boost {value} dB")
+        self._engine.set_boost_db(value)
+        self.boostChanged.emit(float(value))
+
+    def _on_play(self) -> None:
+        if self._live:
+            self.livePlayRequested.emit()
+            return
+        self._engine.play()
+
+    def _on_pause(self) -> None:
+        if self._live:
+            self.livePauseRequested.emit()
+            return
+        self._engine.pause()
+
+    def _on_stop(self) -> None:
+        if self._live:
+            self.liveStopRequested.emit()
+            return
+        self._engine.stop()
 
     def set_sources(self, *, raw: Path | None = None, processed: Path | None = None, residual: Path | None = None) -> None:
         self._sources = {}
@@ -121,10 +188,11 @@ class PlaybackPanel(QWidget):
         return "processed"
 
     def _on_source_selected(self, name: str) -> None:
-        path = self._sources.get(name)
-        if path is not None and path.exists():
-            self._engine.stop()
-            self._engine.load(path)
+        if not self._live:
+            path = self._sources.get(name)
+            if path is not None and path.exists():
+                self._engine.stop()
+                self._engine.load(path)
         self.sourceSelected.emit(name)
 
     def _on_position_changed(self, position_ms: int) -> None:
@@ -137,7 +205,13 @@ class PlaybackPanel(QWidget):
 
     def _on_seek_released(self) -> None:
         self._seeking = False
+        if self._live:
+            self.liveSeekRequested.emit(self._position_slider.value())
+            return
         self._engine.seek(self._position_slider.value())
 
     def stop(self) -> None:
+        if self._live:
+            self.liveStopRequested.emit()
+            return
         self._engine.stop()

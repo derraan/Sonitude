@@ -10,7 +10,7 @@ from scipy import signal as sps
 
 from app.ui.secondary_note import apply_secondary_note
 
-_MAX_WAVEFORM_POINTS = 200_000
+_MAX_WAVEFORM_POINTS = 8_000
 _RAW_COLOR = (120, 120, 120)
 _PROCESSED_COLOR = (47, 125, 225)
 _RESIDUAL_COLOR = (224, 90, 90)
@@ -32,7 +32,7 @@ class VisualizationPanel(QWidget):
         show_levels: bool = True,
     ) -> None:
         super().__init__(parent)
-        pg.setConfigOptions(antialias=True)
+        pg.setConfigOptions(antialias=False)
         self.setMinimumHeight(160)
 
         self.waveform_plot = pg.PlotWidget(title="Waveform")
@@ -80,6 +80,7 @@ class VisualizationPanel(QWidget):
         processed: np.ndarray | None = None,
         residual: np.ndarray | None = None,
         emphasize: str | None = None,
+        duration_s: float | None = None,
     ) -> None:
         self.waveform_plot.clear()
         styles = {
@@ -96,7 +97,10 @@ class VisualizationPanel(QWidget):
                 continue
             mono = np.asarray(data).reshape(-1) if np.ndim(data) == 1 else np.asarray(data).mean(axis=1)
             plotted, stride = _downsample_for_plot(mono)
-            time_axis = np.arange(len(plotted)) * stride / sample_rate_hz
+            if duration_s is not None and duration_s > 0 and len(plotted) > 1:
+                time_axis = np.linspace(0.0, duration_s, len(plotted), dtype=np.float64)
+            else:
+                time_axis = np.arange(len(plotted)) * stride / sample_rate_hz
             width = 2.4 if emphasize == name else 1.4
             self.waveform_plot.plot(
                 time_axis,
@@ -105,28 +109,61 @@ class VisualizationPanel(QWidget):
                 name=name,
             )
 
-    def plot_spectrogram(self, signal_data: np.ndarray, sample_rate_hz: int) -> None:
+    def plot_spectrogram(
+        self,
+        signal_data: np.ndarray,
+        sample_rate_hz: int,
+        *,
+        duration_s: float | None = None,
+        freqs: np.ndarray | None = None,
+        spectrogram_db: np.ndarray | None = None,
+    ) -> None:
         if self._spectrogram_image is None:
+            return
+        if spectrogram_db is not None and freqs is not None and duration_s:
+            db = np.asarray(spectrogram_db)
+            self._spectrogram_image.setImage(db.T, autoLevels=True)
+            nyquist = float(freqs[-1]) if len(freqs) else sample_rate_hz / 2.0
+            self._spectrogram_image.setRect(0, 0, float(duration_s), nyquist)
             return
         mono = np.asarray(signal_data).reshape(-1) if np.ndim(signal_data) == 1 else np.asarray(signal_data).mean(axis=1)
         if len(mono) < 256:
             return
-        freqs, times, sxx = sps.spectrogram(mono, fs=sample_rate_hz, nperseg=1024, noverlap=512)
+        nperseg = min(256, max(32, len(mono) // 8 * 2 or 32))
+        nperseg = min(nperseg, len(mono))
+        freqs_hz, times, sxx = sps.spectrogram(mono, fs=sample_rate_hz, nperseg=nperseg, noverlap=nperseg // 2)
         db = 10.0 * np.log10(sxx + 1e-12)
         self._spectrogram_image.setImage(db.T, autoLevels=True)
-        if len(times) > 1 and len(freqs) > 1:
-            self._spectrogram_image.setRect(0, 0, float(times[-1]), float(freqs[-1]))
+        width = float(duration_s) if duration_s and duration_s > 0 else float(times[-1] if len(times) else 0.0)
+        height = float(freqs_hz[-1] if len(freqs_hz) else sample_rate_hz / 2.0)
+        if width > 0 and height > 0:
+            self._spectrogram_image.setRect(0, 0, width, height)
 
-    def plot_levels(self, signal_data: np.ndarray, sample_rate_hz: int, frame_ms: float = 20.0) -> None:
+    def plot_levels(
+        self,
+        signal_data: np.ndarray,
+        sample_rate_hz: int,
+        frame_ms: float = 20.0,
+        *,
+        duration_s: float | None = None,
+        rms_dbfs: np.ndarray | None = None,
+    ) -> None:
         if self.levels_plot is None:
             return
-        mono = np.asarray(signal_data).reshape(-1) if np.ndim(signal_data) == 1 else np.asarray(signal_data).mean(axis=1)
-        frame_len = max(1, int(sample_rate_hz * frame_ms / 1000.0))
-        n_frames = max(1, len(mono) // frame_len)
-        trimmed = mono[: n_frames * frame_len].reshape(n_frames, frame_len)
-        rms = np.sqrt(np.mean(np.square(trimmed), axis=1) + 1e-12)
-        db = 20.0 * np.log10(rms + 1e-12)
-        time_axis = np.arange(n_frames) * frame_len / sample_rate_hz
+        if rms_dbfs is not None and duration_s and len(rms_dbfs) > 1:
+            db = np.asarray(rms_dbfs, dtype=np.float64)
+            time_axis = np.linspace(0.0, duration_s, len(db), dtype=np.float64)
+        else:
+            mono = np.asarray(signal_data).reshape(-1) if np.ndim(signal_data) == 1 else np.asarray(signal_data).mean(axis=1)
+            frame_len = max(1, int(sample_rate_hz * frame_ms / 1000.0))
+            n_frames = max(1, len(mono) // frame_len)
+            trimmed = mono[: n_frames * frame_len].reshape(n_frames, frame_len)
+            rms = np.sqrt(np.mean(np.square(trimmed), axis=1) + 1e-12)
+            db = 20.0 * np.log10(rms + 1e-12)
+            if duration_s and duration_s > 0:
+                time_axis = np.linspace(0.0, duration_s, n_frames, dtype=np.float64)
+            else:
+                time_axis = np.arange(n_frames) * frame_len / sample_rate_hz
         self.levels_plot.clear()
         self.levels_plot.plot(
             time_axis,

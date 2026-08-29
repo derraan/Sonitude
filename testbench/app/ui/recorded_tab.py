@@ -28,8 +28,10 @@ from PySide6.QtWidgets import (
 )
 
 from app.audio_io import audio_loader
+from app.audio_io.stream_io import load_file_overview
 from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.batch_controller import BatchWorker
+from app.controller.file_preview_controller import FilePreviewWorker
 from app.processing.capabilities import query_tool_capabilities
 from app.processing.suppression import SuppressionMode
 from app.storage.models import SteeringEvent
@@ -105,10 +107,13 @@ class RecordedDataTab(QWidget):
         self._selected_paths: list[Path] = []
         self._result_store = ResultStore()
         self._batch_worker: BatchWorker | None = None
+        self._batch_failures: list[str] = []
+        self._batch_file_count = 0
         self._last_metrics: dict[str, dict] = {}
-        self._capabilities = query_tool_capabilities("sonitude_wav_replay")
+        self._capabilities = query_tool_capabilities("sonitude_stream_process")
         self._plot_cache: dict = {}
         self._layout_restored = False
+        self._preview: FilePreviewWorker | None = None
 
         select_row = QHBoxLayout()
         select_file_btn = QPushButton("Select Audio")
@@ -146,7 +151,7 @@ class RecordedDataTab(QWidget):
         input_layout.addWidget(metadata_box)
         input_layout.addWidget(self._validation_label)
 
-        self._steering = SteeringControls("Steering (single commanded direction for this batch)")
+        self._steering = SteeringControls("Steering (live while playing)")
 
         suppression_box = QGroupBox("Suppression (requested vs YAML)")
         self._suppression_combo = QComboBox()
@@ -169,6 +174,13 @@ class RecordedDataTab(QWidget):
         export_layout.addWidget(export_note)
 
         self._binaural = BinauralControls(self._capabilities)
+        self._live_dsp = QCheckBox("Live DSP — steering and binaural apply while playing")
+        self._live_dsp.setChecked(True)
+        self._live_dsp.setToolTip(
+            "Play the selected 6-channel file through sonitude_stream_process. "
+            "Turn the dial or binaural controls and hear the change immediately, like a plugin."
+        )
+        self._live_dsp.toggled.connect(self._on_live_dsp_toggled)
 
         steering_test_box = QGroupBox("Objective Steering Test (optional, slower)")
         self._steering_test_checkbox = QCheckBox("Run steering sweep for this batch")
@@ -187,6 +199,7 @@ class RecordedDataTab(QWidget):
         config_inner = QWidget()
         config_layout = QVBoxLayout(config_inner)
         config_layout.addWidget(self._steering)
+        config_layout.addWidget(self._live_dsp)
         config_layout.addWidget(suppression_box)
         config_layout.addWidget(export_box)
         config_layout.addWidget(self._binaural)
@@ -252,6 +265,16 @@ class RecordedDataTab(QWidget):
 
         self.playback_panel = PlaybackPanel()
         self.playback_panel.sourceSelected.connect(self._on_listen_source_changed)
+        self.playback_panel.set_live_mode(True)
+        self.playback_panel.livePlayRequested.connect(self._on_live_play)
+        self.playback_panel.livePauseRequested.connect(self._on_live_pause)
+        self.playback_panel.liveStopRequested.connect(self._on_live_stop)
+        self.playback_panel.liveSeekRequested.connect(self._on_live_seek)
+        self.playback_panel.volumeChanged.connect(self._on_live_volume)
+        self.playback_panel.boostChanged.connect(self._on_live_boost)
+        self._steering.azimuthChanged.connect(self._push_live_params)
+        self._steering.blendChanged.connect(lambda _w: self._push_live_params())
+        self._binaural.changed.connect(self._push_live_params)
         self.visualization_panel = VisualizationPanel()
         self.visualization_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.metrics_panel = MetricsPanel()
@@ -377,7 +400,7 @@ class RecordedDataTab(QWidget):
                 width_deg=self._steering.width_deg(),
             )
         ]
-        self._progress_bar.setRange(0, len(paths))
+        self._progress_bar.setRange(0, 100 if len(paths) == 1 else len(paths))
         self._progress_bar.setValue(0)
         self._status_label.setText(f"Processing 0/{len(paths)}...")
 
@@ -394,12 +417,26 @@ class RecordedDataTab(QWidget):
             steering_test_expected_azimuth_deg=expected_azimuth,
             result_store=self._result_store,
         )
-        worker.progress.connect(lambda done, total: self._progress_bar.setValue(done))
+        worker.progress.connect(self._on_batch_progress)
+        worker.file_progress.connect(self._on_file_progress)
         worker.file_finished.connect(self._on_file_finished)
         worker.file_failed.connect(self._on_file_failed)
-        worker.finished_all.connect(lambda: self._status_label.setText("Done."))
+        worker.finished_all.connect(self._on_batch_finished)
+        self._batch_failures = []
         self._batch_worker = worker
+        self._batch_file_count = len(paths)
         worker.start()
+
+    def _on_file_progress(self, percent: int) -> None:
+        if self._batch_file_count == 1:
+            self._progress_bar.setValue(percent)
+            self._status_label.setText(f"Processing {percent}%...")
+
+    def _on_batch_progress(self, done: int, total: int) -> None:
+        if total > 1:
+            self._progress_bar.setRange(0, total)
+            self._progress_bar.setValue(done)
+            self._status_label.setText(f"Processing {done}/{total}...")
 
     def _on_file_finished(self, input_path: str, result: dict) -> None:
         test_id = result["test_id"]
@@ -414,7 +451,99 @@ class RecordedDataTab(QWidget):
         self._status_label.setText(f"Finished: {Path(input_path).name} -> {test_id}")
 
     def _on_file_failed(self, input_path: str, error: str) -> None:
-        self._status_label.setText(f"Failed: {Path(input_path).name}: {error}")
+        name = Path(input_path).name
+        self._batch_failures.append(name)
+        self._status_label.setText(f"Failed: {name}: {error}")
+        QMessageBox.critical(self, "Processing failed", f"{name}\n\n{error}")
+
+    def _on_batch_finished(self) -> None:
+        if self._batch_failures:
+            self._status_label.setText(f"Finished with {len(self._batch_failures)} failure(s).")
+            return
+        self._status_label.setText("Done.")
+
+    def _on_live_dsp_toggled(self, checked: bool) -> None:
+        if not checked:
+            self._on_live_stop()
+        self.playback_panel.set_live_mode(checked)
+
+    def _selected_input_path(self) -> Path | None:
+        row = self._file_list.currentRow()
+        if row < 0 or row >= len(self._selected_paths):
+            return None
+        return self._selected_paths[row]
+
+    def _push_live_params(self, *_args) -> None:
+        if self._preview is None or not self._preview.isRunning():
+            return
+        self._preview.set_steering(self._steering.commanded_azimuth_deg(), 0.0, self._steering.width_deg())
+        self._preview.set_binaural(self._binaural.request())
+
+    def _on_live_volume(self, volume: float) -> None:
+        if self._preview is not None:
+            self._preview.set_volume(volume)
+
+    def _on_live_boost(self, boost_db: float) -> None:
+        if self._preview is not None:
+            self._preview.set_boost_db(boost_db)
+
+    def _on_live_play(self) -> None:
+        if self._preview is not None and self._preview.isRunning():
+            self._preview.resume()
+            return
+        path = self._selected_input_path()
+        if path is None:
+            QMessageBox.warning(self, "No file selected", "Select a 6-channel recording first.")
+            return
+        try:
+            config = read_runtime_config_summary(self._config_path)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Malformed configuration", str(exc))
+            return
+        self._on_live_stop()
+        worker = FilePreviewWorker(
+            path,
+            self._config_path,
+            config.capture_sample_rate_hz,
+            active_channel_map=config.active_channel_map,
+            suppression=self._suppression_combo.currentData() or SuppressionMode.AUTO.value,
+            binaural=self._binaural.request(),
+        )
+        worker.set_steering(self._steering.commanded_azimuth_deg(), 0.0, self._steering.width_deg())
+        worker.set_volume(self.playback_panel.volume())
+        worker.set_boost_db(self.playback_panel.boost_db())
+        worker.positionChanged.connect(
+            lambda ms: self.playback_panel.set_clock(ms, worker.duration_ms())
+        )
+        worker.durationChanged.connect(lambda ms: self.playback_panel.set_clock(0, ms))
+        worker.blockProcessed.connect(self._on_live_block)
+        worker.errorOccurred.connect(lambda msg: QMessageBox.critical(self, "Live DSP error", msg))
+        worker.stopped.connect(self._on_live_worker_stopped)
+        self._preview = worker
+        worker.start()
+        self._status_label.setText(f"Live DSP: {path.name}")
+
+    def _on_live_pause(self) -> None:
+        if self._preview is not None:
+            self._preview.pause()
+
+    def _on_live_stop(self) -> None:
+        if self._preview is not None and self._preview.isRunning():
+            self._preview.request_stop()
+            self._preview.wait(2000)
+        self._preview = None
+
+    def _on_live_seek(self, position_ms: int) -> None:
+        if self._preview is not None:
+            self._preview.seek_ms(position_ms)
+
+    def _on_live_block(self, raw_block, processed_block) -> None:
+        rate = self._plot_cache.get("sample_rate") or 44100
+        self.visualization_panel.plot_waveforms(rate, raw=raw_block, processed=processed_block)
+
+    def _on_live_worker_stopped(self) -> None:
+        if "Error" not in self._status_label.text() and "Live DSP" in self._status_label.text():
+            self._status_label.setText("Live DSP stopped")
 
     def _on_listen_source_changed(self, name: str) -> None:
         cache = self._plot_cache
@@ -426,6 +555,7 @@ class RecordedDataTab(QWidget):
             processed=cache.get("processed"),
             residual=cache.get("residual"),
             emphasize=name,
+            duration_s=cache.get("duration_s"),
         )
 
     def _on_result_selected(self, test_id: str) -> None:
@@ -436,10 +566,12 @@ class RecordedDataTab(QWidget):
         residual_filename = self._residual_stage_combo.currentData() or "residual_beamform.wav"
         stage_path = test_root / stage_filename
         processed_path = stage_path if stage_path.exists() else test_root / "processed_stereo.wav"
+        residual_path = test_root / residual_filename
+        raw_path = test_root / "raw_preview_stereo.wav"
         self.playback_panel.set_sources(
-            raw=test_root / "raw_preview_stereo.wav",
-            processed=processed_path,
-            residual=test_root / residual_filename,
+            raw=raw_path if raw_path.exists() else None,
+            processed=processed_path if processed_path.exists() else None,
+            residual=residual_path if residual_path.exists() else None,
         )
         metrics = self._last_metrics.get(test_id) or self._result_store.load_metrics(test_id)
         self.metrics_panel.update_metrics(metrics)
@@ -448,23 +580,38 @@ class RecordedDataTab(QWidget):
         self._steering.set_estimated_azimuth_deg(sweep["measured_peak_azimuth_deg"] if sweep else None)
 
         try:
-            processed_data, sample_rate = audio_loader.load_wav(processed_path)
-            raw_data, _ = audio_loader.load_wav(test_root / "raw_preview_stereo.wav")
-            residual_data, _ = audio_loader.load_wav(test_root / residual_filename)
+            overview = load_file_overview(processed_path)
+            raw_overview = load_file_overview(raw_path, n_spec=0) if raw_path.exists() else None
+            residual_overview = load_file_overview(residual_path, n_spec=0) if residual_path.exists() else None
+            duration_s = overview.duration_s
+            sample_rate = overview.sample_rate_hz
             self._plot_cache = {
                 "sample_rate": sample_rate,
-                "raw": raw_data,
-                "processed": processed_data,
-                "residual": residual_data,
+                "raw": None if raw_overview is None else raw_overview.waveform,
+                "processed": overview.waveform,
+                "residual": None if residual_overview is None else residual_overview.waveform,
+                "duration_s": duration_s,
             }
             self.visualization_panel.plot_waveforms(
                 sample_rate,
-                raw=raw_data,
-                processed=processed_data,
-                residual=residual_data,
+                raw=self._plot_cache["raw"],
+                processed=overview.waveform,
+                residual=self._plot_cache["residual"],
                 emphasize=self.playback_panel.listen_source(),
+                duration_s=duration_s,
             )
-            self.visualization_panel.plot_spectrogram(processed_data, sample_rate)
-            self.visualization_panel.plot_levels(processed_data, sample_rate)
+            self.visualization_panel.plot_spectrogram(
+                overview.waveform,
+                sample_rate,
+                duration_s=duration_s,
+                freqs=overview.spectrogram_freqs,
+                spectrogram_db=overview.spectrogram_db,
+            )
+            self.visualization_panel.plot_levels(
+                overview.waveform,
+                sample_rate,
+                duration_s=duration_s,
+                rms_dbfs=overview.rms_dbfs,
+            )
         except Exception:  # noqa: BLE001
             self._plot_cache = {}

@@ -24,6 +24,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self.recorded_tab.save_layout()
         self.realtime_tab.save_layout()
+        preview = getattr(self.recorded_tab, "_preview", None)
+        if preview is not None and preview.isRunning():
+            preview.request_stop()
+            preview.wait(3000)
         worker = self.realtime_tab._worker  # noqa: SLF001 - shutdown path only
         if worker is not None and worker.isRunning():
             worker.request_stop()

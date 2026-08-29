@@ -14,7 +14,14 @@ class ExportError(RuntimeError):
     """Raised when a lossless export cannot be written or read back."""
 
 
-def export_pcm(path: str | Path, data: np.ndarray, sample_rate_hz: int, *, container: str = "wav") -> Path:
+def export_pcm(
+    path: str | Path,
+    data: np.ndarray,
+    sample_rate_hz: int,
+    *,
+    container: str = "wav",
+    subtype: str | None = None,
+) -> Path:
     """Write float32 PCM to WAV or FLAC. MP3 is intentionally unsupported."""
     path = Path(path)
     container = container.lower().lstrip(".")
@@ -23,9 +30,11 @@ def export_pcm(path: str | Path, data: np.ndarray, sample_rate_hz: int, *, conta
     pcm = np.asarray(data, dtype=np.float32)
     if pcm.ndim == 1:
         pcm = pcm.reshape(-1, 1)
-    # WAV keeps float32. FLAC does not support IEEE float in libsndfile;
-    # PCM_24 is lossless relative to 24-bit integer quantization.
-    subtype = "FLOAT" if container == "wav" else "PCM_24"
+    # WAV keeps float32 unless the caller asks for integer (Qt playback).
+    # FLAC does not support IEEE float in libsndfile; PCM_24 is lossless
+    # relative to 24-bit integer quantization.
+    if subtype is None:
+        subtype = "FLOAT" if container == "wav" else "PCM_24"
     try:
         sf.write(str(path), pcm, sample_rate_hz, format=container.upper(), subtype=subtype)
     except Exception as exc:  # noqa: BLE001

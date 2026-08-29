@@ -20,8 +20,9 @@ from PySide6.QtCore import QThread, Signal
 from app.analysis import noise_suppression, residual, sii, steering_error, steering_sweep
 from app.audio_io import audio_loader, downmix
 from app.audio_io.exporter import export_pcm
+from app.audio_io.stream_io import COPY_BYTES_LIMIT, should_stream_batch
 from app.config_reader import read_runtime_config_summary
-from app.processing.batch_adapter import BatchProcessingError, run_wav_replay
+from app.processing.batch_adapter import BatchProcessingError, run_stream_batch, run_wav_replay
 from app.processing.protocol import PROTOCOL_VERSION
 from app.processing.suppression import SuppressionMode, parse_suppression_mode, resolve_suppression
 from app.storage.models import BinauralRequest, SteeringEvent
@@ -43,6 +44,7 @@ class BatchWorker(QThread):
     file_started = Signal(str)
     file_finished = Signal(str, dict)  # input_path, {"test_id": ..., "metrics": {...}}
     file_failed = Signal(str, str)  # input_path, error message
+    file_progress = Signal(int)  # 0-100 within the current file
     finished_all = Signal()
 
     def __init__(
@@ -109,13 +111,31 @@ class BatchWorker(QThread):
 
         test = self._result_store.new_test()
         original_copy = test.root / f"input_original{input_path.suffix.lower()}"
-        self._result_store.copy_input(input_path, original_copy)
+        if input_path.stat().st_size <= COPY_BYTES_LIMIT:
+            self._result_store.copy_input(input_path, original_copy)
+            source_for_decode = original_copy
+        else:
+            (test.root / "input_original.ref.txt").write_text(str(input_path.resolve()), encoding="utf-8")
+            source_for_decode = input_path
         if test.runtime_config_copy is not None:
             shutil.copy2(self._config_path, test.runtime_config_copy)
 
+        metadata = validation.metadata
+        use_stream = metadata is not None and should_stream_batch(metadata)
+        if use_stream:
+            return self._process_one_streaming(
+                input_path,
+                test,
+                source_for_decode,
+                original_copy,
+                config_summary,
+                suppression_state,
+                validation,
+            )
+
         try:
             batch_result = run_wav_replay(
-                input_wav=input_path,
+                input_wav=source_for_decode,
                 config_path=self._config_path,
                 steering_events=self._steering_events,
                 output_dir=test.root,
@@ -143,26 +163,28 @@ class BatchWorker(QThread):
             downmix.mono_to_stereo(processed_mono),
             sample_rate,
             container="wav",
+            subtype="PCM_16",
         )
         export_suffix = "flac" if self._output_container == "flac" else "wav"
         export_path = test.root / f"processed_export.{export_suffix}"
         export_pcm(export_path, processed_mono, sample_rate, container=export_suffix)
         test.processed_export = export_path
 
-        raw_data, raw_meta = audio_loader.load_audio(original_copy)
+        raw_data, raw_meta = audio_loader.load_audio(source_for_decode)
         raw_six = audio_loader.extract_channels(raw_data, config_summary.active_channel_map)
         export_pcm(
             test.raw_preview_wav,
             downmix.ear_cup_stereo_preview(raw_six, config_summary.active_channel_map),
             raw_meta.sample_rate_hz,
             container="wav",
+            subtype="PCM_16",
         )
 
         # Residuals: same-domain DSP taps only. Never use the ear-cup preview.
         beamform_residual = residual.compute_stage_residual(beamformed_mono, suppressed_mono)
         limiter_residual = residual.compute_stage_residual(suppressed_mono, processed_mono)
-        export_pcm(test.residual_beamform_wav, downmix.mono_to_stereo(beamform_residual), sample_rate, container="wav")
-        export_pcm(test.residual_limiter_wav, downmix.mono_to_stereo(limiter_residual), sample_rate, container="wav")
+        export_pcm(test.residual_beamform_wav, downmix.mono_to_stereo(beamform_residual), sample_rate, container="wav", subtype="PCM_16")
+        export_pcm(test.residual_limiter_wav, downmix.mono_to_stereo(limiter_residual), sample_rate, container="wav", subtype="PCM_16")
 
         if batch_result.binaural_wav is not None:
             test.binaural_wav = batch_result.binaural_wav
@@ -306,4 +328,159 @@ class BatchWorker(QThread):
 
         self._result_store.save_metadata(test, metadata)
         self._result_store.save_metrics(test, metrics)
+        return FileResult(input_path=str(input_path), test_id=test.test_id, metrics=metrics)
+
+    def _process_one_streaming(
+        self,
+        input_path,
+        test,
+        source_for_decode,
+        original_copy,
+        config_summary,
+        suppression_state,
+        validation,
+    ) -> FileResult:
+        def _progress(done: int, total: int) -> None:
+            self.file_progress.emit(min(100, int(done * 100 / total)) if total else 0)
+
+        try:
+            batch_result = run_stream_batch(
+                input_wav=source_for_decode,
+                config_path=self._config_path,
+                steering_events=self._steering_events,
+                output_dir=test.root,
+                suppression=self._suppression,
+                disable_limiter=self._disable_limiter,
+                binaural=self._binaural,
+                active_channel_map=config_summary.active_channel_map,
+                progress_callback=_progress,
+            )
+        except BatchProcessingError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        sample_rate = batch_result.sample_rate_hz or (
+            validation.metadata.sample_rate_hz if validation.metadata is not None else 0
+        )
+        test.processed_export = test.processed_stereo_wav
+        if batch_result.binaural_wav is not None:
+            test.binaural_wav = batch_result.binaural_wav
+
+        noise_metrics = noise_suppression.compute_noise_suppression_metrics_from_wavs(
+            str(test.raw_preview_wav), str(test.processed_stereo_wav), sample_rate
+        )
+        commanded_events = steering_error.parse_steering_script(test.steering_script)
+        steering_metrics = {
+            "commanded_events": [
+                {
+                    "time_s": e.time_s,
+                    "azimuth_deg": e.azimuth_deg,
+                    "elevation_deg": e.elevation_deg,
+                    "directivity_blend_deg": e.directivity_blend_deg,
+                    "width_deg": e.width_deg,
+                }
+                for e in commanded_events
+            ],
+            "estimate_available": False,
+            "note": (
+                "Streaming batch used sonitude_stream_process so the file is never fully "
+                "loaded. Objective steering sweep and DSP-tap residuals are skipped."
+            ),
+        }
+        skipped_proxy = {
+            "method": "skipped_streaming_batch",
+            "value": 0.0,
+            "band_snr_db": [],
+            "experimental": True,
+            "standardized": False,
+            "acceptance_gating": False,
+            "standard": "NOT ANSI/ASA S3.5 SII",
+        }
+        cpp_resolved = batch_result.resolved or {}
+        metrics = {
+            "noise_suppression": noise_metrics.as_dict(),
+            "intelligibility_proxy": {
+                "sii_before": skipped_proxy,
+                "sii_after": skipped_proxy,
+                "sii_improvement": 0.0,
+                "acceptance_gating": False,
+                "experimental": True,
+                "standardized": False,
+                "note": "Full-file intelligibility proxy is skipped for streaming batch.",
+            },
+            "residual": {
+                "beamform_stage_energy_ratio_db": None,
+                "limiter_stage_energy_ratio_db": None,
+                "listening_preview_excluded": True,
+                "note": "wav_replay taps are not available on the streaming path.",
+            },
+            "steering": steering_metrics,
+            "pipeline": "stream_process",
+        }
+        input_meta = validation.metadata.as_dict() if validation.metadata is not None else None
+        if test.input_metadata_json is not None and input_meta is not None:
+            test.input_metadata_json.write_text(json.dumps(input_meta, indent=2), encoding="utf-8")
+        duration_s = (
+            batch_result.frames / sample_rate
+            if sample_rate
+            else (validation.metadata.duration_s if validation.metadata is not None else 0.0)
+        )
+        metadata = {
+            "test_id": test.test_id,
+            "input_file": str(input_path),
+            "input": {
+                "path": str(input_path),
+                "name": input_path.name,
+                "format": input_meta["container"] if input_meta else None,
+                "sample_rate_hz": input_meta["sample_rate_hz"] if input_meta else None,
+                "channel_count": input_meta["channels"] if input_meta else None,
+                "subtype": input_meta["subtype"] if input_meta else None,
+                "original_copy": str(original_copy if original_copy.exists() else source_for_decode),
+            },
+            "active_channel_map": config_summary.active_channel_map,
+            "config_path": str(self._config_path),
+            "geometry_path": config_summary.geometry_path or None,
+            "calibration_path": config_summary.calibration_path or None,
+            "steering": steering_metrics["commanded_events"],
+            "suppression": {
+                "requested": suppression_state.requested.value,
+                "yaml_enabled": suppression_state.yaml_enabled,
+                "resolved_enabled": (
+                    cpp_resolved.get("suppression_resolved")
+                    if "suppression_resolved" in cpp_resolved
+                    else suppression_state.resolved_enabled
+                ),
+                "cpp_resolved": cpp_resolved or None,
+            },
+            "binaural": {
+                "requested": self._binaural.as_dict(),
+                "resolved": {
+                    "backend": cpp_resolved.get("binaural_backend"),
+                    "available": cpp_resolved.get("binaural_available"),
+                }
+                if cpp_resolved
+                else None,
+            },
+            "limiter_disabled": self._disable_limiter,
+            "output_format": "wav",
+            "stream_protocol_version": PROTOCOL_VERSION,
+            "capabilities_protocol_version": PROTOCOL_VERSION,
+            "sonitude_version": read_algorithm_version() or None,
+            "git_commit": read_git_commit(),
+            "sample_rate_hz": sample_rate,
+            "channels": 6,
+            "duration_s": duration_s,
+            "algorithm_version": read_algorithm_version(),
+            "processing_parameters": {
+                "config_path": str(self._config_path),
+                "suppression_requested": self._suppression.value,
+                "disable_limiter": self._disable_limiter,
+                "pipeline": "stream_process",
+            },
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metrics": metrics,
+            "cpp_command": batch_result.command,
+        }
+        self._result_store.save_metadata(test, metadata)
+        self._result_store.save_metrics(test, metrics)
+        self.file_progress.emit(100)
         return FileResult(input_path=str(input_path), test_id=test.test_id, metrics=metrics)

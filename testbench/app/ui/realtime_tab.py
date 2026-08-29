@@ -4,6 +4,8 @@ output live, and optionally save raw/processed recordings."""
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -59,6 +61,7 @@ class RealtimeTab(QWidget):
         self._active_sample_rate_hz: int = 44100
         self._capabilities = query_tool_capabilities("sonitude_stream_process")
         self._layout_restored = False
+        self._last_plot_s = 0.0
 
         self._start_btn = QPushButton("START")
         self._stop_btn = QPushButton("STOP")
@@ -343,6 +346,10 @@ class RealtimeTab(QWidget):
             meter.set_dbfs(float(level))
 
     def _on_block_processed(self, raw_block, processed_block) -> None:
+        now = time.monotonic()
+        if now - self._last_plot_s < 0.05:
+            return
+        self._last_plot_s = now
         self.visualization_panel.plot_waveforms(self._active_sample_rate_hz, raw=raw_block, processed=processed_block)
 
     def _on_save_raw(self) -> None:

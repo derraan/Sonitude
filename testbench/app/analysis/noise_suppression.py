@@ -119,3 +119,55 @@ def compute_noise_suppression_metrics(
         snr_after_db=snr_after,
         snr_improvement_db=snr_after - snr_before,
     )
+
+
+def _mono_frame_rms_from_wav(path: str, sample_rate_hz: int) -> tuple[np.ndarray, float]:
+    """20 ms frame RMS plus overall RMS, reading the file in blocks."""
+    import soundfile as sf
+
+    from app.audio_io.stream_io import DEFAULT_BLOCK_FRAMES
+
+    frame_len = max(1, int(sample_rate_hz * _FRAME_MS / 1000.0))
+    leftover = np.zeros(0, dtype=np.float32)
+    rms_parts: list[np.ndarray] = []
+    sum_sq = 0.0
+    n = 0
+    with sf.SoundFile(str(path)) as reader:
+        while True:
+            block = reader.read(DEFAULT_BLOCK_FRAMES, dtype="float32", always_2d=True)
+            if len(block) == 0:
+                break
+            mono = block.mean(axis=1) if block.shape[1] > 1 else block[:, 0]
+            sum_sq += float(np.sum(np.square(mono)))
+            n += len(mono)
+            leftover = np.concatenate([leftover, mono])
+            n_frames = len(leftover) // frame_len
+            if n_frames:
+                frames = leftover[: n_frames * frame_len].reshape(n_frames, frame_len)
+                rms_parts.append(np.sqrt(np.mean(np.square(frames), axis=1) + _EPS))
+                leftover = leftover[n_frames * frame_len :]
+    overall = float(np.sqrt(sum_sq / max(n, 1) + _EPS))
+    frame_rms = np.concatenate(rms_parts) if rms_parts else np.array([overall], dtype=np.float32)
+    return frame_rms, overall
+
+
+def compute_noise_suppression_metrics_from_wavs(
+    before_wav: str,
+    after_wav: str,
+    sample_rate_hz: int,
+) -> NoiseSuppressionMetrics:
+    before_frames, before_rms = _mono_frame_rms_from_wav(before_wav, sample_rate_hz)
+    after_frames, after_rms = _mono_frame_rms_from_wav(after_wav, sample_rate_hz)
+    input_noise = 20.0 * np.log10(float(np.percentile(before_frames, 10.0)) + _EPS)
+    output_noise = 20.0 * np.log10(float(np.percentile(after_frames, 10.0)) + _EPS)
+    signal_before = 20.0 * np.log10(before_rms + _EPS)
+    signal_after = 20.0 * np.log10(after_rms + _EPS)
+    return NoiseSuppressionMetrics(
+        method="estimated_streaming",
+        input_noise_floor_dbfs=input_noise,
+        output_noise_floor_dbfs=output_noise,
+        noise_reduction_db=input_noise - output_noise,
+        snr_before_db=signal_before - input_noise,
+        snr_after_db=signal_after - output_noise,
+        snr_improvement_db=(signal_after - output_noise) - (signal_before - input_noise),
+    )

@@ -62,3 +62,10 @@ def test_binaural_cli_args_pass_backend_and_follow() -> None:
     assert "--binaural-fixed-direction" in fixed
     assert "45.000000" in fixed
     assert "-10.000000" in fixed
+    old_binary = binaural_cli_args(
+        BinauralRequest(enabled=True, backend="mono_reference", follow_beamformer_steering=True),
+        wav,
+        include_direction_overrides=False,
+    )
+    assert old_binary == ["--output-binaural", str(wav), "--binaural-backend", "mono_reference"]
+    assert "--binaural-follow-steering" not in old_binary
