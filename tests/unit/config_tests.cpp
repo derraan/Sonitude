@@ -20,6 +20,7 @@ void RunZoneTests();
 void RunStateMachineTests();
 void RunSuppressorTests();
 void RunStftTests();
+void RunSpectralPostfilterTests();
 void RunBinauralTests();
 
 namespace
@@ -273,6 +274,7 @@ int main()
     RunBeamformerTests();
     RunSuppressorTests();
     RunStftTests();
+    RunSpectralPostfilterTests();
     RunLimiterTests();
     RunStereoLimiterTests();
     RunBinauralTests();
