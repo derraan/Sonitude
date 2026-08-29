@@ -81,6 +81,70 @@ Generated artifacts:
 - Estimated state RAM and coefficient storage are queryable via
   `stateBytes()` and `coefficientBytes()`.
 
+## Configuration
+
+`config/default.yaml` has an optional `binaural:` section. Paths in
+`binaural.profile.table_path` are resolved relative to the YAML file, same as
+`geometry_path`. The default compact table is therefore:
+
+```text
+../data/hrtf/generic_sadie2_d2/compact_32.shrf
+```
+
+`full_hrtf_reference` loads `reference.shrf` from the same directory.
+
+Unknown backend names fail configuration. There is no silent backend fallback
+inside `BinauralRenderer`. Stream/replay tools may still emit L=R of directional
+mono and set protocol flag `BINAURAL_UNAVAILABLE` when an HRTF table cannot be
+loaded at runtime (that is the protocol-defined tool fallback, not a renderer
+fallback).
+
+## Tools and protocol v2
+
+The renderer is wired into the portable CLI tools. `sonitude_realtime`
+(`src/main.cpp`) is not yet on this path; `--mode beamform` still duplicates
+mono to both playback channels.
+
+### `sonitude_wav_replay`
+
+- `--output` stays **1-channel** processed mono (post-suppression, post-limiter).
+- `--output-binaural <stereo.wav>` writes the renderer output.
+- `--binaural-backend` selects `mono_reference`, `itd_ild`, `compact_hrtf`, or
+  `full_hrtf_reference`.
+- `--output-mono-pre-binaural` is an alias for the pre-limiter suppressed tap.
+- `--capabilities` prints protocol JSON (see below).
+- `--suppression auto|on|off` matches the test-bench contract.
+
+### `sonitude_stream_process`
+
+Framing is protocol v2 only. Python and C++ must stay in lockstep:
+
+- `testbench/app/processing/protocol.py`
+- `src/tools/stream_process.cpp`
+
+| | Input | Output |
+| --- | --- | --- |
+| Magic | `0x32424253` (`SBB2`) | `0x324F4253` (`SBO2`) |
+| Header | 48 bytes | 24 bytes |
+| PCM | 6-channel float32 | 2-channel float32 |
+
+Input flags: bit0 suppression focus, bit1 binaural enabled, bit2 follow steering.
+Output flags: bit0 suppression applied, bit1 binaural applied, bit2 binaural
+unavailable, bit3 mono reference.
+
+Backend bytes: `0` none, `1` mono_reference, `2` itd_ild, `3` compact_hrtf,
+`4` full_hrtf_reference. `none` with binaural enabled is treated as
+`mono_reference`.
+
+When binaural is disabled, the tool still emits stereo as L=R of limited
+directional mono (the live test-bench path always consumes stereo).
+
+### `--capabilities`
+
+Both tools print a one-line JSON object on stdout, including
+`protocol_version: 2` and the implemented binaural backends. The GUI uses this
+to populate backend lists (`testbench/app/processing/capabilities.py`).
+
 ## Known limitations
 
 - ITD/ILD is a generic spherical-head model only.

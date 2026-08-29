@@ -20,7 +20,8 @@ PySide6 GUI  →  Controller (QThread)  →  subprocess  →  Sonitude C++ CLI t
                                                            CalibrationApplier,
                                                            DelaySumBeamformer,
                                                            ConservativeSuppressor,
-                                                           PeakLimiter)
+                                                           BinauralRenderer,
+                                                           PeakLimiter / StereoPeakLimiter)
 ```
 
 Two C++ CLI tools are used, both built from the repo's own `CMakeLists.txt`
@@ -28,22 +29,10 @@ and part of the portable (ALSA-free) subset, so they build on any platform:
 
 | Tool | Existing / new | Used for |
 | --- | --- | --- |
-| `sonitude_wav_replay` | Existing (M4), **extended** with two new optional flags | Mode 1 — batch WAV processing |
-| `sonitude_stream_process` | **New** (`src/tools/stream_process.cpp`) | Mode 2 — real-time streaming |
+| `sonitude_wav_replay` | Existing (M4), extended with diagnostic taps, suppression AUTO/ON/OFF, `--capabilities`, and `--output-binaural` | Mode 1 — batch WAV processing |
+| `sonitude_stream_process` | Protocol v2 stdin/stdout adapter (`src/tools/stream_process.cpp`) | Mode 2 — real-time streaming |
 
-Both wrap the *same* `CalibrationApplier → DelaySumBeamformer →
-ConservativeSuppressor → PeakLimiter` chain used by `sonitude_realtime`.
-Nothing about the DSP was changed; see "What changed in the C++ tree" below
-for the exact diff.
-
-> **Build status disclosure:** the environment this test bench was built in
-> has no CMake or C++ compiler installed, so the C++ changes below are
-> written to match the existing code's exact patterns and conventions but
-> have **not been compile-verified**. Build them (see "Building the C++
-> tools") and fix anything the compiler flags before relying on this app.
-> The Python side (everything under `testbench/`) **has** been installed,
-> unit-tested, and smoke-tested end-to-end, including with a real audio
-> device list from this machine.
+Both wrap the *same* `CalibrationApplier → DelaySumBeamformer → ConservativeSuppressor` chain as `sonitude_realtime`. Binaural rendering is applied in these tools (not yet in `sonitude_realtime`). `--output` from wav replay stays mono; stereo is `--output-binaural` or the stream payload.
 
 ## Response to code review (PR #32)
 
@@ -83,14 +72,14 @@ was fixed; the "Fix" column says where.
   - Added an optional 4th steering-script column, `width_deg` (see "Steering
     width definition" below); 3-column scripts still parse unchanged
     (`width_deg` defaults to 0).
-- `src/tools/stream_process.cpp` — **new** file. A block-streaming adapter
-  around the same DSP chain: reads framed 6-channel PCM blocks from stdin,
-  runs them through calibration → beamformer → suppressor → limiter, writes
-  framed stereo PCM blocks to stdout. No ALSA, no device I/O — the Python
-  side owns the microphone/speaker via `sounddevice` and pipes blocks
-  through this process. Wire protocol (including the `width_deg` field) is
-  documented in the file's header comment. This is the file to review most
-  carefully since it's new, not an extension of existing code.
+  - `--output-binaural` writes stereo via the requested `--binaural-backend`.
+    `--output` remains 1-channel processed mono.
+  - `--capabilities` prints protocol-v2 JSON so the GUI can list backends.
+- `src/tools/stream_process.cpp` — framed stdin/stdout adapter: 6-channel PCM
+  in, stereo PCM out, protocol v2 (`SBB2`/`SBO2`). Optional binaural rendering
+  is controlled per block (flags + backend byte). No ALSA — Python owns the
+  devices via `sounddevice` and pipes blocks through this process. Wire format
+  is `testbench/app/processing/protocol.py`.
 - `CMakeLists.txt` — registers the new `sonitude_stream_process` executable,
   linked against `sonitude_core` only (same pattern as `sonitude_wav_replay`).
 
@@ -265,10 +254,32 @@ This is **not** a measured physical beamwidth, cone width, or HPBW.
 
 ### Protocol v2
 
-`sonitude_stream_process` uses a versioned framed protocol (magic `SBB2`/`SBO2`,
-protocol version, message type, sequence, frame count, flags, payload length).
-Python and C++ must stay in lockstep (`testbench/app/processing/protocol.py`
-and `src/tools/stream_process.cpp`). Responses echo the request sequence.
+`sonitude_stream_process` uses a versioned framed protocol. Python and C++ must
+stay in lockstep (`testbench/app/processing/protocol.py` and
+`src/tools/stream_process.cpp`). Responses echo the request sequence.
+
+- Input magic `SBB2` (`0x32424253`), 48-byte header, 6-ch float32 payload.
+- Output magic `SBO2` (`0x324F4253`), 24-byte header, 2-ch float32 payload.
+- Input flags: bit0 suppression focus, bit1 binaural enabled, bit2 follow steering.
+- Output flags: bit0 suppression applied, bit1 binaural applied, bit2 binaural
+  unavailable, bit3 mono reference.
+- Binaural backend byte: `0` none, `1` mono_reference, `2` itd_ild,
+  `3` compact_hrtf, `4` full_hrtf_reference.
+
+Both tools also support `--capabilities` (JSON, `protocol_version: 2`). The GUI
+hides backends that the binary does not advertise.
+
+### Binaural renderer (C++ DSP)
+
+The test bench does not implement HRTF/ITD in Python. It enables the C++
+renderer through `--output-binaural` / stream flags. Backends:
+
+- `mono_reference` — L=R copy of processed directional mono
+- `itd_ild` — Woodworth ITD + broadband ILD
+- `compact_hrtf` / `full_hrtf_reference` — SADIE II D2 tables under
+  `data/hrtf/generic_sadie2_d2/`
+
+Implementation notes: `docs/binaural_renderer.md`.
 
 ### Suppression AUTO / ON / OFF
 

@@ -196,7 +196,8 @@ Conservative **distractor suppression** after beamforming, with explicit user se
 ### Stage 5 — Mono → stereo
 
 - `--mode passthrough` **(today):** taps ear-cup mics 4 and 5 to L/R in `main.cpp` — no beamformer.
-- `--mode beamform` **(implemented):** duplicate mono beam to both channels (no HRTF in v1).
+- `--mode beamform` on `sonitude_realtime`: still duplicates directional mono to L/R. The Pi playback path is **not** yet wired to `BinauralRenderer`.
+- Portable tools: `BinauralRenderer` (`mono_reference`, `itd_ild`, `compact_hrtf`, `full_hrtf_reference`) then linked `StereoPeakLimiter`. See `docs/binaural_renderer.md`.
 
 
 
@@ -234,6 +235,8 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 | Calibration (pol/gain/DC/HP) | Implemented                                  |
 | Calibration delay            | Implemented (beamformer fractional delay line) |
 | Delay-and-sum beamformer     | Implemented (M4)                             |
+| Binaural renderer / HRTF tables | Implemented (portable tools; not yet in `sonitude_realtime`) |
+| Stereo limiter (linked)      | Implemented (`StereoPeakLimiter`)            |
 | Suppression / limiter        | Implemented (M7)                             |
 | ASRC PI + resampler          | Implemented                                  |
 | ODAS audio processing        | Out of scope (**SCOPE-2**); control-only     |
@@ -244,7 +247,7 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 ### Offline vs real-time
 
 - **Real-time:** capture → calibration → beamformer → … → ASRC → ALSA playback on Pi.
-- **Offline:** `sonitude_wav_replay` (M4) renders beamformed WAV from 6-ch file + steering script without ALSA.
+- **Offline:** `sonitude_wav_replay` renders beamformed mono from a 6-ch file + steering script, with optional `--output-binaural` stereo. `sonitude_stream_process` is the protocol-v2 stdin/stdout adapter used by the PySide6 test bench.
 - **Tests:** `asrc_sim_tests.cpp` simulates ppm mismatch without wall clock to verify PI stability.
 
 **One-line summary:** align six mics toward the talker (beamformer), clean per-mic errors (calibration), play at a slightly variable rate (ASRC) so independent USB clocks do not XRUN, while a separate control loop sets steering without touching PCM.
@@ -267,12 +270,16 @@ Sonitude/
 ├── cmake/
 │   └── Dependencies.cmake      # ALSA find; FetchContent yaml-cpp/spdlog
 ├── config/
-│   ├── default.yaml            # Runtime: devices, ASRC, steering, zones, SM, ODAS, telemetry
+│   ├── default.yaml            # Runtime: devices, ASRC, steering, zones, SM, ODAS, telemetry, binaural
 │   ├── geometry_soundbubble_initial.yaml  # 6-mic XYZ positions
 │   └── calibration_example.yaml           # Per-mic polarity/gain/delay/DC
+├── data/
+│   └── hrtf/generic_sadie2_d2/ # SADIE II D2 compact/reference `.shrf` tables + LICENSE
 ├── docs/
 │   ├── milestones.md           # M0–M8 status + gates
 │   ├── architecture.md         # Target pipeline / thread model
+│   ├── binaural_renderer.md    # Implemented binaural DSP + protocol v2 tools
+│   ├── binaural_renderer_dsp_proposal.md  # Design spec
 │   ├── calibration.md          # Calibration schema + planned order
 │   ├── device_setup.md         # ALSA/RT runbook (planned)
 │   ├── latency_measurement.md  # M8 measurement method
@@ -285,9 +292,9 @@ Sonitude/
 │   ├── main.cpp                # sonitude_realtime: validate / passthrough
 │   ├── app/                    # Config, calibration I/O, logging
 │   ├── audio/                  # Types, PCM, WAV, ALSA workers
-│   ├── dsp/                    # Calibration apply, resampler, ASRC
+│   ├── dsp/                    # Calibration, beamformer, suppressor, binaural, limiter, resampler, ASRC
 │   ├── rt/                     # SPSC ring, block pool, RT thread, telemetry
-│   ├── spatial/                # SourceObservation stub type only
+│   ├── spatial/                # ODAS parser, tracker, head-frame helpers
 │   ├── vad/                    # IVad interface stub only
 │   └── tools/                  # Probe/check/calibration/latency/replay CLIs
 └── tests/
@@ -314,6 +321,10 @@ Sonitude/
 | `src/audio/wav_io.hpp/.cpp`                                                | Multichannel WAV read/write                                                    |
 | `src/audio/alsa/*`                                                         | Probe, device open, capture/playback workers                                   |
 | `src/dsp/calibration_applier.*`                                            | Polarity/gain/DC + HP (delay applied in beamformer stage)                      |
+| `src/dsp/binaural_renderer.*`                                              | Portable mono→stereo renderer (ITD/ILD + HRTF FIR)                             |
+| `src/dsp/hrtf_table.*`                                                     | SNHR v1 coefficient-table loader                                               |
+| `src/dsp/limiter.*`                                                        | Mono `PeakLimiter` + linked `StereoPeakLimiter`                                |
+| `src/spatial/head_frame.hpp`                                               | Authoritative azimuth wrap / lateral-angle helpers                             |
 | `src/dsp/resampler.hpp`                                                    | `IStereoResampler`                                                             |
 | `src/dsp/resampler_linear.*`                                               | Linear fallback resampler                                                      |
 | `src/dsp/resampler_src.cpp`                                                | libsamplerate or linear fallback factory                                       |
@@ -329,7 +340,9 @@ Sonitude/
 | `src/tools/calibration_capture.cpp`                                        | Synthetic 6ch WAV (portable)                                                   |
 | `src/tools/calibration_estimate.cpp`                                       | DC/RMS→YAML estimator                                                          |
 | `src/tools/latency_marker.cpp`                                             | M8 placeholder                                                                 |
-| `src/tools/wav_replay.cpp`                                                 | M4 offline renderer                                                            |
+| `src/tools/wav_replay.cpp`                                                 | Offline renderer: mono `--output`, optional stereo `--output-binaural`         |
+| `src/tools/stream_process.cpp`                                             | Protocol v2 stdin/stdout adapter for the test bench                            |
+| `src/tools/binaural_bench.cpp`                                             | Desktop-only binaural throughput / RAM probe                                   |
 
 
 ---

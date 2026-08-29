@@ -44,7 +44,8 @@ steering snapshot -> delay-and-sum beamformer -> conservative suppression policy
 -> binaural renderer -> linked stereo limiter -> ASRC/drift control -> ALSA playback
 ```
 
-Direction convention (authoritative for steering and binaural rendering):
+Direction convention (authoritative for steering and binaural rendering;
+helpers in `src/spatial/head_frame.hpp`):
 
 ```text
 azimuth 0 deg  = front (+Y)
@@ -69,7 +70,7 @@ ODAS/mock DOA -> source association -> source confidence and zone selection
 Current M2 runtime uses one blocking capture/DSP/playback audio loop; the three RT-worker split and per-thread scheduling isolation below remain pending hardening gates. Control and telemetry already run on separate threads.
 
 - **Capture worker thread (RT):** ALSA capture, sequence accounting, ring publication.
-- **Audio render thread (RT):** beamforming, suppression policy, limiting, ASRC feed.
+- **Audio render thread (RT):** beamforming, suppression policy, binaural rendering (when wired), limiting, ASRC feed.
 - **Playback worker thread (RT):** ALSA playback, underrun recovery telemetry.
 - **Control thread (non-RT):** ODAS client, source association, state machine.
 - **Telemetry thread (non-RT):** aggregate counters, structured output, diagnostics.
