@@ -111,6 +111,9 @@ mono to both playback channels.
 - `--output-binaural <stereo.wav>` writes the renderer output.
 - `--binaural-backend` selects `mono_reference`, `itd_ild`, `compact_hrtf`, or
   `full_hrtf_reference`.
+- `--binaural-follow-steering` / `--binaural-fixed-direction` override YAML
+  `binaural.direction.follow_steering`. With a fixed direction, `--binaural-azimuth`
+  and `--binaural-elevation` override YAML angles.
 - `--output-mono-pre-binaural` is an alias for the pre-limiter suppressed tap.
 - `--capabilities` prints protocol JSON (see below).
 - `--suppression auto|on|off` matches the test-bench contract.

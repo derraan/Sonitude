@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <stdexcept>
@@ -151,6 +152,8 @@ void PrintUsage()
             << "                      [--output-suppressed <mono_wav>]\n"
             << "                      [--output-mono-pre-binaural <mono_wav>]\n"
             << "                      [--output-binaural <stereo_wav>] [--binaural-backend <name>]\n"
+            << "                      [--binaural-follow-steering] [--binaural-fixed-direction]\n"
+            << "                      [--binaural-azimuth <deg>] [--binaural-elevation <deg>]\n"
             << "                      [--capabilities]\n"
             << "\n"
             << "  --output-beamformed writes the mono signal immediately after the\n"
@@ -160,6 +163,9 @@ void PrintUsage()
             << "  enabled) but before limiting. --output-mono-pre-binaural is the same tap.\n"
             << "  Both are diagnostic taps only; they do not change the final --output render.\n"
             << "  --output-binaural writes stereo via the requested backend. --output stays mono.\n"
+            << "  --binaural-follow-steering / --binaural-fixed-direction override YAML\n"
+            << "  binaural.direction.follow_steering. Fixed azimuth/elevation override YAML\n"
+            << "  only when follow-steering is off (CLI flag or YAML).\n"
             << "\n"
             << "  Steering script columns: time_s,azimuth_deg,elevation_deg[,directivity_blend_deg]\n"
             << "  directivity_blend_deg (0-" << kMaxWidthDeg
@@ -233,6 +239,9 @@ int main(int argc, char** argv)
   std::string output_mono_pre_binaural_path;
   std::string output_binaural_path;
   std::string binaural_backend = "mono_reference";
+  std::optional<bool> binaural_follow_override;
+  std::optional<float> binaural_azimuth_override;
+  std::optional<float> binaural_elevation_override;
   SuppressionMode suppression_mode = SuppressionMode::Auto;
   bool disable_limiter = false;
 
@@ -274,6 +283,22 @@ int main(int argc, char** argv)
     else if (arg == "--binaural-backend" && i + 1 < argc)
     {
       binaural_backend = argv[++i];
+    }
+    else if (arg == "--binaural-follow-steering")
+    {
+      binaural_follow_override = true;
+    }
+    else if (arg == "--binaural-fixed-direction")
+    {
+      binaural_follow_override = false;
+    }
+    else if (arg == "--binaural-azimuth" && i + 1 < argc)
+    {
+      binaural_azimuth_override = std::stof(argv[++i]);
+    }
+    else if (arg == "--binaural-elevation" && i + 1 < argc)
+    {
+      binaural_elevation_override = std::stof(argv[++i]);
     }
     else if (arg == "--help")
     {
@@ -374,6 +399,12 @@ int main(int argc, char** argv)
                                 ? "on"
                                 : (suppression_mode == SuppressionMode::Off ? "off" : "auto");
     const bool binaural_enabled = !output_binaural_path.empty();
+    const bool binaural_follow =
+        binaural_follow_override.value_or(runtime.binaural.direction.follow_steering);
+    const float binaural_az =
+        binaural_azimuth_override.value_or(runtime.binaural.direction.azimuth_deg);
+    const float binaural_el =
+        binaural_elevation_override.value_or(runtime.binaural.direction.elevation_deg);
     sonitude::dsp::BinauralBackend backend = sonitude::dsp::BinauralBackend::MonoReference;
 
     std::unique_ptr<sonitude::dsp::HrtfTable> hrtf_table;
@@ -400,17 +431,18 @@ int main(int argc, char** argv)
                           .itd_ild = {.head_radius_m = runtime.binaural.model.head_radius_m,
                                       .max_ild_db = runtime.binaural.model.max_ild_db},
                           .table = hrtf_table.get()});
-      binaural.setDirection(runtime.binaural.direction.follow_steering
+      binaural.setDirection(binaural_follow
                                 ? events.front().target
-                                : sonitude::audio::BeamformerSteering{
-                                      runtime.binaural.direction.azimuth_deg,
-                                      runtime.binaural.direction.elevation_deg});
+                                : sonitude::audio::BeamformerSteering{binaural_az, binaural_el});
     }
 
     std::cerr << "sonitude_resolved {\"protocol_version\":2,\"suppression_requested\":\"" << requested
               << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
               << ",\"limiter_disabled\":" << (disable_limiter ? "true" : "false")
-              << ",\"binaural_backend\":\"" << binaural_backend << "\",\"binaural_available\":true}\n";
+              << ",\"binaural_backend\":\"" << binaural_backend << "\",\"binaural_available\":true"
+              << ",\"binaural_follow_steering\":" << (binaural_follow ? "true" : "false")
+              << ",\"binaural_azimuth_deg\":" << binaural_az
+              << ",\"binaural_elevation_deg\":" << binaural_el << "}\n";
     sonitude::dsp::ConservativeSuppressor suppressor;
     suppressor.configure(
         {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
@@ -457,7 +489,7 @@ int main(int argc, char** argv)
       while (event_index < events.size() && events[event_index].frame_index <= start)
       {
         beamformer.setTarget(events[event_index].target);
-        if (binaural_enabled && runtime.binaural.direction.follow_steering)
+        if (binaural_enabled && binaural_follow)
         {
           binaural.setDirection(events[event_index].target);
         }

@@ -33,6 +33,7 @@ from app.processing.capabilities import query_tool_capabilities
 from app.processing.suppression import SuppressionMode
 from app.storage.models import BinauralRequest, SteeringEvent
 from app.storage.result_store import ResultStore
+from app.ui.binaural_controls import populate_binaural_widgets, sync_binaural_angle_widgets
 from app.ui.metrics_panel import MetricsPanel
 from app.ui.playback_panel import PlaybackPanel
 from app.ui.steering_dial import SteeringDial
@@ -138,6 +139,7 @@ class RecordedDataTab(QWidget):
         binaural_layout.addLayout(az_row)
         binaural_layout.addWidget(self._binaural_note)
         self._populate_binaural_controls()
+        self._binaural_follow.toggled.connect(self._sync_binaural_angle_widgets)
 
         steering_test_box = QGroupBox("Objective Steering Test (optional, slower)")
         self._steering_test_checkbox = QCheckBox("Run steering sweep for this batch")
@@ -239,27 +241,33 @@ class RecordedDataTab(QWidget):
             pass
 
     def _populate_binaural_controls(self) -> None:
-        caps = self._capabilities.binaural
-        self._binaural_backend.clear()
-        if not caps.available or not self._capabilities.queried:
-            self._binaural_enable.setEnabled(False)
-            self._binaural_backend.setEnabled(False)
-            self._binaural_follow.setEnabled(False)
-            self._binaural_az.setEnabled(False)
-            self._binaural_el.setEnabled(False)
-            if not self._capabilities.queried:
-                self._binaural_note.setText(
-                    "C++ binaural capabilities were not reported (binary missing or older than this protocol). "
-                    "The rest of the test bench remains usable."
-                )
-            else:
-                self._binaural_note.setText("This C++ build reports binaural as unavailable.")
-            return
-        for name in caps.backends:
-            self._binaural_backend.addItem(name, userData=name)
-        unavailable = ", ".join(caps.unavailable_backends) or "none"
-        self._binaural_note.setText(
-            f"{caps.note} Unavailable backends (not offered): {unavailable}."
+        yaml_binaural = None
+        try:
+            yaml_binaural = read_runtime_config_summary(self._config_path).binaural
+        except Exception:  # noqa: BLE001 - widgets still populate from C++ capabilities
+            pass
+        populate_binaural_widgets(
+            capabilities=self._capabilities,
+            yaml_binaural=yaml_binaural,
+            enable=self._binaural_enable,
+            backend=self._binaural_backend,
+            follow=self._binaural_follow,
+            azimuth=self._binaural_az,
+            elevation=self._binaural_el,
+            note=self._binaural_note,
+            missing_query_message=(
+                "C++ binaural capabilities were not reported (binary missing or older than this "
+                "protocol). Rebuild sonitude_wav_replay in this tree so --capabilities lists HRTF "
+                "backends. The rest of the test bench remains usable."
+            ),
+        )
+
+    def _sync_binaural_angle_widgets(self, _checked: bool = False) -> None:
+        sync_binaural_angle_widgets(
+            follow=self._binaural_follow,
+            azimuth=self._binaural_az,
+            elevation=self._binaural_el,
+            usable=self._binaural_enable.isEnabled(),
         )
 
     def _on_blend_changed(self, blend_deg: int) -> None:
@@ -378,6 +386,11 @@ class RecordedDataTab(QWidget):
         test_id = result["test_id"]
         self._last_metrics[test_id] = result["metrics"]
         self._results_combo.addItem(test_id)
+        binaural_path = self._result_store.results_dir / test_id / "binaural_stereo.wav"
+        if binaural_path.exists():
+            binaural_index = self._stage_combo.findData("binaural_stereo.wav")
+            if binaural_index >= 0:
+                self._stage_combo.setCurrentIndex(binaural_index)
         self._results_combo.setCurrentText(test_id)
         self._status_label.setText(f"Finished: {Path(input_path).name} -> {test_id}")
 

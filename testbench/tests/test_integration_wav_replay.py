@@ -15,8 +15,9 @@ import yaml
 from app.audio_io import audio_loader
 from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.processing.batch_adapter import run_wav_replay
+from app.processing.capabilities import query_tool_capabilities
 from app.processing.suppression import resolve_suppression
-from app.storage.models import SteeringEvent
+from app.storage.models import BinauralRequest, SteeringEvent
 
 
 @pytest.fixture
@@ -163,3 +164,35 @@ def test_flac_input_is_decoded_then_processed(
     )
     assert result.output_wav.exists()
     assert result.decoded_input_wav.suffix == ".wav"
+
+
+def test_compact_hrtf_binaural_is_stereo_and_not_lr_duplicate(
+    six_channel_fixture: Path, tmp_path: Path, wav_replay_binary: Path
+) -> None:
+    caps = query_tool_capabilities("sonitude_wav_replay", binary_path=wav_replay_binary)
+    if not caps.binaural.backend_supported("compact_hrtf"):
+        pytest.skip("this sonitude_wav_replay build does not advertise compact_hrtf")
+
+    events = [SteeringEvent(time_s=0.0, azimuth_deg=90.0, elevation_deg=0.0)]
+    result = run_wav_replay(
+        six_channel_fixture,
+        DEFAULT_CONFIG_PATH,
+        events,
+        tmp_path / "hrtf",
+        binaural=BinauralRequest(
+            enabled=True,
+            backend="compact_hrtf",
+            follow_beamformer_steering=True,
+        ),
+        binary_path=wav_replay_binary,
+    )
+    assert result.binaural_wav is not None and result.binaural_wav.exists()
+    assert "--binaural-backend" in result.command
+    assert "compact_hrtf" in result.command
+    assert result.resolved.get("binaural_backend") == "compact_hrtf"
+    stereo, _ = audio_loader.load_wav(result.binaural_wav)
+    assert stereo.ndim == 2
+    assert stereo.shape[1] == 2
+    assert not np.allclose(stereo[:, 0], stereo[:, 1], atol=1e-6), (
+        "compact_hrtf must not be an L=R duplicate of directional mono"
+    )

@@ -272,7 +272,16 @@ hides backends that the binary does not advertise.
 ### Binaural renderer (C++ DSP)
 
 The test bench does not implement HRTF/ITD in Python. It enables the C++
-renderer through `--output-binaural` / stream flags. Backends:
+renderer through `--output-binaural` / stream flags. Rebuild
+`sonitude_wav_replay` and `sonitude_stream_process` in this tree so
+`--capabilities` lists HRTF backends. An older binary that only advertises
+`mono_reference` still gates those controls.
+
+When those tools report HRTF backends, the GUI enables the renderer, defaults
+to `compact_hrtf`, and passes follow/fixed direction through to C++. `--output`
+stays mono; listen to the **Binaural stereo** DSP stage.
+
+Backends:
 
 - `mono_reference` — L=R copy of processed directional mono
 - `itd_ild` — Woodworth ITD + broadband ILD

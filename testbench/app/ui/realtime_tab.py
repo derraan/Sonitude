@@ -32,6 +32,7 @@ from app.controller.realtime_controller import RealtimeWorker
 from app.processing.capabilities import query_tool_capabilities
 from app.processing.suppression import SuppressionMode
 from app.storage.models import BinauralRequest
+from app.ui.binaural_controls import populate_binaural_widgets, sync_binaural_angle_widgets
 from app.ui.steering_dial import SteeringDial
 from app.ui.visualization_panel import VisualizationPanel
 
@@ -169,7 +170,7 @@ class RealtimeTab(QWidget):
         self._populate_binaural_controls()
         self._binaural_enable.toggled.connect(self._push_binaural)
         self._binaural_backend.currentIndexChanged.connect(lambda _i: self._push_binaural())
-        self._binaural_follow.toggled.connect(self._push_binaural)
+        self._binaural_follow.toggled.connect(self._on_binaural_follow_toggled)
         self._binaural_az.valueChanged.connect(lambda _v: self._push_binaural())
         self._binaural_el.valueChanged.connect(lambda _v: self._push_binaural())
 
@@ -209,23 +210,34 @@ class RealtimeTab(QWidget):
         self._refresh_devices()
 
     def _populate_binaural_controls(self) -> None:
-        caps = self._capabilities.binaural
-        self._binaural_backend.clear()
-        usable = bool(caps.available and self._capabilities.queried and caps.backends)
-        self._binaural_enable.setEnabled(usable)
-        self._binaural_backend.setEnabled(usable)
-        self._binaural_follow.setEnabled(usable)
-        self._binaural_az.setEnabled(usable)
-        self._binaural_el.setEnabled(usable)
-        if not self._capabilities.queried:
-            self._binaural_note.setText(
-                "C++ binaural capabilities were not reported. Live capture still works without HRTF."
-            )
-            return
-        for name in caps.backends:
-            self._binaural_backend.addItem(name, userData=name)
-        unavailable = ", ".join(caps.unavailable_backends) or "none"
-        self._binaural_note.setText(f"{caps.note} Not offered: {unavailable}.")
+        yaml_binaural = None
+        try:
+            yaml_binaural = read_runtime_config_summary(self._config_path).binaural
+        except Exception:  # noqa: BLE001 - widgets still populate from C++ capabilities
+            pass
+        populate_binaural_widgets(
+            capabilities=self._capabilities,
+            yaml_binaural=yaml_binaural,
+            enable=self._binaural_enable,
+            backend=self._binaural_backend,
+            follow=self._binaural_follow,
+            azimuth=self._binaural_az,
+            elevation=self._binaural_el,
+            note=self._binaural_note,
+            missing_query_message=(
+                "C++ binaural capabilities were not reported. Rebuild sonitude_stream_process in this "
+                "tree so --capabilities lists HRTF backends. Live capture still works without HRTF."
+            ),
+        )
+
+    def _on_binaural_follow_toggled(self, _checked: bool) -> None:
+        sync_binaural_angle_widgets(
+            follow=self._binaural_follow,
+            azimuth=self._binaural_az,
+            elevation=self._binaural_el,
+            usable=self._binaural_enable.isEnabled(),
+        )
+        self._push_binaural()
 
     def _current_binaural(self) -> BinauralRequest:
         backend = self._binaural_backend.currentData()
