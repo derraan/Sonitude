@@ -26,7 +26,7 @@ asrc:
 
 steering:
   speed_of_sound_mps: 343.0
-  reference_mic_index: 0
+  reference_mic_index: 2
   steering_ramp_ms: 150.0
   ambient_floor_linear: 0.25
 
@@ -67,3 +67,21 @@ telemetry:
   emit_csv: false
   emit_json: false
   stats_period_ms: 1000
+
+binaural:
+  enabled: true
+  backend: array_downmix
+  direction:
+    follow_steering: false
+    azimuth_deg: 0.0
+    elevation_deg: 0.0
+  transition:
+    duration_ms: 150.0
+  profile:
+    id: generic_sadie2_d2
+    # Experimental compact-HRIR candidate (raw 32-sample prefix). Not a
+    # selected Pico/STM32 representation; no reference-error study yet.
+    table_path: "../data/hrtf/generic_sadie2_d2/compact_32.shrf"
+  model:
+    head_radius_m: 0.0875
+    max_ild_db: 6.0

@@ -2,7 +2,7 @@
 
 Unified tracker for Sonitude core: **global scope, guardrails, user veto checkboxes**, **DSP signal path**, directory layout, milestone reality, key interfaces, config schema, tests, conventions, ODAS posture, and CMake wiring. Treat this document as the living snapshot; `docs/milestones.md` **remains authoritative for milestone gates**. Unchecked scope vetoes are binding on Cursor; checked vetoes explicitly authorize otherwise-prohibited work.
 
-Last updated: 2026-08-13.
+Last updated: 2026-08-29.
 
 ### Implementation status snapshot (M4–M7)
 
@@ -196,7 +196,8 @@ Conservative **distractor suppression** after beamforming, with explicit user se
 ### Stage 5 — Mono → stereo
 
 - `--mode passthrough` **(today):** taps ear-cup mics 4 and 5 to L/R in `main.cpp` — no beamformer.
-- `--mode beamform` **(implemented):** duplicate mono beam to both channels (no HRTF in v1).
+- `--mode beamform` on `sonitude_realtime`: still duplicates directional mono to L/R. The Pi playback path is **not** yet wired to `BinauralRenderer`.
+- Portable tools: `BinauralRenderer` (`mono_reference`, `itd_ild`, `compact_hrtf`, `full_hrtf_reference`) then linked `StereoPeakLimiter`. See `docs/binaural_renderer.md`.
 
 
 
@@ -234,6 +235,8 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 | Calibration (pol/gain/DC/HP) | Implemented                                  |
 | Calibration delay            | Implemented (beamformer fractional delay line) |
 | Delay-and-sum beamformer     | Implemented (M4)                             |
+| Binaural renderer / HRTF tables | Implemented (portable tools; not yet in `sonitude_realtime`) |
+| Stereo limiter (linked)      | Implemented (`StereoPeakLimiter`)            |
 | Suppression / limiter        | Implemented (M7)                             |
 | ASRC PI + resampler          | Implemented                                  |
 | ODAS audio processing        | Out of scope (**SCOPE-2**); control-only     |
@@ -244,7 +247,7 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 ### Offline vs real-time
 
 - **Real-time:** capture → calibration → beamformer → … → ASRC → ALSA playback on Pi.
-- **Offline:** `sonitude_wav_replay` (M4) renders beamformed WAV from 6-ch file + steering script without ALSA.
+- **Offline:** `sonitude_wav_replay` (M4) renders beamformed mono from a 6-ch file + steering script, with optional `--output-binaural` stereo. `sonitude_stream_process` is a portable protocol-v2 stdin/stdout adapter for the same DSP chain. The PySide6 test bench in `testbench/` drives both: short files use wav_replay (taps + optional sweep); files ≥ 30 s or > 24 MiB PCM stream through `stream_process` without loading the capture into RAM, then honour WAV/FLAC `processed_export`; the Recorded tab can also preview a file with live steering/binaural. Identical live `setDirection`/`setTarget` calls do not restart the 150 ms crossfade. Compact HRTF tables are experimental HRIR prefixes, not an edge-selected representation. This GUI is **not** on the RT path. **PR #33** (`feature/binaural-renderer-dsp`) is superseded by PR #32 for code; do not merge it.
 - **Tests:** `asrc_sim_tests.cpp` simulates ppm mismatch without wall clock to verify PI stability.
 
 **One-line summary:** align six mics toward the talker (beamformer), clean per-mic errors (calibration), play at a slightly variable rate (ASRC) so independent USB clocks do not XRUN, while a separate control loop sets steering without touching PCM.
@@ -267,15 +270,21 @@ Sonitude/
 ├── cmake/
 │   └── Dependencies.cmake      # ALSA find; FetchContent yaml-cpp/spdlog
 ├── config/
-│   ├── default.yaml            # Runtime: devices, ASRC, steering, zones, SM, ODAS, telemetry
+│   ├── default.yaml            # Runtime: devices, ASRC, steering, zones, SM, ODAS, telemetry, binaural
 │   ├── geometry_soundbubble_initial.yaml  # 6-mic XYZ positions
 │   └── calibration_example.yaml           # Per-mic polarity/gain/delay/DC
+├── data/
+│   └── hrtf/generic_sadie2_d2/ # SADIE II D2 compact/reference `.shrf` tables + LICENSE
 ├── docs/
 │   ├── milestones.md           # M0–M8 status + gates
 │   ├── architecture.md         # Target pipeline / thread model
+│   ├── binaural_renderer.md    # Implemented binaural DSP + protocol v2 tools
+│   ├── binaural_renderer_dsp_proposal.md  # Design spec
 │   ├── calibration.md          # Calibration schema + planned order
 │   ├── device_setup.md         # ALSA/RT runbook (planned)
 │   ├── latency_measurement.md  # M8 measurement method
+│   ├── pr32_testbench_software_proposal.md
+│   ├── binaural_renderer_dsp_proposal.md
 │   └── CodebaseState.md        # This document
 ├── scripts/
 │   ├── run_realtime.sh
@@ -285,11 +294,12 @@ Sonitude/
 │   ├── main.cpp                # sonitude_realtime: validate / passthrough
 │   ├── app/                    # Config, calibration I/O, logging
 │   ├── audio/                  # Types, PCM, WAV, ALSA workers
-│   ├── dsp/                    # Calibration apply, resampler, ASRC
+│   ├── dsp/                    # Calibration, beamformer, suppressor, binaural, limiter, resampler, ASRC
 │   ├── rt/                     # SPSC ring, block pool, RT thread, telemetry
-│   ├── spatial/                # SourceObservation stub type only
+│   ├── spatial/                # ODAS parser, tracker, head-frame helpers
 │   ├── vad/                    # IVad interface stub only
-│   └── tools/                  # Probe/check/calibration/latency/replay CLIs
+│   └── tools/                  # Probe/check/calibration/latency/replay/stream_process CLIs
+├── testbench/                  # PySide6 algorithm test bench (non-RT)
 └── tests/
     ├── unit/                   # Single binary unit suite
     ├── fixtures/               # YAML fixtures for config tests
@@ -314,6 +324,10 @@ Sonitude/
 | `src/audio/wav_io.hpp/.cpp`                                                | Multichannel WAV read/write                                                    |
 | `src/audio/alsa/*`                                                         | Probe, device open, capture/playback workers                                   |
 | `src/dsp/calibration_applier.*`                                            | Polarity/gain/DC + HP (delay applied in beamformer stage)                      |
+| `src/dsp/binaural_renderer.*`                                              | Portable mono→stereo renderer (ITD/ILD + HRTF FIR)                             |
+| `src/dsp/hrtf_table.*`                                                     | SNHR v1 coefficient-table loader                                               |
+| `src/dsp/limiter.*`                                                        | Mono `PeakLimiter` + linked `StereoPeakLimiter`                                |
+| `src/spatial/head_frame.hpp`                                               | Authoritative azimuth wrap / lateral-angle helpers                             |
 | `src/dsp/resampler.hpp`                                                    | `IStereoResampler`                                                             |
 | `src/dsp/resampler_linear.*`                                               | Linear fallback resampler                                                      |
 | `src/dsp/resampler_src.cpp`                                                | libsamplerate or linear fallback factory                                       |
@@ -329,7 +343,9 @@ Sonitude/
 | `src/tools/calibration_capture.cpp`                                        | Synthetic 6ch WAV (portable)                                                   |
 | `src/tools/calibration_estimate.cpp`                                       | DC/RMS→YAML estimator                                                          |
 | `src/tools/latency_marker.cpp`                                             | M8 placeholder                                                                 |
-| `src/tools/wav_replay.cpp`                                                 | M4 offline renderer                                                            |
+| `src/tools/wav_replay.cpp`                                                 | M4 offline renderer; taps, AUTO/ON/OFF suppression, `--output-binaural`, `--capabilities` |
+| `src/tools/stream_process.cpp`                                             | Protocol-v2 stdin/stdout DSP adapter (live capture, long-file batch, file preview) |
+| `src/tools/binaural_bench.cpp`                                             | Desktop-only binaural throughput / RAM probe                                   |
 
 
 ---
@@ -729,6 +745,7 @@ Architecture target includes a future three-RT-thread split; current runtime sti
 - `sonitude_capture_check` / `sonitude_playback_check` / `sonitude_loopback_diag` (ALSA only)
 - `sonitude_calibration_capture` / `sonitude_calibration_estimate`
 - `sonitude_latency_marker` (M8 placeholder) / `sonitude_wav_replay` (M4 offline renderer)
+- `sonitude_stream_process` (portable protocol-v2 block adapter for the test bench)
 - `sonitude_odas_config_gen` (ODAS config generator)
 - `sonitude_unit_tests` (+ CTest name of same)
 

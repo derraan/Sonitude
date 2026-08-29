@@ -1,6 +1,7 @@
 #include "app/config.hpp"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <stdexcept>
 #include <unordered_set>
@@ -141,6 +142,47 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
   config.telemetry.emit_csv = RequireScalar<bool>(telemetry, "emit_csv");
   config.telemetry.emit_json = RequireScalar<bool>(telemetry, "emit_json");
   config.telemetry.stats_period_ms = RequireScalar<std::uint32_t>(telemetry, "stats_period_ms");
+
+  if (root["binaural"])
+  {
+    const YAML::Node binaural = root["binaural"];
+    config.binaural.enabled = RequireScalar<bool>(binaural, "enabled");
+    config.binaural.backend = RequireScalar<std::string>(binaural, "backend");
+    if (binaural["direction"])
+    {
+      const YAML::Node direction = binaural["direction"];
+      config.binaural.direction.follow_steering = RequireScalar<bool>(direction, "follow_steering");
+      if (direction["azimuth_deg"])
+      {
+        config.binaural.direction.azimuth_deg = RequireScalar<float>(direction, "azimuth_deg");
+      }
+      if (direction["elevation_deg"])
+      {
+        config.binaural.direction.elevation_deg = RequireScalar<float>(direction, "elevation_deg");
+      }
+    }
+    if (binaural["transition"])
+    {
+      const YAML::Node transition = binaural["transition"];
+      config.binaural.transition.duration_ms = RequireScalar<float>(transition, "duration_ms");
+    }
+    if (binaural["profile"])
+    {
+      const YAML::Node profile = binaural["profile"];
+      config.binaural.profile.id = RequireScalar<std::string>(profile, "id");
+      if (profile["table_path"])
+      {
+        config.binaural.profile.table_path =
+            ResolvePath(path, RequireScalar<std::string>(profile, "table_path"));
+      }
+    }
+    if (binaural["model"])
+    {
+      const YAML::Node model = binaural["model"];
+      config.binaural.model.head_radius_m = RequireScalar<float>(model, "head_radius_m");
+      config.binaural.model.max_ild_db = RequireScalar<float>(model, "max_ild_db");
+    }
+  }
 
   config.zones = ParseZones(root["zones"]);
 
@@ -292,6 +334,29 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     {
       throw std::runtime_error("zone azimuth bounds must be within [-180, 360]");
     }
+  }
+
+  static const std::array<const char*, 5> kKnownBinauralBackends = {
+      "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference", "array_downmix"};
+  const bool known_backend = std::any_of(
+      kKnownBinauralBackends.begin(),
+      kKnownBinauralBackends.end(),
+      [&](const char* value) { return config.binaural.backend == value; });
+  if (!known_backend)
+  {
+    throw std::runtime_error("Unknown binaural backend: " + config.binaural.backend);
+  }
+  if (config.binaural.transition.duration_ms < 0.0F || config.binaural.transition.duration_ms > 500.0F)
+  {
+    throw std::runtime_error("binaural.transition.duration_ms must be in [0, 500]");
+  }
+  if (config.binaural.model.head_radius_m <= 0.0F || config.binaural.model.head_radius_m > 0.25F)
+  {
+    throw std::runtime_error("binaural.model.head_radius_m must be in (0, 0.25]");
+  }
+  if (config.binaural.profile.id.empty())
+  {
+    throw std::runtime_error("binaural.profile.id cannot be empty");
   }
 }
 

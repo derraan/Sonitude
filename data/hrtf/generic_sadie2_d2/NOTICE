@@ -1,0 +1,18 @@
+This directory contains derived coefficient tables generated from the SADIE II
+Database (University of York, release v2-2, 2024-06-18), subject D2 (KEMAR),
+using the Sonitude preparation script `tools/hrtf/prepare_hrtf.py`.
+
+Original dataset reference:
+- Armstrong, C., Thresh, L., Kearney, G. "A Perceptual Evaluation of
+  Individual and Non-Individual HRTFs: A Case Study of the SADIE II
+  Database", DOI: 10.3390/app8112029
+- Zenodo dataset DOI: 10.5281/zenodo.12092466
+
+License:
+- Apache License, Version 2.0 (see LICENSE file in this directory).
+
+Change notice:
+- Azimuth convention converted to Sonitude head frame
+  (sonitude_az = normalize(-sadie_az)).
+- Horizontal-plane subset sampled at 5 degree azimuth steps.
+- Compact candidate tables derived at 16/32/64 taps.

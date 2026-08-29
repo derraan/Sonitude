@@ -12,12 +12,14 @@ void RunAsrcSimulationTests();
 void RunCalibrationTests();
 void RunBeamformerTests();
 void RunLimiterTests();
+void RunStereoLimiterTests();
 void RunSnapshotTests();
 void RunOdasParserTests();
 void RunControlLoopTests();
 void RunZoneTests();
 void RunStateMachineTests();
 void RunSuppressorTests();
+void RunBinauralTests();
 
 namespace
 {
@@ -57,6 +59,21 @@ void TestRuntimeConfigDuplicateChannelFails()
     threw = true;
   }
   Require(threw, "duplicate channel map should throw");
+}
+
+void TestRuntimeConfigUnknownBinauralBackendFails()
+{
+  bool threw = false;
+  try
+  {
+    (void)sonitude::app::LoadRuntimeConfigFromFile(
+        FixturePath("tests/fixtures/runtime_invalid_binaural_backend.yaml"));
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "unknown binaural backend should throw");
 }
 
 void TestRuntimeAudioContract()
@@ -242,6 +259,7 @@ int main()
   {
     TestRuntimeConfigValid();
     TestRuntimeConfigDuplicateChannelFails();
+    TestRuntimeConfigUnknownBinauralBackendFails();
     TestRuntimeAudioContract();
     TestRuntimeAudioContractHeadroom();
     TestGeometryValid();
@@ -254,6 +272,8 @@ int main()
     RunBeamformerTests();
     RunSuppressorTests();
     RunLimiterTests();
+    RunStereoLimiterTests();
+    RunBinauralTests();
     RunSnapshotTests();
     RunOdasParserTests();
     RunControlLoopTests();

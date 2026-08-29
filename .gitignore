@@ -1,5 +1,6 @@
 # Build outputs
 /build/
+/build-asan/
 /out/
 
 # IDE and editor files
@@ -10,3 +11,17 @@
 # OS files
 Thumbs.db
 .DS_Store
+
+# Test bench (testbench/) — Python runtime artifacts and generated test data
+testbench/.venv/
+testbench/venv/
+testbench/__pycache__/
+testbench/**/__pycache__/
+testbench/.pytest_cache/
+testbench/data/
+
+# Large HRTF source datasets are fetched into local cache only.
+data/hrtf_cache/
+
+# Local capture files for test-bench replay (large; do not commit)
+/test_data/

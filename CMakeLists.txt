@@ -10,6 +10,7 @@ project(
 option(SONITUDE_BUILD_TESTS "Build Sonitude unit tests" ON)
 option(SONITUDE_FETCH_DEPS "Fetch dependencies when not found locally" ON)
 option(SONITUDE_WITH_LIBSAMPLERATE "Enable libsamplerate-backed resampler" ON)
+option(SONITUDE_ENABLE_SANITIZERS "Enable address/UB sanitizers" OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   option(SONITUDE_WITH_ALSA "Enable ALSA audio modules" ON)
 else()
@@ -40,7 +41,9 @@ add_library(
   src/control/conversation_state_machine.cpp
   src/control/zones.cpp
   src/dsp/beamformer.cpp
+  src/dsp/binaural_renderer.cpp
   src/dsp/calibration_applier.cpp
+  src/dsp/hrtf_table.cpp
   src/dsp/limiter.cpp
   src/dsp/resampler_linear.cpp
   src/dsp/resampler_cubic.cpp
@@ -246,6 +249,26 @@ target_link_libraries(
     sonitude_core
 )
 
+add_executable(
+  sonitude_stream_process
+  src/tools/stream_process.cpp
+)
+target_link_libraries(
+  sonitude_stream_process
+  PRIVATE
+    sonitude_core
+)
+
+add_executable(
+  sonitude_binaural_bench
+  src/tools/binaural_bench.cpp
+)
+target_link_libraries(
+  sonitude_binaural_bench
+  PRIVATE
+    sonitude_core
+)
+
 if(SONITUDE_BUILD_TESTS)
   enable_testing()
 
@@ -258,7 +281,9 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/calibration_tests.cpp
     tests/unit/beamformer_tests.cpp
     tests/unit/limiter_tests.cpp
+    tests/unit/stereo_limiter_tests.cpp
     tests/unit/snapshot_tests.cpp
+    tests/unit/binaural_tests.cpp
     tests/unit/suppressor_tests.cpp
     tests/unit/odas_parser_tests.cpp
     tests/unit/control_loop_tests.cpp
@@ -287,4 +312,9 @@ if(SONITUDE_BUILD_TESTS)
     NAME sonitude_unit_tests
     COMMAND sonitude_unit_tests
   )
+
+  if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
+    target_compile_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined)
+  endif()
 endif()

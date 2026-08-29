@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <cmath>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -117,6 +119,44 @@ void TestClickFreeRetarget()
   Require(jump < 0.8, "retargeting introduced click-like discontinuity");
 }
 
+void TestRepeatedIdenticalSetTargetSettles()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr float kTransitionMs = 150.0F;
+  const std::size_t ramp =
+      std::max<std::size_t>(1U, static_cast<std::size_t>((kTransitionMs * 0.001F) * kFs));
+  const std::size_t frames = ramp + 512;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  const auto source = sonitude::tests::support::GenerateSine(frames, kFs, 600.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::DelaySumBeamformer settled;
+  settled.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  settled.setTarget({45.0F, 0.0F});
+  std::vector<float> settled_out(frames, 0.0F);
+  settled.process(std::span<const sonitude::audio::MicFrame>(mic.data(), frames),
+                  std::span<float>(settled_out.data(), frames));
+
+  sonitude::dsp::DelaySumBeamformer live;
+  live.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  std::vector<float> live_out(frames, 0.0F);
+  for (std::size_t start = 0; start < frames; start += 256)
+  {
+    live.setTarget({45.0F, 0.0F});
+    const std::size_t count = std::min<std::size_t>(256, frames - start);
+    live.process(std::span<const sonitude::audio::MicFrame>(mic.data() + start, count),
+                 std::span<float>(live_out.data() + start, count));
+  }
+  for (std::size_t i = ramp; i < frames; ++i)
+  {
+    Require(std::fabs(live_out[i] - settled_out[i]) < 1e-5F,
+            "repeated identical setTarget must not restart the beamformer crossfade");
+  }
+}
+
 void TestCalibrationDelayClosure()
 {
   constexpr std::uint32_t kFs = 16000;
@@ -182,11 +222,49 @@ void TestCalibrationDelayClosure()
   Require(with_cal_err < no_cal_err,
           "calibration delay correction should move beam output toward ideal alignment");
 }
+
+void TestLeftRightAzimuthConvention()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 4096;
+  const auto geometry = BuildGeometry();
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, -90.0F, 0.0F, 343.0F);
+
+  // In the head frame, azimuth -90 deg is listener-left and should arrive at
+  // the left-side microphone before the right-side microphone.
+  double lead_sum = 0.0;
+  for (std::size_t i = 1; i < kFrames; ++i)
+  {
+    lead_sum += static_cast<double>(mic[i][4]) * static_cast<double>(mic[i - 1][5]);
+    lead_sum -= static_cast<double>(mic[i][5]) * static_cast<double>(mic[i - 1][4]);
+  }
+  Require(lead_sum > 0.0, "left-side source should lead at left ear channel");
+
+  sonitude::dsp::DelaySumBeamformer left_steer;
+  left_steer.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  left_steer.setTarget({-90.0F, 0.0F});
+  std::vector<float> out_left(kFrames, 0.0F);
+  left_steer.process(mic, out_left);
+
+  sonitude::dsp::DelaySumBeamformer right_steer;
+  right_steer.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  right_steer.setTarget({90.0F, 0.0F});
+  std::vector<float> out_right(kFrames, 0.0F);
+  right_steer.process(mic, out_right);
+
+  const double left_rms = sonitude::tests::support::ComputeRms(out_left, 512);
+  const double right_rms = sonitude::tests::support::ComputeRms(out_right, 512);
+  Require(left_rms > right_rms * 1.2, "listener-left steering should beat listener-right steering");
+}
 }  // namespace
 
 void RunBeamformerTests()
 {
   TestAlignmentBeatsOffAxis();
   TestClickFreeRetarget();
+  TestRepeatedIdenticalSetTargetSettles();
   TestCalibrationDelayClosure();
+  TestLeftRightAzimuthConvention();
 }

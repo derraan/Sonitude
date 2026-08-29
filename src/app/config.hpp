@@ -87,6 +87,40 @@ struct TelemetryConfig
   std::uint32_t stats_period_ms = 1000;
 };
 
+struct BinauralDirectionConfig
+{
+  bool follow_steering = false;
+  float azimuth_deg = 0.0F;
+  float elevation_deg = 0.0F;
+};
+
+struct BinauralTransitionConfig
+{
+  float duration_ms = 150.0F;
+};
+
+struct BinauralProfileConfig
+{
+  std::string id = "generic";
+  std::string table_path;
+};
+
+struct BinauralModelConfig
+{
+  float head_radius_m = 0.0875F;
+  float max_ild_db = 6.0F;
+};
+
+struct BinauralConfig
+{
+  bool enabled = false;
+  std::string backend = "mono_reference";
+  BinauralDirectionConfig direction;
+  BinauralTransitionConfig transition;
+  BinauralProfileConfig profile;
+  BinauralModelConfig model;
+};
+
 struct RuntimeConfig
 {
   DeviceConfig capture;
@@ -101,6 +135,7 @@ struct RuntimeConfig
   StateMachineConfig state_machine;
   OdasConfig odas;
   TelemetryConfig telemetry;
+  BinauralConfig binaural;
   std::vector<ZoneConfig> zones;
 };
 

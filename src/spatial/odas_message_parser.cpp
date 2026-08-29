@@ -148,7 +148,7 @@ std::vector<SourceObservation> OdasMessageParser::parseOneObject(const std::stri
         extractNumber(src_obj, "y", y) && extractNumber(src_obj, "z", z) &&
         extractNumber(src_obj, "activity", activity))
     {
-      const double az = std::atan2(y, x) * (180.0 / kPi);
+      const double az = std::atan2(x, y) * (180.0 / kPi);
       const double xy = std::sqrt((x * x) + (y * y));
       const double el = std::atan2(z, xy) * (180.0 / kPi);
       obs.source_id = id;
