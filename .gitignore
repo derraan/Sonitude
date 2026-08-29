@@ -10,3 +10,11 @@
 # OS files
 Thumbs.db
 .DS_Store
+
+# Test bench (testbench/) — Python runtime artifacts and generated test data
+testbench/.venv/
+testbench/venv/
+testbench/__pycache__/
+testbench/**/__pycache__/
+testbench/.pytest_cache/
+testbench/data/

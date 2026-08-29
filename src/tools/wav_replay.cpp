@@ -29,7 +29,15 @@ void PrintUsage()
   std::cout << "Usage:\n"
             << "  sonitude_wav_replay --input <six_channel_wav> --config <runtime_yaml>\n"
             << "                      --script <steering_csv> --output <mono_wav>\n"
-            << "                      [--enable-suppression] [--disable-limiter]\n";
+            << "                      [--enable-suppression] [--disable-limiter]\n"
+            << "                      [--output-beamformed <mono_wav>]\n"
+            << "                      [--output-suppressed <mono_wav>]\n"
+            << "\n"
+            << "  --output-beamformed writes the mono signal immediately after the\n"
+            << "  beamformer, before suppression or limiting are applied.\n"
+            << "  --output-suppressed writes the mono signal after suppression (if\n"
+            << "  enabled) but before limiting. Both are diagnostic taps only; they do\n"
+            << "  not change the final --output render.\n";
 }
 
 std::vector<SteeringEvent> LoadSteeringScript(const std::string& path, const std::uint32_t sample_rate_hz)
@@ -85,6 +93,8 @@ int main(int argc, char** argv)
   std::string config_path = "config/default.yaml";
   std::string script_path;
   std::string output_path;
+  std::string output_beamformed_path;
+  std::string output_suppressed_path;
   bool enable_suppression = false;
   bool disable_limiter = false;
 
@@ -106,6 +116,14 @@ int main(int argc, char** argv)
     else if (arg == "--output" && i + 1 < argc)
     {
       output_path = argv[++i];
+    }
+    else if (arg == "--output-beamformed" && i + 1 < argc)
+    {
+      output_beamformed_path = argv[++i];
+    }
+    else if (arg == "--output-suppressed" && i + 1 < argc)
+    {
+      output_suppressed_path = argv[++i];
     }
     else if (arg == "--help")
     {
@@ -191,6 +209,17 @@ int main(int argc, char** argv)
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
 
     std::vector<float> mono(frames, 0.0F);
+    std::vector<float> beamformed_tap;
+    std::vector<float> suppressed_tap;
+    if (!output_beamformed_path.empty())
+    {
+      beamformed_tap.resize(frames, 0.0F);
+    }
+    if (!output_suppressed_path.empty())
+    {
+      suppressed_tap.resize(frames, 0.0F);
+    }
+
     std::size_t event_index = 1;
     constexpr std::size_t kBlock = 256;
     for (std::size_t start = 0; start < frames; start += kBlock)
@@ -203,10 +232,22 @@ int main(int argc, char** argv)
       const std::size_t count = std::min(kBlock, frames - start);
       beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
                          std::span<float>(mono.data() + start, count));
+      if (!beamformed_tap.empty())
+      {
+        std::copy(mono.begin() + static_cast<std::ptrdiff_t>(start),
+                  mono.begin() + static_cast<std::ptrdiff_t>(start + count),
+                  beamformed_tap.begin() + static_cast<std::ptrdiff_t>(start));
+      }
       if (enable_suppression)
       {
         suppressor.setControl(true, 1.0F);
         suppressor.process(std::span<float>(mono.data() + start, count));
+      }
+      if (!suppressed_tap.empty())
+      {
+        std::copy(mono.begin() + static_cast<std::ptrdiff_t>(start),
+                  mono.begin() + static_cast<std::ptrdiff_t>(start + count),
+                  suppressed_tap.begin() + static_cast<std::ptrdiff_t>(start));
       }
       if (!disable_limiter)
       {
@@ -221,6 +262,27 @@ int main(int argc, char** argv)
     out.interleaved = std::move(mono);
     sonitude::audio::WriteWavFile(output_path, out);
     std::cout << "Rendered beamformed WAV to " << output_path << '\n';
+
+    if (!beamformed_tap.empty())
+    {
+      sonitude::audio::WavData tap;
+      tap.sample_rate_hz = input_wav.sample_rate_hz;
+      tap.channels = 1;
+      tap.format = sonitude::audio::PcmFormat::FLOAT32_LE;
+      tap.interleaved = std::move(beamformed_tap);
+      sonitude::audio::WriteWavFile(output_beamformed_path, tap);
+      std::cout << "Wrote pre-suppression beamformed tap to " << output_beamformed_path << '\n';
+    }
+    if (!suppressed_tap.empty())
+    {
+      sonitude::audio::WavData tap;
+      tap.sample_rate_hz = input_wav.sample_rate_hz;
+      tap.channels = 1;
+      tap.format = sonitude::audio::PcmFormat::FLOAT32_LE;
+      tap.interleaved = std::move(suppressed_tap);
+      sonitude::audio::WriteWavFile(output_suppressed_path, tap);
+      std::cout << "Wrote pre-limiter tap to " << output_suppressed_path << '\n';
+    }
     return 0;
   }
   catch (const std::exception& ex)

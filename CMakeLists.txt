@@ -246,6 +246,16 @@ target_link_libraries(
     sonitude_core
 )
 
+add_executable(
+  sonitude_stream_process
+  src/tools/stream_process.cpp
+)
+target_link_libraries(
+  sonitude_stream_process
+  PRIVATE
+    sonitude_core
+)
+
 if(SONITUDE_BUILD_TESTS)
   enable_testing()
 
