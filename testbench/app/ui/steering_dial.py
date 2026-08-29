@@ -43,10 +43,9 @@ class SteeringDial(QWidget):
         return self._width_deg
 
     def set_width_deg(self, width_deg: float) -> None:
-        """Show the directivity-blend "width" as a shaded wedge around the
-        commanded needle (see app/storage/models.SteeringEvent for what
-        width_deg means — it's a test-bench-defined blend, not a native
-        beamformer parameter)."""
+        """Show the directional/omni blend as a shaded wedge around the
+        commanded needle. This is a mix toward the six-microphone average,
+        not a measured physical beamwidth / HPBW."""
         self._width_deg = max(0.0, min(_MAX_WIDTH_DEG, width_deg))
         self.update()
 

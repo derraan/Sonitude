@@ -1,40 +1,43 @@
-// sonitude_stream_process — portable block-streaming adapter around the existing
-// calibration -> beamformer -> suppressor -> limiter chain (the same objects used by
-// sonitude_realtime and sonitude_wav_replay). It performs no device I/O of its own:
-// it reads framed 6-channel PCM blocks from stdin and writes framed stereo PCM blocks
-// to stdout, so any caller (e.g. the Python test bench driving a microphone/speaker via
-// sounddevice) can push live audio through the unmodified DSP chain without linking
-// against it directly or reimplementing any of the algorithm.
+// sonitude_stream_process — framed stdin/stdout adapter around the existing
+// calibration -> beamformer -> suppressor -> limiter chain, plus optional
+// binaural rendering.
 //
-// Wire protocol (all fields little-endian, binary stdin/stdout):
+// Protocol v2 (little-endian). See testbench/app/processing/protocol.py.
 //
-//   Input block (host -> this process), repeated until a frame_count == 0 block:
-//     u32 magic            = kInputMagic
-//     u32 frame_count
-//     f32 azimuth_deg
-//     f32 elevation_deg
-//     f32 width_deg          (0..kMaxWidthDeg; see below)
-//     u8  suppression_focus_active (0 or 1)
-//     u8  reserved[3]
-//     f32 pcm[frame_count * kMicChannels]   // interleaved, range [-1, 1]
+// Input header (48 bytes):
+//   u32 magic              = 0x32424253 ("SBB2")
+//   u16 protocol_version   = 2
+//   u16 message_type       = AUDIO_BLOCK(1) | SHUTDOWN(2)
+//   u32 sequence
+//   u32 frame_count
+//   u32 flags
+//   u32 payload_length     = frame_count * 6 * sizeof(float) for AUDIO_BLOCK
+//   f32 azimuth_deg
+//   f32 elevation_deg
+//   f32 directivity_blend_deg   // 0..180 mix toward 6-mic average; NOT HPBW
+//   f32 binaural_azimuth_deg
+//   f32 binaural_elevation_deg
+//   u8  binaural_backend
+//   u8  reserved[3]
+//   f32 pcm[frame_count * 6]    // only if payload_length > 0
 //
-//   Output block (this process -> host), one per input block:
-//     u32 magic            = kOutputMagic
-//     u32 frame_count
-//     f32 pcm[frame_count * 2]              // interleaved stereo L/R
+// Output header (24 bytes):
+//   u32 magic              = 0x324F4253 ("SBO2")
+//   u16 protocol_version   = 2
+//   u16 message_type
+//   u32 sequence           // echoes the request
+//   u32 frame_count
+//   u32 flags
+//   u32 payload_length
+//   f32 pcm[frame_count * 2]
 //
-// A frame_count of 0 in an input block is a clean shutdown request; this process exits 0.
-// Any framing/magic mismatch is treated as a fatal protocol error.
+// Input flags: bit0 suppression_focus, bit1 binaural_enabled, bit2 follow_steering
+// Output flags: bit0 suppression_applied, bit1 binaural_applied,
+//               bit2 binaural_unavailable, bit3 mono_reference
 //
-// width_deg: DelaySumBeamformer has no native "beam width" parameter (a
-// fixed delay-and-sum array has a fixed spatial response). This tool defines
-// width as a directivity blend applied to its own beamformer output: the
-// mono beam is linearly blended toward a simple omnidirectional average of
-// the six calibrated mic channels, in proportion to width_deg / kMaxWidthDeg.
-// 0 = fully directional (unchanged from before width existed), kMaxWidthDeg
-// = fully omnidirectional. See testbench/README.md, "Steering width
-// definition" for the rationale; sonitude_wav_replay applies the identical
-// blend for batch mode.
+// Backends: 0 none, 1 mono_reference, 2 itd_ild, 3 compact_hrtf, 4 full_hrtf_reference.
+// Requesting an unimplemented or unloadable backend sets BINAURAL_UNAVAILABLE
+// and emits L=R of directional mono (protocol-defined fallback).
 
 #include <algorithm>
 #include <cmath>
@@ -65,50 +68,197 @@
 
 namespace
 {
-constexpr std::uint32_t kInputMagic = 0x31424253U;   // "SBB1" little-endian on disk
-constexpr std::uint32_t kInputMagicV2 = 0x32424253U; // "SBB2" little-endian on disk
-constexpr std::uint32_t kOutputMagic = 0x314F4253U;  // "SBO1" little-endian on disk
-constexpr float kMaxWidthDeg = 180.0F;               // matches sonitude_wav_replay's kMaxWidthDeg
+constexpr std::uint32_t kInputMagic = 0x32424253U;
+constexpr std::uint32_t kOutputMagic = 0x324F4253U;
+constexpr std::uint16_t kProtocolVersion = 2;
+constexpr std::uint16_t kMsgAudioBlock = 1;
+constexpr std::uint16_t kMsgShutdown = 2;
+constexpr std::uint16_t kMsgError = 3;
+constexpr float kMaxBlendDeg = 180.0F;
+constexpr std::uint32_t kFlagSuppressionFocus = 1U << 0;
+constexpr std::uint32_t kFlagBinauralEnabled = 1U << 1;
+constexpr std::uint32_t kFlagBinauralFollowSteering = 1U << 2;
+constexpr std::uint32_t kOutSuppressionApplied = 1U << 0;
+constexpr std::uint32_t kOutBinauralApplied = 1U << 1;
+constexpr std::uint32_t kOutBinauralUnavailable = 1U << 2;
+constexpr std::uint32_t kOutMonoReference = 1U << 3;
+constexpr std::uint8_t kBackendNone = 0;
+constexpr std::uint8_t kBackendMonoReference = 1;
+constexpr std::uint8_t kBackendItdIld = 2;
+constexpr std::uint8_t kBackendCompactHrtf = 3;
+constexpr std::uint8_t kBackendFullHrtfReference = 4;
 
-sonitude::dsp::BinauralBackend ParseBinauralBackendByte(const std::uint8_t value)
+enum class SuppressionMode
 {
-  switch (value)
-  {
-    case 0:
-      return sonitude::dsp::BinauralBackend::MonoReference;
-    case 1:
-      return sonitude::dsp::BinauralBackend::ItdIld;
-    case 2:
-      return sonitude::dsp::BinauralBackend::CompactHrtf;
-    case 3:
-      return sonitude::dsp::BinauralBackend::FullHrtfReference;
-    default:
-      throw std::runtime_error("Unknown binaural backend byte");
-  }
-}
+  Auto,
+  On,
+  Off
+};
+
+struct BinauralRuntime
+{
+  std::unique_ptr<sonitude::dsp::HrtfTable> compact_table;
+  std::unique_ptr<sonitude::dsp::HrtfTable> reference_table;
+  sonitude::dsp::BinauralRenderer renderer;
+  sonitude::dsp::StereoPeakLimiter stereo_limiter;
+  bool renderer_configured = false;
+  bool stereo_limiter_configured = false;
+  sonitude::dsp::BinauralBackend configured_backend = sonitude::dsp::BinauralBackend::MonoReference;
+};
 
 void PrintUsage()
 {
   std::cout << "Usage:\n"
             << "  sonitude_stream_process --config <runtime_yaml>\n"
             << "                          [--sample-rate <hz>] [--max-block-frames <n>]\n"
-            << "                          [--enable-suppression] [--disable-limiter]\n"
-            << "\n"
-            << "  Reads framed 6-channel PCM blocks from stdin, runs them through the\n"
-            << "  existing calibration/beamformer/suppressor/limiter chain, and writes\n"
-            << "  framed stereo PCM blocks to stdout. See file header for wire format,\n"
-            << "  including the per-block width_deg directivity-blend parameter.\n";
+            << "                          [--suppression auto|on|off]\n"
+            << "                          [--enable-suppression] [--disable-suppression]\n"
+            << "                          [--disable-limiter]\n"
+            << "                          [--capabilities]\n";
+}
+
+void PrintCapabilities()
+{
+  std::cout << "{"
+            << "\"protocol_version\":2,"
+            << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"]},"
+            << "\"taps\":[\"processed\"],"
+            << "\"binaural\":{"
+            << "\"available\":true,"
+            << "\"backends\":[\"mono_reference\",\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
+            << "\"unavailable_backends\":[],"
+            << "\"note\":\"ITD/ILD and SADIE II D2 HRTF tables are implemented. "
+               "Unavailable at runtime only if the requested HRTF table cannot be loaded.\""
+            << "}"
+            << "}\n";
 }
 
 bool ReadExact(std::istream& in, void* dest, const std::size_t bytes)
 {
   in.read(reinterpret_cast<char*>(dest), static_cast<std::streamsize>(bytes));
-  return static_cast<bool>(in);
+  return static_cast<bool>(in) && in.gcount() == static_cast<std::streamsize>(bytes);
 }
 
 void WriteExact(std::ostream& out, const void* src, const std::size_t bytes)
 {
   out.write(reinterpret_cast<const char*>(src), static_cast<std::streamsize>(bytes));
+}
+
+SuppressionMode ParseSuppressionMode(const std::string& value)
+{
+  if (value == "on" || value == "enable" || value == "enabled")
+  {
+    return SuppressionMode::On;
+  }
+  if (value == "off" || value == "disable" || value == "disabled")
+  {
+    return SuppressionMode::Off;
+  }
+  return SuppressionMode::Auto;
+}
+
+bool ResolveSuppression(const SuppressionMode mode, const bool yaml_enabled)
+{
+  if (mode == SuppressionMode::On)
+  {
+    return true;
+  }
+  if (mode == SuppressionMode::Off)
+  {
+    return false;
+  }
+  return yaml_enabled;
+}
+
+std::string SiblingFile(const std::string& path, const std::string& filename)
+{
+  const auto pos = path.find_last_of("/\\");
+  if (pos == std::string::npos)
+  {
+    return filename;
+  }
+  return path.substr(0, pos + 1U) + filename;
+}
+
+std::unique_ptr<sonitude::dsp::HrtfTable> TryLoadHrtfTable(const std::string& path)
+{
+  if (path.empty())
+  {
+    return {};
+  }
+  try
+  {
+    return std::make_unique<sonitude::dsp::HrtfTable>(sonitude::dsp::LoadHrtfTableFromFile(path));
+  }
+  catch (const std::exception& ex)
+  {
+    std::cerr << "stream_process: HRTF table not loaded from " << path << ": " << ex.what() << '\n';
+    return {};
+  }
+}
+
+bool BackendFromByte(const std::uint8_t value, sonitude::dsp::BinauralBackend& backend)
+{
+  switch (value)
+  {
+    case kBackendNone:
+    case kBackendMonoReference:
+      backend = sonitude::dsp::BinauralBackend::MonoReference;
+      return true;
+    case kBackendItdIld:
+      backend = sonitude::dsp::BinauralBackend::ItdIld;
+      return true;
+    case kBackendCompactHrtf:
+      backend = sonitude::dsp::BinauralBackend::CompactHrtf;
+      return true;
+    case kBackendFullHrtfReference:
+      backend = sonitude::dsp::BinauralBackend::FullHrtfReference;
+      return true;
+    default:
+      return false;
+  }
+}
+
+const sonitude::dsp::HrtfTable* TableFor(const BinauralRuntime& runtime,
+                                         const sonitude::dsp::BinauralBackend backend)
+{
+  if (backend == sonitude::dsp::BinauralBackend::CompactHrtf)
+  {
+    return runtime.compact_table.get();
+  }
+  if (backend == sonitude::dsp::BinauralBackend::FullHrtfReference)
+  {
+    return runtime.reference_table.get();
+  }
+  return nullptr;
+}
+
+bool BackendReady(const BinauralRuntime& runtime, const sonitude::dsp::BinauralBackend backend)
+{
+  if (backend == sonitude::dsp::BinauralBackend::CompactHrtf)
+  {
+    return runtime.compact_table && !runtime.compact_table->empty();
+  }
+  if (backend == sonitude::dsp::BinauralBackend::FullHrtfReference)
+  {
+    return runtime.reference_table && !runtime.reference_table->empty();
+  }
+  return true;
+}
+
+std::string AvailableBackendsJson(const BinauralRuntime& runtime)
+{
+  std::string json = "[\"mono_reference\",\"itd_ild\"";
+  if (runtime.compact_table && !runtime.compact_table->empty())
+  {
+    json += ",\"compact_hrtf\"";
+  }
+  if (runtime.reference_table && !runtime.reference_table->empty())
+  {
+    json += ",\"full_hrtf_reference\"";
+  }
+  json += "]";
+  return json;
 }
 }  // namespace
 
@@ -117,7 +267,7 @@ int main(int argc, char** argv)
   std::string config_path = "config/default.yaml";
   std::uint32_t sample_rate_override = 0;
   std::size_t max_block_frames = 8192;
-  bool enable_suppression = false;
+  SuppressionMode suppression_mode = SuppressionMode::Auto;
   bool disable_limiter = false;
 
   for (int i = 1; i < argc; ++i)
@@ -135,13 +285,26 @@ int main(int argc, char** argv)
     {
       max_block_frames = static_cast<std::size_t>(std::stoul(argv[++i]));
     }
+    else if (arg == "--suppression" && i + 1 < argc)
+    {
+      suppression_mode = ParseSuppressionMode(argv[++i]);
+    }
     else if (arg == "--enable-suppression")
     {
-      enable_suppression = true;
+      suppression_mode = SuppressionMode::On;
+    }
+    else if (arg == "--disable-suppression")
+    {
+      suppression_mode = SuppressionMode::Off;
     }
     else if (arg == "--disable-limiter")
     {
       disable_limiter = true;
+    }
+    else if (arg == "--capabilities")
+    {
+      PrintCapabilities();
+      return 0;
     }
     else if (arg == "--help")
     {
@@ -183,7 +346,7 @@ int main(int argc, char** argv)
     sonitude::dsp::DelaySumBeamformer beamformer;
     beamformer.configure(geometry, runtime.steering, calibration, sample_rate_hz, max_block_frames);
 
-    const bool suppression_enabled = enable_suppression || runtime.suppression.enabled;
+    const bool suppression_enabled = ResolveSuppression(suppression_mode, runtime.suppression.enabled);
     sonitude::dsp::ConservativeSuppressor suppressor;
     suppressor.configure(
         {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
@@ -193,59 +356,23 @@ int main(int argc, char** argv)
         sample_rate_hz);
 
     sonitude::dsp::PeakLimiter limiter;
-    sonitude::dsp::StereoPeakLimiter stereo_limiter;
-    const bool runtime_binaural_enabled = runtime.binaural.enabled;
-    std::unique_ptr<sonitude::dsp::HrtfTable> runtime_hrtf_table;
-    sonitude::dsp::BinauralRenderer runtime_binaural;
-    if (runtime_binaural_enabled)
+    limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, sample_rate_hz);
+
+    BinauralRuntime binaural_runtime;
+    binaural_runtime.compact_table = TryLoadHrtfTable(runtime.binaural.profile.table_path);
+    if (!runtime.binaural.profile.table_path.empty())
     {
-      sonitude::dsp::BinauralBackend backend = sonitude::dsp::BinauralBackend::MonoReference;
-      if (runtime.binaural.backend == "mono_reference")
-      {
-        backend = sonitude::dsp::BinauralBackend::MonoReference;
-      }
-      else if (runtime.binaural.backend == "itd_ild")
-      {
-        backend = sonitude::dsp::BinauralBackend::ItdIld;
-      }
-      else if (runtime.binaural.backend == "compact_hrtf")
-      {
-        backend = sonitude::dsp::BinauralBackend::CompactHrtf;
-      }
-      else if (runtime.binaural.backend == "full_hrtf_reference")
-      {
-        backend = sonitude::dsp::BinauralBackend::FullHrtfReference;
-      }
-      else
-      {
-        throw std::runtime_error("Unknown binaural backend: " + runtime.binaural.backend);
-      }
-      if (backend == sonitude::dsp::BinauralBackend::CompactHrtf ||
-          backend == sonitude::dsp::BinauralBackend::FullHrtfReference)
-      {
-        if (runtime.binaural.profile.table_path.empty())
-        {
-          throw std::runtime_error("binaural.profile.table_path is required for HRTF backend");
-        }
-        runtime_hrtf_table = std::make_unique<sonitude::dsp::HrtfTable>(
-            sonitude::dsp::LoadHrtfTableFromFile(runtime.binaural.profile.table_path));
-      }
-      runtime_binaural.configure({.sample_rate_hz = sample_rate_hz,
-                                  .backend = backend,
-                                  .transition_ms = runtime.binaural.transition.duration_ms,
-                                  .max_block_frames = max_block_frames,
-                                  .itd_ild = {.head_radius_m = runtime.binaural.model.head_radius_m,
-                                              .max_ild_db = runtime.binaural.model.max_ild_db},
-                                  .table = runtime_hrtf_table.get()});
-      runtime_binaural.setDirection({runtime.binaural.direction.azimuth_deg,
-                                     runtime.binaural.direction.elevation_deg});
-      stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, sample_rate_hz);
-    }
-    else
-    {
-      limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, sample_rate_hz);
+      binaural_runtime.reference_table =
+          TryLoadHrtfTable(SiblingFile(runtime.binaural.profile.table_path, "reference.shrf"));
     }
 
+    const char* requested = suppression_mode == SuppressionMode::On
+                                ? "on"
+                                : (suppression_mode == SuppressionMode::Off ? "off" : "auto");
+    std::cerr << "sonitude_resolved {\"protocol_version\":2,\"suppression_requested\":\"" << requested
+              << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
+              << ",\"limiter_disabled\":" << (disable_limiter ? "true" : "false")
+              << ",\"binaural_backends\":" << AvailableBackendsJson(binaural_runtime) << "}\n";
     std::cerr << "sonitude_stream_process ready: sample_rate_hz=" << sample_rate_hz
               << " suppression=" << (suppression_enabled ? "on" : "off")
               << " limiter=" << (disable_limiter ? "off" : "on") << '\n';
@@ -253,83 +380,103 @@ int main(int argc, char** argv)
     std::vector<sonitude::audio::MicFrame> mic_frames;
     std::vector<sonitude::audio::MicFrame> calibrated_frames;
     std::vector<float> mono;
-    std::vector<float> input_pcm;
-    std::vector<float> output_pcm;
     std::vector<float> left;
     std::vector<float> right;
+    std::vector<float> input_pcm;
+    std::vector<float> output_pcm;
     bool have_target = false;
     sonitude::audio::BeamformerSteering last_target{};
+    std::uint32_t expected_sequence = 0;
+    bool have_sequence = false;
 
     while (true)
     {
       std::uint32_t magic = 0;
       if (!ReadExact(std::cin, &magic, sizeof(magic)))
       {
-        break;  // stdin closed: treat as shutdown.
+        break;
       }
-      if (magic != kInputMagic && magic != kInputMagicV2)
+      if (magic != kInputMagic)
       {
-        std::cerr << "stream_process: bad input magic, aborting\n";
+        std::cerr << "stream_process: invalid magic, aborting\n";
         return 1;
       }
-      const bool use_v2 = (magic == kInputMagicV2);
 
+      std::uint16_t version = 0;
+      std::uint16_t message_type = 0;
+      std::uint32_t sequence = 0;
       std::uint32_t frame_count = 0;
+      std::uint32_t flags = 0;
+      std::uint32_t payload_length = 0;
       float azimuth_deg = 0.0F;
       float elevation_deg = 0.0F;
-      float width_deg = 0.0F;
-      std::uint8_t suppression_focus_active = 0;
-      std::uint8_t reserved[3] = {0, 0, 0};
-      std::uint8_t binaural_enabled = 0;
+      float blend_deg = 0.0F;
+      float binaural_az = 0.0F;
+      float binaural_el = 0.0F;
       std::uint8_t binaural_backend = 0;
-      std::uint8_t binaural_follow_steering = 1;
-      std::uint8_t binaural_reserved = 0;
-      float binaural_azimuth_deg = 0.0F;
-      float binaural_elevation_deg = 0.0F;
-      if (!ReadExact(std::cin, &frame_count, sizeof(frame_count)) ||
+      std::uint8_t reserved[3] = {0, 0, 0};
+      if (!ReadExact(std::cin, &version, sizeof(version)) ||
+          !ReadExact(std::cin, &message_type, sizeof(message_type)) ||
+          !ReadExact(std::cin, &sequence, sizeof(sequence)) ||
+          !ReadExact(std::cin, &frame_count, sizeof(frame_count)) ||
+          !ReadExact(std::cin, &flags, sizeof(flags)) ||
+          !ReadExact(std::cin, &payload_length, sizeof(payload_length)) ||
           !ReadExact(std::cin, &azimuth_deg, sizeof(azimuth_deg)) ||
           !ReadExact(std::cin, &elevation_deg, sizeof(elevation_deg)) ||
-          !ReadExact(std::cin, &width_deg, sizeof(width_deg)) ||
-          !ReadExact(std::cin, &suppression_focus_active, sizeof(suppression_focus_active)) ||
+          !ReadExact(std::cin, &blend_deg, sizeof(blend_deg)) ||
+          !ReadExact(std::cin, &binaural_az, sizeof(binaural_az)) ||
+          !ReadExact(std::cin, &binaural_el, sizeof(binaural_el)) ||
+          !ReadExact(std::cin, &binaural_backend, sizeof(binaural_backend)) ||
           !ReadExact(std::cin, reserved, sizeof(reserved)))
       {
-        std::cerr << "stream_process: truncated block header, aborting\n";
+        std::cerr << "stream_process: truncated header, aborting\n";
         return 1;
       }
-      if (use_v2)
-      {
-        if (!ReadExact(std::cin, &binaural_enabled, sizeof(binaural_enabled)) ||
-            !ReadExact(std::cin, &binaural_backend, sizeof(binaural_backend)) ||
-            !ReadExact(std::cin, &binaural_follow_steering, sizeof(binaural_follow_steering)) ||
-            !ReadExact(std::cin, &binaural_reserved, sizeof(binaural_reserved)) ||
-            !ReadExact(std::cin, &binaural_azimuth_deg, sizeof(binaural_azimuth_deg)) ||
-            !ReadExact(std::cin, &binaural_elevation_deg, sizeof(binaural_elevation_deg)))
-        {
-          std::cerr << "stream_process: truncated v2 extension header, aborting\n";
-          return 1;
-        }
-      }
 
-      if (frame_count == 0)
+      if (version != kProtocolVersion)
       {
-        break;  // clean shutdown request.
+        std::cerr << "stream_process: unsupported protocol version " << version << "\n";
+        return 1;
+      }
+      if (message_type == kMsgShutdown || frame_count == 0)
+      {
+        break;
+      }
+      if (message_type != kMsgAudioBlock)
+      {
+        std::cerr << "stream_process: unknown message type " << message_type << "\n";
+        return 1;
       }
       if (frame_count > max_block_frames)
       {
-        std::cerr << "stream_process: frame_count exceeds --max-block-frames, aborting\n";
+        std::cerr << "stream_process: invalid frame_count, aborting\n";
         return 1;
       }
+      const std::uint32_t expected_payload =
+          frame_count * static_cast<std::uint32_t>(sonitude::audio::kMicChannels) * sizeof(float);
+      if (payload_length != expected_payload)
+      {
+        std::cerr << "stream_process: invalid payload_length, aborting\n";
+        return 1;
+      }
+      if (have_sequence && sequence != expected_sequence)
+      {
+        std::cerr << "stream_process: unexpected sequence " << sequence << " expected " << expected_sequence
+                  << "\n";
+        return 1;
+      }
+      have_sequence = true;
+      expected_sequence = sequence + 1;
 
-      const std::size_t frames = frame_count;
-      input_pcm.assign(frames * sonitude::audio::kMicChannels, 0.0F);
-      if (!ReadExact(std::cin, input_pcm.data(), input_pcm.size() * sizeof(float)))
+      input_pcm.assign(frame_count * sonitude::audio::kMicChannels, 0.0F);
+      if (!ReadExact(std::cin, input_pcm.data(), payload_length))
       {
         std::cerr << "stream_process: truncated PCM payload, aborting\n";
         return 1;
       }
 
-      mic_frames.assign(frames, sonitude::audio::MicFrame{});
-      for (std::size_t i = 0; i < frames; ++i)
+      mic_frames.assign(frame_count, sonitude::audio::MicFrame{});
+      for (std::size_t i = 0; i < frame_count; ++i)
       {
         for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
         {
@@ -337,10 +484,10 @@ int main(int argc, char** argv)
         }
       }
 
-      calibrated_frames.assign(frames, sonitude::audio::MicFrame{});
+      calibrated_frames.assign(frame_count, sonitude::audio::MicFrame{});
       calibration_applier.processBlock(
-          std::span<const sonitude::audio::MicFrame>(mic_frames.data(), frames),
-          std::span<sonitude::audio::MicFrame>(calibrated_frames.data(), frames));
+          std::span<const sonitude::audio::MicFrame>(mic_frames.data(), frame_count),
+          std::span<sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count));
 
       const sonitude::audio::BeamformerSteering target{azimuth_deg, elevation_deg};
       if (!have_target || std::fabs(target.azimuth_deg - last_target.azimuth_deg) > 0.01F ||
@@ -351,15 +498,15 @@ int main(int argc, char** argv)
         have_target = true;
       }
 
-      mono.assign(frames, 0.0F);
-      beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frames),
-                         std::span<float>(mono.data(), frames));
+      mono.assign(frame_count, 0.0F);
+      beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+                         std::span<float>(mono.data(), frame_count));
 
-      const float clamped_width_deg = std::clamp(width_deg, 0.0F, kMaxWidthDeg);
-      if (clamped_width_deg > 0.0F)
+      const float clamped_blend = std::clamp(blend_deg, 0.0F, kMaxBlendDeg);
+      if (clamped_blend > 0.0F)
       {
-        const float blend = clamped_width_deg / kMaxWidthDeg;
-        for (std::size_t i = 0; i < frames; ++i)
+        const float mix = clamped_blend / kMaxBlendDeg;
+        for (std::size_t i = 0; i < frame_count; ++i)
         {
           float omni = 0.0F;
           for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
@@ -367,75 +514,123 @@ int main(int argc, char** argv)
             omni += calibrated_frames[i][ch];
           }
           omni /= static_cast<float>(sonitude::audio::kMicChannels);
-          mono[i] = ((1.0F - blend) * mono[i]) + (blend * omni);
+          mono[i] = ((1.0F - mix) * mono[i]) + (mix * omni);
         }
       }
 
+      std::uint32_t out_flags = 0;
       if (suppression_enabled)
       {
-        suppressor.setControl(suppression_focus_active != 0, suppression_focus_active != 0 ? 1.0F : 0.0F);
-        suppressor.process(std::span<float>(mono.data(), frames));
+        const bool focus_active = (flags & kFlagSuppressionFocus) != 0;
+        suppressor.setControl(focus_active, focus_active ? 1.0F : 0.0F);
+        suppressor.process(std::span<float>(mono.data(), frame_count));
+        out_flags |= kOutSuppressionApplied;
       }
-      const bool effective_binaural_enabled = use_v2 ? (binaural_enabled != 0) : runtime_binaural_enabled;
-      left.assign(frames, 0.0F);
-      right.assign(frames, 0.0F);
-      if (effective_binaural_enabled)
+
+      const bool binaural_requested = (flags & kFlagBinauralEnabled) != 0;
+      const bool follow_steering = (flags & kFlagBinauralFollowSteering) != 0;
+      sonitude::dsp::BinauralBackend backend = sonitude::dsp::BinauralBackend::MonoReference;
+      bool unavailable = false;
+      if (binaural_requested)
       {
-        if (!runtime_binaural_enabled)
+        if (!BackendFromByte(binaural_backend, backend) || !BackendReady(binaural_runtime, backend))
         {
-          std::cerr << "stream_process: binaural requested but runtime config has binaural disabled\n";
-          return 1;
+          unavailable = true;
+          backend = sonitude::dsp::BinauralBackend::MonoReference;
         }
-        sonitude::dsp::BinauralBackend active_backend =
-            runtime_binaural_enabled ? runtime_binaural.resolvedBackend()
-                                     : sonitude::dsp::BinauralBackend::MonoReference;
-        if (use_v2 && runtime_binaural_enabled)
+      }
+
+      if (binaural_requested && !unavailable)
+      {
+        if (!binaural_runtime.renderer_configured || binaural_runtime.configured_backend != backend)
         {
-          const auto requested_backend = ParseBinauralBackendByte(binaural_backend);
-          if (requested_backend != runtime_binaural.resolvedBackend())
+          try
           {
-            std::cerr << "stream_process: requested backend not available, using runtime backend\n";
+            binaural_runtime.renderer.configure(
+                {.sample_rate_hz = sample_rate_hz,
+                 .backend = backend,
+                 .transition_ms = runtime.binaural.transition.duration_ms,
+                 .max_block_frames = max_block_frames,
+                 .itd_ild = {.head_radius_m = runtime.binaural.model.head_radius_m,
+                             .max_ild_db = runtime.binaural.model.max_ild_db},
+                 .table = TableFor(binaural_runtime, backend)});
+            binaural_runtime.configured_backend = backend;
+            binaural_runtime.renderer_configured = true;
+          }
+          catch (const std::exception& ex)
+          {
+            std::cerr << "stream_process: binaural configure failed: " << ex.what() << '\n';
+            unavailable = true;
           }
         }
-        const sonitude::audio::BeamformerSteering binaural_target =
-            (use_v2 && binaural_follow_steering == 0)
-                ? sonitude::audio::BeamformerSteering{binaural_azimuth_deg, binaural_elevation_deg}
-                : target;
-        runtime_binaural.setDirection(binaural_target);
-        runtime_binaural.process(
-            std::span<const float>(mono.data(), frames), std::span<float>(left.data(), frames), std::span<float>(right.data(), frames));
+      }
+
+      left.assign(frame_count, 0.0F);
+      right.assign(frame_count, 0.0F);
+      if (binaural_requested && !unavailable)
+      {
+        const sonitude::audio::BeamformerSteering binaural_dir =
+            follow_steering ? target : sonitude::audio::BeamformerSteering{binaural_az, binaural_el};
+        binaural_runtime.renderer.setDirection(binaural_dir);
+        binaural_runtime.renderer.process(std::span<const float>(mono.data(), frame_count),
+                                          std::span<float>(left.data(), frame_count),
+                                          std::span<float>(right.data(), frame_count));
         if (!disable_limiter)
         {
-          stereo_limiter.process(std::span<float>(left.data(), frames),
-                                 std::span<float>(right.data(), frames));
+          if (!binaural_runtime.stereo_limiter_configured)
+          {
+            binaural_runtime.stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F},
+                                                      sample_rate_hz);
+            binaural_runtime.stereo_limiter_configured = true;
+          }
+          binaural_runtime.stereo_limiter.process(std::span<float>(left.data(), frame_count),
+                                                  std::span<float>(right.data(), frame_count));
         }
-        std::cerr << "binaural backend=" << static_cast<int>(active_backend)
-                  << " az=" << binaural_target.azimuth_deg << " el=" << binaural_target.elevation_deg
-                  << '\n';
+        out_flags |= kOutBinauralApplied;
+        if (backend == sonitude::dsp::BinauralBackend::MonoReference)
+        {
+          out_flags |= kOutMonoReference;
+        }
       }
       else
       {
         if (!disable_limiter)
         {
-          limiter.process(std::span<float>(mono.data(), frames));
+          limiter.process(std::span<float>(mono.data(), frame_count));
         }
-        for (std::size_t i = 0; i < frames; ++i)
+        for (std::size_t i = 0; i < frame_count; ++i)
         {
           left[i] = mono[i];
           right[i] = mono[i];
         }
+        out_flags |= kOutMonoReference;
+        if (unavailable)
+        {
+          out_flags |= kOutBinauralUnavailable;
+        }
+        if (binaural_requested)
+        {
+          out_flags |= kOutBinauralApplied;
+        }
       }
 
-      output_pcm.assign(frames * 2, 0.0F);
-      for (std::size_t i = 0; i < frames; ++i)
+      output_pcm.assign(frame_count * 2, 0.0F);
+      for (std::size_t i = 0; i < frame_count; ++i)
       {
         output_pcm[(i * 2) + 0] = left[i];
         output_pcm[(i * 2) + 1] = right[i];
       }
+      const std::uint32_t out_payload =
+          static_cast<std::uint32_t>(output_pcm.size() * sizeof(float));
 
       WriteExact(std::cout, &kOutputMagic, sizeof(kOutputMagic));
+      WriteExact(std::cout, &kProtocolVersion, sizeof(kProtocolVersion));
+      WriteExact(std::cout, &kMsgAudioBlock, sizeof(kMsgAudioBlock));
+      WriteExact(std::cout, &sequence, sizeof(sequence));
       WriteExact(std::cout, &frame_count, sizeof(frame_count));
-      WriteExact(std::cout, output_pcm.data(), output_pcm.size() * sizeof(float));
+      WriteExact(std::cout, &out_flags, sizeof(out_flags));
+      WriteExact(std::cout, &out_payload, sizeof(out_payload));
+      WriteExact(std::cout, output_pcm.data(), out_payload);
       std::cout.flush();
     }
 

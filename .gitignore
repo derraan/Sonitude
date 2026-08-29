@@ -22,3 +22,6 @@ testbench/data/
 
 # Large HRTF source datasets are fetched into local cache only.
 data/hrtf_cache/
+
+# Local capture files for test-bench replay (large; do not commit)
+/test_data/

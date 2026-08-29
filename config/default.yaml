@@ -79,7 +79,7 @@ binaural:
     duration_ms: 150.0
   profile:
     id: generic_sadie2_d2
-    table_path: "data/hrtf/generic_sadie2_d2/compact_32.shrf"
+    table_path: "../data/hrtf/generic_sadie2_d2/compact_32.shrf"
   model:
     head_radius_m: 0.0875
     max_ild_db: 6.0

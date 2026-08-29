@@ -1,41 +1,35 @@
-"""Adapter around the ``sonitude_stream_process`` real-time streaming CLI tool.
-
-Implements the binary framing protocol documented in
-``src/tools/stream_process.cpp`` over a subprocess's stdin/stdout pipes. Like
-``batch_adapter``, this module contains no DSP — it only frames/unframes PCM
-blocks and drives the subprocess.
-"""
+"""Adapter around sonitude_stream_process using protocol v2."""
 
 from __future__ import annotations
 
-import struct
 import subprocess
+import threading
 from pathlib import Path
 
 import numpy as np
 
+from app.processing.protocol import (
+    BACKEND_NONE,
+    MIC_CHANNELS,
+    MSG_SHUTDOWN,
+    OUTPUT_HEADER,
+    PROTOCOL_VERSION,
+    ProtocolError,
+    assert_response_sequence,
+    backend_id,
+    pack_input_header,
+    unpack_output_header,
+)
 from app.processing.sonitude_binary_locator import find_binary
-
-_INPUT_MAGIC = 0x31424253  # "SBB1"
-_OUTPUT_MAGIC = 0x314F4253  # "SBO1"
-_INPUT_HEADER = struct.Struct("<IIfffB3x")  # magic, frame_count, az, el, width, flag, pad
-_OUTPUT_HEADER = struct.Struct("<II")  # magic, frame_count
-MIC_CHANNELS = 6
-MAX_WIDTH_DEG = 180.0  # matches kMaxWidthDeg in the C++ tools
+from app.processing.suppression import SuppressionMode, cli_args_for, parse_suppression_mode
 
 
-class StreamProtocolError(RuntimeError):
+class StreamProtocolError(ProtocolError):
     """Raised on framing/magic mismatches or unexpected subprocess exit."""
 
 
 class StreamProcessor:
-    """Owns the sonitude_stream_process subprocess for one streaming session.
-
-    Not thread-safe on its own; the caller (RealtimeWorker) is expected to
-    call :meth:`send_block` / :meth:`recv_block` from a single dedicated
-    thread, sequentially (write one block, then read its response) to avoid
-    unbounded pipe buffering.
-    """
+    """Owns the sonitude_stream_process subprocess for one streaming session."""
 
     def __init__(
         self,
@@ -43,7 +37,8 @@ class StreamProcessor:
         *,
         sample_rate_hz: int | None = None,
         max_block_frames: int = 8192,
-        enable_suppression: bool = False,
+        suppression: SuppressionMode | str = SuppressionMode.AUTO,
+        enable_suppression: bool | None = None,
         disable_limiter: bool = False,
         binary_path: str | Path | None = None,
         build_dir: str | Path | None = None,
@@ -52,8 +47,12 @@ class StreamProcessor:
         command = [str(binary), "--config", str(config_path), "--max-block-frames", str(max_block_frames)]
         if sample_rate_hz is not None:
             command += ["--sample-rate", str(sample_rate_hz)]
-        if enable_suppression:
-            command.append("--enable-suppression")
+        mode = parse_suppression_mode(suppression)
+        if enable_suppression is True:
+            mode = SuppressionMode.ON
+        elif enable_suppression is False:
+            mode = SuppressionMode.OFF
+        command += cli_args_for(mode)
         if disable_limiter:
             command.append("--disable-limiter")
 
@@ -65,6 +64,24 @@ class StreamProcessor:
             bufsize=0,
         )
         self.max_block_frames = max_block_frames
+        self.protocol_version = PROTOCOL_VERSION
+        self._next_sequence = 0
+        self._last_sent_sequence: int | None = None
+        self._stderr_chunks: list[str] = []
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
+
+    def _drain_stderr(self) -> None:
+        if self._process.stderr is None:
+            return
+        for line in iter(self._process.stderr.readline, b""):
+            if not line:
+                break
+            text = line.decode("utf-8", "replace") if isinstance(line, bytes) else line
+            self._stderr_chunks.append(text)
+
+    def stderr_text(self) -> str:
+        return "".join(self._stderr_chunks)
 
     def send_block(
         self,
@@ -73,38 +90,61 @@ class StreamProcessor:
         elevation_deg: float,
         suppression_focus_active: bool,
         width_deg: float = 0.0,
-    ) -> None:
-        """Send one 6-channel float32 block, shape (frame_count, 6).
-
-        ``width_deg`` (0-180) is the directivity-blend "beam width" defined in
-        the C++ tools (see src/tools/stream_process.cpp's header comment) —
-        0 is fully directional (the beamformer's own output, unchanged).
-        """
+        *,
+        directivity_blend_deg: float | None = None,
+        binaural_enabled: bool = False,
+        binaural_follow_steering: bool = True,
+        binaural_azimuth_deg: float = 0.0,
+        binaural_elevation_deg: float = 0.0,
+        binaural_backend: str | None = None,
+    ) -> int:
+        """Send one 6-channel float32 block. Returns the sequence number."""
         if self._process.stdin is None:
             raise StreamProtocolError("subprocess stdin is closed")
+        if self._process.poll() is not None:
+            raise StreamProtocolError(
+                f"sonitude_stream_process exited (returncode={self._process.returncode}): {self.stderr_text()}"
+            )
         frame_count = mic_pcm.shape[0]
-        if mic_pcm.shape[1] != MIC_CHANNELS:
-            raise ValueError(f"expected {MIC_CHANNELS} channels, got {mic_pcm.shape[1]}")
-        clamped_width = max(0.0, min(MAX_WIDTH_DEG, float(width_deg)))
-        header = _INPUT_HEADER.pack(
-            _INPUT_MAGIC, frame_count, float(azimuth_deg), float(elevation_deg), clamped_width,
-            1 if suppression_focus_active else 0,
-        )
+        if mic_pcm.ndim != 2 or mic_pcm.shape[1] != MIC_CHANNELS:
+            raise ValueError(f"expected (frames, {MIC_CHANNELS}), got {mic_pcm.shape}")
+        blend = width_deg if directivity_blend_deg is None else directivity_blend_deg
         payload = np.ascontiguousarray(mic_pcm, dtype="<f4").tobytes()
-        self._process.stdin.write(header)
-        self._process.stdin.write(payload)
-        self._process.stdin.flush()
+        sequence = self._next_sequence
+        header = pack_input_header(
+            sequence=sequence,
+            frame_count=frame_count,
+            payload_length=len(payload),
+            azimuth_deg=azimuth_deg,
+            elevation_deg=elevation_deg,
+            directivity_blend_deg=blend,
+            suppression_focus_active=suppression_focus_active,
+            binaural_enabled=binaural_enabled,
+            binaural_follow_steering=binaural_follow_steering,
+            binaural_azimuth_deg=binaural_azimuth_deg,
+            binaural_elevation_deg=binaural_elevation_deg,
+            binaural_backend=backend_id(binaural_backend) if binaural_backend else BACKEND_NONE,
+        )
+        try:
+            self._process.stdin.write(header)
+            self._process.stdin.write(payload)
+            self._process.stdin.flush()
+        except BrokenPipeError as exc:
+            raise StreamProtocolError(f"broken pipe while sending block: {self.stderr_text()}") from exc
+        self._last_sent_sequence = sequence
+        self._next_sequence += 1
+        return sequence
 
-    def recv_block(self) -> np.ndarray:
-        """Receive one processed stereo float32 block, shape (frame_count, 2)."""
+    def recv_block(self) -> tuple[np.ndarray, int]:
+        """Receive one processed stereo block. Returns (pcm, sequence)."""
         if self._process.stdout is None:
             raise StreamProtocolError("subprocess stdout is closed")
-        header_bytes = self._read_exact(_OUTPUT_HEADER.size)
-        magic, frame_count = _OUTPUT_HEADER.unpack(header_bytes)
-        if magic != _OUTPUT_MAGIC:
-            raise StreamProtocolError(f"bad output magic: {magic:#x}")
-        payload = self._read_exact(frame_count * 2 * 4)
-        return np.frombuffer(payload, dtype="<f4").reshape(frame_count, 2)
+        header_bytes = self._read_exact(OUTPUT_HEADER.size)
+        header = unpack_output_header(header_bytes)
+        assert_response_sequence(header.sequence, self._last_sent_sequence)
+        payload = self._read_exact(header.payload_length)
+        pcm = np.frombuffer(payload, dtype="<f4").reshape(header.frame_count, 2).copy()
+        return pcm, header.sequence
 
     def _read_exact(self, num_bytes: int) -> bytes:
         assert self._process.stdout is not None
@@ -112,24 +152,39 @@ class StreamProcessor:
         while len(buf) < num_bytes:
             chunk = self._process.stdout.read(num_bytes - len(buf))
             if not chunk:
-                stderr = self._process.stderr.read().decode("utf-8", "replace") if self._process.stderr else ""
                 raise StreamProtocolError(
-                    f"sonitude_stream_process exited unexpectedly (returncode={self._process.poll()}): {stderr}"
+                    f"sonitude_stream_process exited unexpectedly "
+                    f"(returncode={self._process.poll()}): {self.stderr_text()}"
                 )
             buf += chunk
         return bytes(buf)
 
     def close(self) -> None:
-        """Signal a clean shutdown (frame_count=0) and wait for the process to exit."""
         try:
             if self._process.stdin and not self._process.stdin.closed:
-                self._process.stdin.write(_INPUT_HEADER.pack(_INPUT_MAGIC, 0, 0.0, 0.0, 0.0, 0))
+                header = pack_input_header(
+                    sequence=self._next_sequence,
+                    frame_count=0,
+                    payload_length=0,
+                    azimuth_deg=0.0,
+                    elevation_deg=0.0,
+                    directivity_blend_deg=0.0,
+                    suppression_focus_active=False,
+                    message_type=MSG_SHUTDOWN,
+                )
+                self._process.stdin.write(header)
                 self._process.stdin.flush()
                 self._process.stdin.close()
         except (BrokenPipeError, OSError):
             pass
-        self._process.wait(timeout=5)
+        try:
+            self._process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.terminate()
 
     def terminate(self) -> None:
-        """Hard-stop the subprocess (used on error paths)."""
         self._process.kill()
+        try:
+            self._process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass

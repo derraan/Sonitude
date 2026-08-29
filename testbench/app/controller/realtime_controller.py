@@ -11,7 +11,6 @@ than a one-shot subprocess call per file.
 from __future__ import annotations
 
 import logging
-import queue
 import tempfile
 import threading
 from pathlib import Path
@@ -21,7 +20,11 @@ import sounddevice as sd
 import soundfile as sf
 from PySide6.QtCore import QThread, Signal
 
+from app.audio_io.block_queue import DEFAULT_CAPACITY, DropOldestQueue, QueueSnapshot
+from app.processing.protocol import PROTOCOL_VERSION
 from app.processing.stream_adapter import StreamProcessor, StreamProtocolError
+from app.processing.suppression import SuppressionMode, parse_suppression_mode
+from app.storage.models import BinauralRequest
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,7 @@ def _rms_dbfs(block: np.ndarray) -> float:
 class RealtimeWorker(QThread):
     levelsUpdated = Signal(list, list)  # raw_levels_dbfs[6], processed_levels_dbfs[2]
     blockProcessed = Signal(object, object)  # raw_block (frames,6), processed_block (frames,2)
+    queueStatus = Signal(int, int, bool)  # depth, dropped_blocks, overrun
     errorOccurred = Signal(str)
     started_ok = Signal()
     stopped = Signal()
@@ -49,8 +53,11 @@ class RealtimeWorker(QThread):
         active_channel_map: list[int] | None = None,
         block_size: int = 1024,
         output_device_index: int | None = None,
-        enable_suppression: bool = False,
+        suppression: SuppressionMode | str = SuppressionMode.AUTO,
+        enable_suppression: bool | None = None,
         disable_limiter: bool = False,
+        queue_capacity: int = DEFAULT_CAPACITY,
+        binaural: BinauralRequest | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -59,18 +66,25 @@ class RealtimeWorker(QThread):
         self._config_path = Path(config_path)
         self._sample_rate_hz = sample_rate_hz
         self._block_size = block_size
-        self._enable_suppression = enable_suppression
+        mode = parse_suppression_mode(suppression)
+        if enable_suppression is True:
+            mode = SuppressionMode.ON
+        elif enable_suppression is False:
+            mode = SuppressionMode.OFF
+        self._suppression = mode
         self._disable_limiter = disable_limiter
+        self._queue_capacity = max(1, int(queue_capacity))
+        self._binaural = binaural or BinauralRequest()
+        self.protocol_version = PROTOCOL_VERSION
 
         # active_channel_map selects and reorders which raw DEVICE channels
         # are the six active mics (same field the C++ config uses for batch
         # mode, see config/default.yaml). A map like [2, 4, 6, 8, 10, 12]
         # means the device must supply at least 13 channels, and channel 2
         # (0-indexed) becomes mic 0, channel 4 becomes mic 1, and so on.
-        # Without this, live mode silently associates the wrong device
-        # channels with the array geometry/calibration whenever the map
-        # isn't the identity [0, 1, 2, 3, 4, 5].
         self._active_channel_map = list(active_channel_map) if active_channel_map else [0, 1, 2, 3, 4, 5]
+        if not self._active_channel_map:
+            self._active_channel_map = [0, 1, 2, 3, 4, 5]
         self._device_channel_count = max(self._active_channel_map) + 1
 
         self._stop_event = threading.Event()
@@ -80,28 +94,39 @@ class RealtimeWorker(QThread):
         self._width_deg = 0.0
         self._suppression_focus_active = True
 
-        # Recording streams straight to temp WAV files rather than
-        # accumulating blocks in Python lists: at 44.1kHz/6ch float32 an
-        # in-memory recording grows by roughly 1MB/s, which becomes several
-        # GB over a long test session. Only file handles and small buffers
-        # are held in memory regardless of recording length.
         self._recording_requested = False
         self._recording_active = False
         self._raw_recording_file: sf.SoundFile | None = None
         self._processed_recording_file: sf.SoundFile | None = None
         self._raw_temp_path: Path | None = None
         self._processed_temp_path: Path | None = None
+        self._last_queue_snapshot: QueueSnapshot | None = None
 
     def device_channel_count(self) -> int:
         """Number of raw device channels that must be opened to satisfy active_channel_map."""
         return self._device_channel_count
 
+    def queue_snapshot(self) -> QueueSnapshot | None:
+        return self._last_queue_snapshot
+
     # --- thread-safe setters called from the GUI thread ---------------------------------
-    def set_steering(self, azimuth_deg: float, elevation_deg: float = 0.0, width_deg: float = 0.0) -> None:
+    def set_steering(
+        self,
+        azimuth_deg: float,
+        elevation_deg: float = 0.0,
+        width_deg: float = 0.0,
+        *,
+        directivity_blend_deg: float | None = None,
+    ) -> None:
+        blend = width_deg if directivity_blend_deg is None else directivity_blend_deg
         with self._state_lock:
             self._azimuth_deg = azimuth_deg
             self._elevation_deg = elevation_deg
-            self._width_deg = width_deg
+            self._width_deg = blend
+
+    def set_binaural(self, request: BinauralRequest) -> None:
+        with self._state_lock:
+            self._binaural = request
 
     def set_suppression_focus(self, active: bool) -> None:
         with self._state_lock:
@@ -136,8 +161,12 @@ class RealtimeWorker(QThread):
         with self._state_lock:
             requested = self._recording_requested
         if requested and not self._recording_active:
-            self._raw_temp_path = Path(tempfile.mktemp(suffix="_raw.wav"))
-            self._processed_temp_path = Path(tempfile.mktemp(suffix="_processed.wav"))
+            raw_tmp = tempfile.NamedTemporaryFile(prefix="sonitude_raw_", suffix=".wav", delete=False)
+            processed_tmp = tempfile.NamedTemporaryFile(prefix="sonitude_processed_", suffix=".wav", delete=False)
+            raw_tmp.close()
+            processed_tmp.close()
+            self._raw_temp_path = Path(raw_tmp.name)
+            self._processed_temp_path = Path(processed_tmp.name)
             # subtype="FLOAT" is required: sf.SoundFile defaults to PCM_16
             # regardless of the array dtype passed to write() (unlike the
             # sf.write() convenience function, which infers FLOAT from a
@@ -164,15 +193,12 @@ class RealtimeWorker(QThread):
 
     # --- worker thread body ---------------------------------------------------------------
     def run(self) -> None:  # noqa: D102 - QThread entrypoint
-        input_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=32)
+        input_queue: DropOldestQueue[np.ndarray] = DropOldestQueue(capacity=self._queue_capacity)
 
         def input_callback(indata, frames, time_info, status) -> None:  # noqa: ANN001
             if status:
                 logger.warning("input stream status: %s", status)
-            try:
-                input_queue.put_nowait(indata.copy())
-            except queue.Full:
-                pass  # drop this block rather than blocking the audio callback
+            input_queue.put(indata.copy())
 
         processor: StreamProcessor | None = None
         input_stream: sd.InputStream | None = None
@@ -182,7 +208,7 @@ class RealtimeWorker(QThread):
                 self._config_path,
                 sample_rate_hz=self._sample_rate_hz,
                 max_block_frames=max(8192, self._block_size * 4),
-                enable_suppression=self._enable_suppression,
+                suppression=self._suppression,
                 disable_limiter=self._disable_limiter,
             )
             input_stream = sd.InputStream(
@@ -206,9 +232,11 @@ class RealtimeWorker(QThread):
 
             while not self._stop_event.is_set():
                 self._sync_recording_state()
-                try:
-                    device_block = input_queue.get(timeout=0.5)
-                except queue.Empty:
+                snapshot = input_queue.snapshot()
+                self._last_queue_snapshot = snapshot
+                self.queueStatus.emit(snapshot.depth, snapshot.dropped_blocks, snapshot.overrun)
+                device_block = input_queue.get(timeout=0.5)
+                if device_block is None:
                     continue
 
                 raw_block = self._select_active_channels(device_block)
@@ -218,9 +246,23 @@ class RealtimeWorker(QThread):
                     elevation = self._elevation_deg
                     width = self._width_deg
                     focus_active = self._suppression_focus_active
+                    binaural = self._binaural
 
-                processor.send_block(raw_block, azimuth, elevation, focus_active, width)
-                processed_block = processor.recv_block()
+                bin_az = azimuth if binaural.follow_beamformer_steering else binaural.azimuth_deg
+                bin_el = elevation if binaural.follow_beamformer_steering else binaural.elevation_deg
+                processor.send_block(
+                    raw_block,
+                    azimuth,
+                    elevation,
+                    focus_active,
+                    width,
+                    binaural_enabled=binaural.enabled,
+                    binaural_follow_steering=binaural.follow_beamformer_steering,
+                    binaural_azimuth_deg=bin_az,
+                    binaural_elevation_deg=bin_el,
+                    binaural_backend=binaural.backend,
+                )
+                processed_block, _sequence = processor.recv_block()
 
                 output_stream.write(processed_block)
 
@@ -233,17 +275,26 @@ class RealtimeWorker(QThread):
                 self.levelsUpdated.emit(raw_levels, processed_levels)
                 self.blockProcessed.emit(raw_block, processed_block)
 
-        except (StreamProtocolError, sd.PortAudioError, OSError) as exc:
+        except (StreamProtocolError, sd.PortAudioError, OSError, ValueError, RuntimeError) as exc:
             logger.exception("Real-time processing failed")
             self.errorOccurred.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - GUI must not hang on unexpected worker faults
+            logger.exception("Unexpected real-time worker exception")
+            self.errorOccurred.emit(f"unexpected worker exception: {exc}")
         finally:
             self._close_recording_files()
             if input_stream is not None:
-                input_stream.stop()
-                input_stream.close()
+                try:
+                    input_stream.stop()
+                    input_stream.close()
+                except Exception:  # noqa: BLE001
+                    logger.exception("Failed to close input stream")
             if output_stream is not None:
-                output_stream.stop()
-                output_stream.close()
+                try:
+                    output_stream.stop()
+                    output_stream.close()
+                except Exception:  # noqa: BLE001
+                    logger.exception("Failed to close output stream")
             if processor is not None:
                 try:
                     processor.close()

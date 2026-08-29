@@ -27,6 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
+from app.analysis.steering_error import circular_error_deg
 from app.audio_io import wav_loader
 from app.processing.batch_adapter import run_wav_replay
 from app.storage.models import SteeringEvent
@@ -83,7 +84,7 @@ def run_steering_sweep(
                 config_path,
                 events,
                 output_dir,
-                enable_suppression=False,
+                suppression="off",
                 disable_limiter=True,
                 binary_path=binary_path,
             )
@@ -92,7 +93,11 @@ def run_steering_sweep(
             sweep.append(SweepPoint(azimuth_deg=azimuth_float, output_rms_dbfs=20.0 * np.log10(rms + 1e-12)))
 
     peak = max(sweep, key=lambda p: p.output_rms_dbfs)
-    error = (peak.azimuth_deg - expected_azimuth_deg) if expected_azimuth_deg is not None else None
+    error = (
+        circular_error_deg(peak.azimuth_deg, expected_azimuth_deg)
+        if expected_azimuth_deg is not None
+        else None
+    )
     return SteeringSweepResult(
         expected_azimuth_deg=expected_azimuth_deg,
         measured_peak_azimuth_deg=peak.azimuth_deg,

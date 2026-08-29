@@ -78,7 +78,15 @@ class SiiResult:
     band_snr_db: list[float]
 
     def as_dict(self) -> dict:
-        return {"method": self.method, "value": self.value, "band_snr_db": self.band_snr_db}
+        return {
+            "method": self.method,
+            "value": self.value,
+            "band_snr_db": self.band_snr_db,
+            "experimental": True,
+            "standardized": False,
+            "acceptance_gating": False,
+            "standard": "NOT ANSI/ASA S3.5 SII",
+        }
 
 
 def compute_sii(
@@ -129,6 +137,10 @@ class SiiComparison:
             "sii_before": self.sii_before.as_dict(),
             "sii_after": self.sii_after.as_dict(),
             "sii_improvement": self.improvement,
+            "experimental": True,
+            "standardized": False,
+            "acceptance_gating": False,
+            "standard": "NOT ANSI/ASA S3.5 SII",
         }
 
 

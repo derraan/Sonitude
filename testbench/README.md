@@ -249,28 +249,52 @@ importance function, not transcribed from it) and are documented as such in
 that file. Useful for relative before/after comparison on the same signal;
 **do not use for certified, regulatory, or clinical claims.**
 
-### Steering width definition
+### Directional / Omni Blend (compatibility name: width_deg)
 
-`DelaySumBeamformer` has **no native "width" parameter** — a fixed
-delay-and-sum array has a fixed spatial response; there is nothing in
-`src/dsp/beamformer.*` to widen or narrow. So "width" here is a definition
-the test bench itself introduces, implemented identically in both C++ tools
-(`wav_replay.cpp`, `stream_process.cpp`) entirely *around* the unmodified
-`IBeamformer` output: the beamformer's mono output is linearly blended
-toward a simple omnidirectional average of the six calibrated mic channels,
-in proportion to `width_deg / 180`.
+`DelaySumBeamformer` has **no native beamwidth / HPBW parameter**. The
+test-bench control labeled **Directional / Omni Blend** mixes the
+beamformer's mono output toward a simple average of the six calibrated
+microphone channels, in proportion to `directivity_blend_deg / 180`
+(stored as `width_deg` for compatibility with existing scripts).
 
-- `width_deg = 0` — fully directional: identical to the beamformer's own
-  output, unchanged from before width existed.
-- `width_deg = 180` — fully omnidirectional: the directional beam is
-  discarded entirely in favor of the plain 6-mic average.
-- Values in between blend linearly.
+This is **not** a measured physical beamwidth, cone width, or HPBW.
 
-This is a deliberate, documented test-bench construct, not a claim about
-what the production algorithm does — the `DelaySumBeamformer`,
-`ConservativeSuppressor`, and `PeakLimiter` classes are untouched by it. If
-the algorithm later grows a real spatial-width concept (e.g. adaptive
-nulling), this definition should be revisited rather than assumed correct.
+- `0` — fully directional (pure delay-and-sum)
+- `180` — fully omnidirectional mix (six-mic average)
+- Values in between blend linearly
+
+### Protocol v2
+
+`sonitude_stream_process` uses a versioned framed protocol (magic `SBB2`/`SBO2`,
+protocol version, message type, sequence, frame count, flags, payload length).
+Python and C++ must stay in lockstep (`testbench/app/processing/protocol.py`
+and `src/tools/stream_process.cpp`). Responses echo the request sequence.
+
+### Suppression AUTO / ON / OFF
+
+CLI `--suppression auto|on|off` stores requested vs resolved state separately.
+`OFF` overrides YAML `suppression.enabled: true`. `AUTO` follows YAML. `ON`
+forces the suppressor on.
+
+### Input / output formats
+
+Inputs: WAV, FLAC, and MP3 **when the installed libsndfile can decode them**.
+A stereo file may decode successfully and still be rejected as a six-microphone
+DSP input. The test bench does not silently downmix. MP3 encode/export is not
+supported. Final result export is WAV or FLAC; changing the export container
+does not change DSP. Intermediate taps remain WAV.
+
+### Real-time capture queue
+
+Live capture uses a small bounded **drop-oldest / newest-wins** queue. Capacity
+is configurable (default 3 is a starting point, not a claim of optimality).
+The GUI shows depth, dropped-block count, and overrun.
+
+### CI
+
+Linux CI runs CMake configure/build, CTest, installs Python test-bench
+dependencies, and runs pytest with `SONITUDE_BUILD_DIR` and
+`SONITUDE_REQUIRE_CPP=1` so missing C++ tools **fail** instead of skip.
 
 ### Steering (`steering` in metrics.json)
 

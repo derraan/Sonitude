@@ -40,3 +40,7 @@ def test_compute_metrics_reference_method(sample_rate: int) -> None:
     assert metrics.method == "reference"
     assert metrics.noise_reduction_db > 0.0
     assert metrics.snr_improvement_db > 0.0
+    payload = metrics.as_dict()
+    assert payload["definition"].startswith("mixture_power_over_noise_power")
+    assert "mixture_to_noise_before_db" in payload
+    assert payload["mixture_to_noise_improvement_db"] == payload["snr_improvement_db"]
