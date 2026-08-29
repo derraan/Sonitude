@@ -42,9 +42,12 @@ Pico USB ALSA capture (6 active channels)
 Audio path target order:
 
 ```text
-steering snapshot -> delay-and-sum beamformer -> conservative suppression policy
+steering snapshot -> delay-and-sum beamformer -> suppression backend (off | conservative | experimental spectral)
 -> binaural renderer -> linked stereo limiter -> ASRC/drift control -> ALSA playback
 ```
+
+The experimental short-STFT postfilter (`docs/spectral_postfilter.md`) is an alternative
+to the conservative suppressor, off by default, and does not claim M8 latency or MCU fit.
 
 Direction convention (authoritative for steering and binaural rendering;
 helpers in `src/spatial/head_frame.hpp`):

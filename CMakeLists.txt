@@ -264,6 +264,16 @@ target_link_libraries(
 )
 
 add_executable(
+  sonitude_spectral_bench
+  src/tools/spectral_bench.cpp
+)
+target_link_libraries(
+  sonitude_spectral_bench
+  PRIVATE
+    sonitude_core
+)
+
+add_executable(
   sonitude_binaural_bench
   src/tools/binaural_bench.cpp
 )

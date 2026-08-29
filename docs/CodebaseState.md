@@ -7,14 +7,14 @@ Last updated: 2026-08-29.
 ### Implementation status snapshot (M4–M7)
 
 ```text
-capture -> calibration -> beamformer -> suppressor -> limiter -> mono-to-stereo -> ASRC -> playback
+capture -> calibration -> beamformer -> suppressor backend (off|conservative|spectral) -> limiter -> binaural/ASRC -> playback
 ```
 
 | Stage | Milestone | Current status | Notes |
 | --- | --- | --- | --- |
 | Stage 2 | M3 calibration | in_progress | `CalibrationApplier` live in runtime; HW sweep evidence still pending |
 | Stage 3 | M4 beamformer | in_progress | Fractional delay-and-sum, steering ramp, and WAV replay implemented |
-| Stage 4 | M7 suppression/limiter | in_progress | Conservative suppressor + peak limiter integrated in beamform mode |
+| Stage 4 | M7 suppression/limiter | in_progress | Conservative suppressor default; experimental spectral postfilter selectable, off unless chosen |
 
 | Block | Status |
 | --- | --- |
