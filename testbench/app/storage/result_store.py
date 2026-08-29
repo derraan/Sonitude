@@ -1,10 +1,4 @@
-"""Reproducible test result storage.
-
-Every processed recording gets its own directory under the data root with the
-original input copied in (never moved, never overwritten), the processed and
-diagnostic-tap outputs, computed residuals, and JSON metadata/metrics so the
-test can be reproduced later.
-"""
+"""Reproducible test result storage."""
 
 from __future__ import annotations
 
@@ -50,6 +44,10 @@ class ResultStore:
             metadata_json=root / "metadata.json",
             metrics_json=root / "metrics.json",
             steering_script=root / "steering_script.csv",
+            binaural_wav=root / "binaural_stereo.wav",
+            processed_export=root / "processed_export.wav",
+            runtime_config_copy=root / "runtime_config.yaml",
+            input_metadata_json=root / "input_metadata.json",
         )
 
     @staticmethod

@@ -1,14 +1,8 @@
-"""Noise suppression metrics: SNR before/after, noise reduction in dB.
+"""Noise-suppression related level metrics.
 
-Two computation modes, always labeled in the returned dict's ``method`` field:
-
-  - ``"reference"``: an explicit noise-only reference clip was supplied for
-    the before and/or after signal. This gives an accurate SNR.
-  - ``"estimated"``: no reference is available. Noise floor is estimated from
-    the low-energy percentile of short-time RMS frames within the signal
-    itself (i.e. assumed-quiet segments). This is an approximation and is
-    only as good as that assumption; it is labeled as such rather than
-    presented as a precise measurement.
+These ratios are mixture-power versus estimated or reference noise-power.
+They are NOT a strict speech-SNR measurement (no VAD, no speech-only
+numerator). Keys keep historical ``snr_*`` names as compatibility aliases.
 """
 
 from __future__ import annotations
@@ -41,20 +35,26 @@ def estimate_noise_floor_dbfs(signal: np.ndarray, sample_rate_hz: int, percentil
     return 20.0 * np.log10(noise_rms + _EPS)
 
 
-def estimate_snr_db(signal: np.ndarray, sample_rate_hz: int, noise_percentile: float = 10.0) -> float:
-    """Approximate SNR: overall signal level vs. estimated noise floor."""
+def estimate_mixture_to_noise_db(signal: np.ndarray, sample_rate_hz: int, noise_percentile: float = 10.0) -> float:
+    """Mixture RMS vs. estimated noise-floor RMS, in dB. Not speech SNR."""
     signal_level = rms_dbfs(signal)
     noise_level = estimate_noise_floor_dbfs(signal, sample_rate_hz, noise_percentile)
     return signal_level - noise_level
 
 
-def reference_snr_db(signal: np.ndarray, noise_reference: np.ndarray) -> float:
-    """Accurate SNR when a noise-only reference clip is available."""
+estimate_snr_db = estimate_mixture_to_noise_db
+
+
+def reference_mixture_to_noise_db(signal: np.ndarray, noise_reference: np.ndarray) -> float:
+    """Mixture power vs. a noise-only reference clip, in dB. Not speech SNR."""
     signal_power = float(np.mean(np.square(signal)))
     noise_power = float(np.mean(np.square(noise_reference)))
     if noise_power <= 0.0:
         return float("inf")
     return 10.0 * np.log10((signal_power + _EPS) / (noise_power + _EPS))
+
+
+reference_snr_db = reference_mixture_to_noise_db
 
 
 @dataclass
@@ -70,9 +70,13 @@ class NoiseSuppressionMetrics:
     def as_dict(self) -> dict:
         return {
             "method": self.method,
+            "definition": "mixture_power_over_noise_power_db; not speech SNR",
             "input_noise_floor_dbfs": self.input_noise_floor_dbfs,
             "output_noise_floor_dbfs": self.output_noise_floor_dbfs,
             "noise_reduction_db": self.noise_reduction_db,
+            "mixture_to_noise_before_db": self.snr_before_db,
+            "mixture_to_noise_after_db": self.snr_after_db,
+            "mixture_to_noise_improvement_db": self.snr_improvement_db,
             "snr_before_db": self.snr_before_db,
             "snr_after_db": self.snr_after_db,
             "snr_improvement_db": self.snr_improvement_db,
@@ -97,8 +101,8 @@ def compute_noise_suppression_metrics(
         method = "reference"
         input_noise_floor = rms_dbfs(noise_reference_before)
         output_noise_floor = rms_dbfs(noise_reference_after)
-        snr_before = reference_snr_db(before, noise_reference_before)
-        snr_after = reference_snr_db(after, noise_reference_after)
+        snr_before = reference_mixture_to_noise_db(before, noise_reference_before)
+        snr_after = reference_mixture_to_noise_db(after, noise_reference_after)
     else:
         method = "estimated"
         input_noise_floor = estimate_noise_floor_dbfs(before, sample_rate_hz)

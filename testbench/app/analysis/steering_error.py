@@ -19,6 +19,14 @@ from pathlib import Path
 from app.storage.models import SteeringEvent
 
 
+def circular_error_deg(measured_deg: float, expected_deg: float) -> float:
+    """Signed circular distance in degrees, range (-180, 180].
+
+    +179 vs -179 is 2 degrees, not 358.
+    """
+    return ((measured_deg - expected_deg + 180.0) % 360.0) - 180.0
+
+
 def parse_steering_script(path: str | Path) -> list[SteeringEvent]:
     """Parse a steering script in the same format sonitude_wav_replay reads.
 
@@ -109,8 +117,8 @@ def compute_steering_error(
                 commanded_elevation_deg=commanded.elevation_deg,
                 estimated_azimuth_deg=estimate.azimuth_deg,
                 estimated_elevation_deg=estimate.elevation_deg,
-                azimuth_error_deg=estimate.azimuth_deg - commanded.azimuth_deg,
-                elevation_error_deg=estimate.elevation_deg - commanded.elevation_deg,
+                azimuth_error_deg=circular_error_deg(estimate.azimuth_deg, commanded.azimuth_deg),
+                elevation_error_deg=circular_error_deg(estimate.elevation_deg, commanded.elevation_deg),
                 estimate_available=True,
             )
         )
