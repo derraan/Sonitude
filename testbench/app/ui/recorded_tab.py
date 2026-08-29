@@ -7,7 +7,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSlider,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -68,9 +71,36 @@ class RecordedDataTab(QWidget):
         self._steering_dial = SteeringDial()
         self._steering_readout = QLabel("0°")
         self._steering_dial.azimuthChanged.connect(lambda az: self._steering_readout.setText(f"{az:.0f}°"))
+        self._width_slider = QSlider(Qt.Orientation.Horizontal)
+        self._width_slider.setRange(0, 180)
+        self._width_label = QLabel("Width: 0° (fully directional)")
+        self._width_slider.valueChanged.connect(self._on_width_changed)
         steering_layout = QVBoxLayout(steering_box)
         steering_layout.addWidget(self._steering_dial)
         steering_layout.addWidget(self._steering_readout, alignment=Qt.AlignmentFlag.AlignCenter)
+        steering_layout.addWidget(self._width_label)
+        steering_layout.addWidget(self._width_slider)
+
+        suppression_box = QGroupBox("Suppression")
+        self._suppression_checkbox = QCheckBox("Enable Suppression")
+        suppression_layout = QVBoxLayout(suppression_box)
+        suppression_layout.addWidget(self._suppression_checkbox)
+
+        steering_test_box = QGroupBox("Objective Steering Test (optional, slower)")
+        self._steering_test_checkbox = QCheckBox("Run steering sweep for this batch")
+        self._expected_azimuth_spin = QDoubleSpinBox()
+        self._expected_azimuth_spin.setRange(-180.0, 180.0)
+        self._expected_azimuth_spin.setSuffix("°")
+        self._expected_azimuth_spin.setToolTip(
+            "Known/expected direction of the dominant source in the recording, used as ground "
+            "truth to score the measured beam-response-peak sweep."
+        )
+        steering_test_layout = QVBoxLayout(steering_test_box)
+        steering_test_layout.addWidget(self._steering_test_checkbox)
+        expected_row = QHBoxLayout()
+        expected_row.addWidget(QLabel("Expected source direction:"))
+        expected_row.addWidget(self._expected_azimuth_spin)
+        steering_test_layout.addLayout(expected_row)
 
         self._process_selected_btn = QPushButton("Process Selected")
         self._process_batch_btn = QPushButton("Process Batch")
@@ -90,6 +120,8 @@ class RecordedDataTab(QWidget):
         left_layout.addWidget(self._metadata_table)
         left_layout.addWidget(self._validation_label)
         left_layout.addWidget(steering_box)
+        left_layout.addWidget(suppression_box)
+        left_layout.addWidget(steering_test_box)
         left_layout.addLayout(process_row)
         left_layout.addWidget(self._progress_bar)
         left_layout.addWidget(self._status_label)
@@ -99,6 +131,17 @@ class RecordedDataTab(QWidget):
         # --- right column: results (select which processed test to inspect) --------------
         self._results_combo = QComboBox()
         self._results_combo.currentTextChanged.connect(self._on_result_selected)
+        self._residual_stage_combo = QComboBox()
+        self._residual_stage_combo.addItem("Beamform stage (beamformed − suppressed)", userData="residual_beamform.wav")
+        self._residual_stage_combo.addItem("Limiter stage (suppressed − processed)", userData="residual_limiter.wav")
+        self._residual_stage_combo.currentIndexChanged.connect(lambda _i: self._on_result_selected(self._results_combo.currentText()))
+        domain_note = QLabel(
+            "Note: RAW is an uncalibrated ear-cup listening preview, not the algorithm's input — it "
+            "is never subtracted from PROCESSED. RESIDUAL is a stage-to-stage difference within the "
+            "algorithm (see testbench/README.md, \"Residual definition\")."
+        )
+        domain_note.setWordWrap(True)
+        domain_note.setStyleSheet("color: #8a8a8a; font-size: 10px;")
         self.playback_panel = PlaybackPanel()
         self.visualization_panel = VisualizationPanel()
         self.metrics_panel = MetricsPanel()
@@ -106,6 +149,9 @@ class RecordedDataTab(QWidget):
         right_layout = QVBoxLayout()
         right_layout.addWidget(QLabel("Result:"))
         right_layout.addWidget(self._results_combo)
+        right_layout.addWidget(QLabel("Residual stage:"))
+        right_layout.addWidget(self._residual_stage_combo)
+        right_layout.addWidget(domain_note)
         right_layout.addWidget(self.playback_panel)
         right_layout.addWidget(self.visualization_panel, stretch=1)
         right_layout.addWidget(self.metrics_panel)
@@ -119,6 +165,16 @@ class RecordedDataTab(QWidget):
 
         outer = QVBoxLayout(self)
         outer.addWidget(splitter)
+
+        try:
+            self._suppression_checkbox.setChecked(read_runtime_config_summary(self._config_path).suppression_enabled)
+        except Exception:  # noqa: BLE001 - default unchecked if config can't be read yet
+            pass
+
+    def _on_width_changed(self, width_deg: int) -> None:
+        descriptor = "fully directional" if width_deg == 0 else ("fully omnidirectional" if width_deg >= 180 else "blended")
+        self._width_label.setText(f"Width: {width_deg}° ({descriptor})")
+        self._steering_dial.set_width_deg(width_deg)
 
     # --- file selection --------------------------------------------------------------------
     def _on_select_file(self) -> None:
@@ -182,15 +238,27 @@ class RecordedDataTab(QWidget):
             QMessageBox.information(self, "Busy", "A batch is already processing.")
             return
 
-        steering_events = [SteeringEvent(0.0, self._steering_dial.commanded_azimuth_deg(), 0.0)]
+        steering_events = [
+            SteeringEvent(
+                0.0,
+                self._steering_dial.commanded_azimuth_deg(),
+                0.0,
+                width_deg=self._width_slider.value(),
+            )
+        ]
         self._progress_bar.setRange(0, len(paths))
         self._progress_bar.setValue(0)
         self._status_label.setText(f"Processing 0/{len(paths)}...")
 
+        expected_azimuth = (
+            self._expected_azimuth_spin.value() if self._steering_test_checkbox.isChecked() else None
+        )
         worker = BatchWorker(
             paths,
             self._config_path,
             steering_events,
+            enable_suppression=self._suppression_checkbox.isChecked(),
+            steering_test_expected_azimuth_deg=expected_azimuth,
             result_store=self._result_store,
         )
         worker.progress.connect(lambda done, total: self._progress_bar.setValue(done))
@@ -214,18 +282,22 @@ class RecordedDataTab(QWidget):
         if not test_id:
             return
         test_root = self._result_store.results_dir / test_id
+        residual_filename = self._residual_stage_combo.currentData() or "residual_beamform.wav"
         self.playback_panel.set_sources(
             raw=test_root / "raw_preview_stereo.wav",
             processed=test_root / "processed_stereo.wav",
-            residual=test_root / "residual_beamform.wav",
+            residual=test_root / residual_filename,
         )
         metrics = self._last_metrics.get(test_id) or self._result_store.load_metrics(test_id)
         self.metrics_panel.update_metrics(metrics)
 
+        sweep = metrics.get("steering", {}).get("objective_sweep_test")
+        self._steering_dial.set_estimated_azimuth_deg(sweep["measured_peak_azimuth_deg"] if sweep else None)
+
         try:
             processed_data, sample_rate = wav_loader.load_wav(test_root / "processed_stereo.wav")
             raw_data, _ = wav_loader.load_wav(test_root / "raw_preview_stereo.wav")
-            residual_data, _ = wav_loader.load_wav(test_root / "residual_beamform.wav")
+            residual_data, _ = wav_loader.load_wav(test_root / residual_filename)
             self.visualization_panel.plot_waveforms(sample_rate, raw=raw_data, processed=processed_data, residual=residual_data)
             self.visualization_panel.plot_spectrogram(processed_data, sample_rate)
             self.visualization_panel.plot_levels(processed_data, sample_rate)

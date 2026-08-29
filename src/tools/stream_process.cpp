@@ -13,6 +13,7 @@
 //     u32 frame_count
 //     f32 azimuth_deg
 //     f32 elevation_deg
+//     f32 width_deg          (0..kMaxWidthDeg; see below)
 //     u8  suppression_focus_active (0 or 1)
 //     u8  reserved[3]
 //     f32 pcm[frame_count * kMicChannels]   // interleaved, range [-1, 1]
@@ -24,7 +25,19 @@
 //
 // A frame_count of 0 in an input block is a clean shutdown request; this process exits 0.
 // Any framing/magic mismatch is treated as a fatal protocol error.
+//
+// width_deg: DelaySumBeamformer has no native "beam width" parameter (a
+// fixed delay-and-sum array has a fixed spatial response). This tool defines
+// width as a directivity blend applied to its own beamformer output: the
+// mono beam is linearly blended toward a simple omnidirectional average of
+// the six calibrated mic channels, in proportion to width_deg / kMaxWidthDeg.
+// 0 = fully directional (unchanged from before width existed), kMaxWidthDeg
+// = fully omnidirectional. See testbench/README.md, "Steering width
+// definition" for the rationale; sonitude_wav_replay applies the identical
+// blend for batch mode.
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -51,6 +64,7 @@ namespace
 {
 constexpr std::uint32_t kInputMagic = 0x31424253U;   // "SBB1" little-endian on disk
 constexpr std::uint32_t kOutputMagic = 0x314F4253U;  // "SBO1" little-endian on disk
+constexpr float kMaxWidthDeg = 180.0F;               // matches sonitude_wav_replay's kMaxWidthDeg
 
 void PrintUsage()
 {
@@ -61,7 +75,8 @@ void PrintUsage()
             << "\n"
             << "  Reads framed 6-channel PCM blocks from stdin, runs them through the\n"
             << "  existing calibration/beamformer/suppressor/limiter chain, and writes\n"
-            << "  framed stereo PCM blocks to stdout. See file header for wire format.\n";
+            << "  framed stereo PCM blocks to stdout. See file header for wire format,\n"
+            << "  including the per-block width_deg directivity-blend parameter.\n";
 }
 
 bool ReadExact(std::istream& in, void* dest, const std::size_t bytes)
@@ -187,11 +202,13 @@ int main(int argc, char** argv)
       std::uint32_t frame_count = 0;
       float azimuth_deg = 0.0F;
       float elevation_deg = 0.0F;
+      float width_deg = 0.0F;
       std::uint8_t suppression_focus_active = 0;
       std::uint8_t reserved[3] = {0, 0, 0};
       if (!ReadExact(std::cin, &frame_count, sizeof(frame_count)) ||
           !ReadExact(std::cin, &azimuth_deg, sizeof(azimuth_deg)) ||
           !ReadExact(std::cin, &elevation_deg, sizeof(elevation_deg)) ||
+          !ReadExact(std::cin, &width_deg, sizeof(width_deg)) ||
           !ReadExact(std::cin, &suppression_focus_active, sizeof(suppression_focus_active)) ||
           !ReadExact(std::cin, reserved, sizeof(reserved)))
       {
@@ -243,6 +260,22 @@ int main(int argc, char** argv)
       mono.assign(frames, 0.0F);
       beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frames),
                          std::span<float>(mono.data(), frames));
+
+      const float clamped_width_deg = std::clamp(width_deg, 0.0F, kMaxWidthDeg);
+      if (clamped_width_deg > 0.0F)
+      {
+        const float blend = clamped_width_deg / kMaxWidthDeg;
+        for (std::size_t i = 0; i < frames; ++i)
+        {
+          float omni = 0.0F;
+          for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+          {
+            omni += calibrated_frames[i][ch];
+          }
+          omni /= static_cast<float>(sonitude::audio::kMicChannels);
+          mono[i] = ((1.0F - blend) * mono[i]) + (blend * omni);
+        }
+      }
 
       if (suppression_enabled)
       {

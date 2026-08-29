@@ -20,7 +20,11 @@ from app.storage.models import SteeringEvent
 
 
 def parse_steering_script(path: str | Path) -> list[SteeringEvent]:
-    """Parse a steering script in the same format sonitude_wav_replay reads."""
+    """Parse a steering script in the same format sonitude_wav_replay reads.
+
+    The 4th column (width_deg) is optional for backward compatibility with
+    older 3-column scripts; it defaults to 0.0 (fully directional) when absent.
+    """
     events: list[SteeringEvent] = []
     with open(path, encoding="utf-8") as handle:
         for raw_line in handle:
@@ -31,17 +35,19 @@ def parse_steering_script(path: str | Path) -> list[SteeringEvent]:
             if len(parts) < 3:
                 continue
             try:
+                width_deg = float(parts[3]) if len(parts) >= 4 and parts[3] != "" else 0.0
                 events.append(
                     SteeringEvent(
                         time_s=float(parts[0]),
                         azimuth_deg=float(parts[1]),
                         elevation_deg=float(parts[2]),
+                        width_deg=width_deg,
                     )
                 )
             except ValueError:
                 continue  # header line
     if not events:
-        events.append(SteeringEvent(time_s=0.0, azimuth_deg=0.0, elevation_deg=0.0))
+        events.append(SteeringEvent(time_s=0.0, azimuth_deg=0.0, elevation_deg=0.0, width_deg=0.0))
     return sorted(events, key=lambda e: e.time_s)
 
 

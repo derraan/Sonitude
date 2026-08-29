@@ -18,9 +18,10 @@ from app.processing.sonitude_binary_locator import find_binary
 
 _INPUT_MAGIC = 0x31424253  # "SBB1"
 _OUTPUT_MAGIC = 0x314F4253  # "SBO1"
-_INPUT_HEADER = struct.Struct("<IIffB3x")  # magic, frame_count, az, el, flag, pad
+_INPUT_HEADER = struct.Struct("<IIfffB3x")  # magic, frame_count, az, el, width, flag, pad
 _OUTPUT_HEADER = struct.Struct("<II")  # magic, frame_count
 MIC_CHANNELS = 6
+MAX_WIDTH_DEG = 180.0  # matches kMaxWidthDeg in the C++ tools
 
 
 class StreamProtocolError(RuntimeError):
@@ -71,15 +72,22 @@ class StreamProcessor:
         azimuth_deg: float,
         elevation_deg: float,
         suppression_focus_active: bool,
+        width_deg: float = 0.0,
     ) -> None:
-        """Send one 6-channel float32 block, shape (frame_count, 6)."""
+        """Send one 6-channel float32 block, shape (frame_count, 6).
+
+        ``width_deg`` (0-180) is the directivity-blend "beam width" defined in
+        the C++ tools (see src/tools/stream_process.cpp's header comment) —
+        0 is fully directional (the beamformer's own output, unchanged).
+        """
         if self._process.stdin is None:
             raise StreamProtocolError("subprocess stdin is closed")
         frame_count = mic_pcm.shape[0]
         if mic_pcm.shape[1] != MIC_CHANNELS:
             raise ValueError(f"expected {MIC_CHANNELS} channels, got {mic_pcm.shape[1]}")
+        clamped_width = max(0.0, min(MAX_WIDTH_DEG, float(width_deg)))
         header = _INPUT_HEADER.pack(
-            _INPUT_MAGIC, frame_count, float(azimuth_deg), float(elevation_deg),
+            _INPUT_MAGIC, frame_count, float(azimuth_deg), float(elevation_deg), clamped_width,
             1 if suppression_focus_active else 0,
         )
         payload = np.ascontiguousarray(mic_pcm, dtype="<f4").tobytes()
@@ -115,7 +123,7 @@ class StreamProcessor:
         """Signal a clean shutdown (frame_count=0) and wait for the process to exit."""
         try:
             if self._process.stdin and not self._process.stdin.closed:
-                self._process.stdin.write(_INPUT_HEADER.pack(_INPUT_MAGIC, 0, 0.0, 0.0, 0))
+                self._process.stdin.write(_INPUT_HEADER.pack(_INPUT_MAGIC, 0, 0.0, 0.0, 0.0, 0))
                 self._process.stdin.flush()
                 self._process.stdin.close()
         except (BrokenPipeError, OSError):

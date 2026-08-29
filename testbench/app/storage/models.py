@@ -43,11 +43,19 @@ class ValidationResult:
 
 @dataclass
 class SteeringEvent:
-    """One commanded steering change, matching sonitude_wav_replay's script format."""
+    """One commanded steering change, matching sonitude_wav_replay's script format.
+
+    width_deg (0-180, default 0) is the test bench's directivity-blend
+    definition of beam "width" — see testbench/README.md, "Steering width
+    definition". The underlying DelaySumBeamformer has no native width
+    parameter; this value only has meaning through the C++ tools' blend
+    logic (src/tools/wav_replay.cpp, src/tools/stream_process.cpp).
+    """
 
     time_s: float
     azimuth_deg: float
     elevation_deg: float
+    width_deg: float = 0.0
 
 
 @dataclass

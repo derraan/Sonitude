@@ -10,12 +10,22 @@ from app.storage.models import SteeringEvent
 def test_write_and_parse_round_trip(tmp_path: Path) -> None:
     events = [
         SteeringEvent(time_s=0.0, azimuth_deg=0.0, elevation_deg=0.0),
-        SteeringEvent(time_s=2.5, azimuth_deg=45.0, elevation_deg=0.0),
+        SteeringEvent(time_s=2.5, azimuth_deg=45.0, elevation_deg=0.0, width_deg=30.0),
     ]
     path = write_steering_script(events, tmp_path / "script.csv")
     parsed = steering_error.parse_steering_script(path)
     assert len(parsed) == 2
     assert parsed[1].azimuth_deg == 45.0
+    assert parsed[0].width_deg == 0.0
+    assert parsed[1].width_deg == 30.0
+
+
+def test_parse_legacy_three_column_script_defaults_width_to_zero(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.csv"
+    path.write_text("# time_s,azimuth_deg,elevation_deg\n0.0,10.0,0.0\n", encoding="utf-8")
+    parsed = steering_error.parse_steering_script(path)
+    assert parsed[0].azimuth_deg == 10.0
+    assert parsed[0].width_deg == 0.0
 
 
 def test_commanded_direction_at_picks_last_event_before_time() -> None:

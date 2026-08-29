@@ -1,7 +1,7 @@
 """Displays the metrics.json produced for a test result: noise suppression,
-approximate SII, residual energy, and steering (commanded-only unless/until
-an estimator exists). Every value that is an estimate rather than a precise
-measurement is labeled as such, per testbench/README.md's metric definitions.
+the experimental intelligibility proxy, residual energy, and steering. Every
+value that is an estimate rather than a precise measurement is labeled as
+such, per testbench/README.md's metric definitions.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ class MetricsPanel(QWidget):
         )
         self._sii_labels = self._build_group(
             "sii",
-            "Approximate Speech Intelligibility Index (SII)",
-            ["SII before", "SII after", "SII improvement"],
+            "Experimental Intelligibility Proxy (not a standardized SII)",
+            ["Proxy before", "Proxy after", "Proxy improvement"],
         )
         self._residual_labels = self._build_group(
             "residual",
@@ -35,7 +35,7 @@ class MetricsPanel(QWidget):
         self._steering_labels = self._build_group(
             "steering",
             "Steering",
-            ["Commanded direction(s)", "Estimated direction", "Steering error"],
+            ["Commanded direction(s)", "Expected direction", "Measured peak (sweep)", "Steering error"],
         )
 
         layout = QVBoxLayout(self)
@@ -49,6 +49,7 @@ class MetricsPanel(QWidget):
         labels: dict[str, QLabel] = {}
         for name in field_names:
             value_label = QLabel("—")
+            value_label.setWordWrap(True)
             form.addRow(QLabel(name + ":"), value_label)
             labels[name] = value_label
         setattr(self, f"_{attr_prefix}_group", group)
@@ -69,13 +70,12 @@ class MetricsPanel(QWidget):
         self._noise_labels["SNR after"].setText(_metric_label(f"{noise.get('snr_after_db', 0):.1f} dB", method))
         self._noise_labels["SNR improvement"].setText(_metric_label(f"{noise.get('snr_improvement_db', 0):.1f} dB", method))
 
-        sii = metrics.get("sii", {})
-        sii_before = sii.get("sii_before", {})
-        sii_after = sii.get("sii_after", {})
-        sii_method = sii_before.get("method")
-        self._sii_labels["SII before"].setText(_metric_label(f"{sii_before.get('value', 0):.3f}", sii_method))
-        self._sii_labels["SII after"].setText(_metric_label(f"{sii_after.get('value', 0):.3f}", sii_after.get("method")))
-        self._sii_labels["SII improvement"].setText(f"{sii.get('sii_improvement', 0):+.3f}")
+        proxy = metrics.get("intelligibility_proxy", {})
+        proxy_before = proxy.get("sii_before", {})
+        proxy_after = proxy.get("sii_after", {})
+        self._sii_labels["Proxy before"].setText(_metric_label(f"{proxy_before.get('value', 0):.3f}", proxy_before.get("method")))
+        self._sii_labels["Proxy after"].setText(_metric_label(f"{proxy_after.get('value', 0):.3f}", proxy_after.get("method")))
+        self._sii_labels["Proxy improvement"].setText(f"{proxy.get('sii_improvement', 0):+.3f}")
 
         residual = metrics.get("residual", {})
         beamform_db = residual.get("beamform_stage_energy_ratio_db")
@@ -89,11 +89,20 @@ class MetricsPanel(QWidget):
 
         steering = metrics.get("steering", {})
         events = steering.get("commanded_events", [])
-        commanded_text = ", ".join(f"{e['time_s']:.1f}s→{e['azimuth_deg']:.0f}°" for e in events) or "—"
+        commanded_text = ", ".join(
+            f"{e['time_s']:.1f}s→{e['azimuth_deg']:.0f}° (width {e.get('width_deg', 0):.0f}°)" for e in events
+        ) or "—"
         self._steering_labels["Commanded direction(s)"].setText(commanded_text)
-        if steering.get("estimate_available"):
-            self._steering_labels["Estimated direction"].setText("available")
-            self._steering_labels["Steering error"].setText("see visualization")
+
+        sweep = steering.get("objective_sweep_test")
+        if sweep:
+            self._steering_labels["Expected direction"].setText(
+                f"{sweep['expected_azimuth_deg']:.0f}°" if sweep.get("expected_azimuth_deg") is not None else "—"
+            )
+            self._steering_labels["Measured peak (sweep)"].setText(f"{sweep['measured_peak_azimuth_deg']:.0f}°")
+            error = sweep.get("error_deg")
+            self._steering_labels["Steering error"].setText(f"{error:+.1f}°" if error is not None else "—")
         else:
-            self._steering_labels["Estimated direction"].setText("not available (no DOA estimator in pipeline)")
-            self._steering_labels["Steering error"].setText("not computable")
+            self._steering_labels["Expected direction"].setText("not set (steering sweep not run)")
+            self._steering_labels["Measured peak (sweep)"].setText("not available")
+            self._steering_labels["Steering error"].setText("not computable — enable the steering sweep test")

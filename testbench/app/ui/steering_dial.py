@@ -14,13 +14,15 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen
+from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import QWidget
 
 _COMMANDED_COLOR = QColor("#2f7de1")
 _ESTIMATED_COLOR = QColor("#e0a300")
 _TICK_COLOR = QColor("#8a8a8a")
 _LABEL_COLOR = QColor("#c8c8c8")
+_WIDTH_WEDGE_COLOR = QColor(47, 125, 225, 60)  # translucent fill, same hue as commanded needle
+_MAX_WIDTH_DEG = 180.0
 
 
 class SteeringDial(QWidget):
@@ -31,10 +33,22 @@ class SteeringDial(QWidget):
         self.setMinimumSize(180, 180)
         self._commanded_azimuth_deg = 0.0
         self._estimated_azimuth_deg: float | None = None
+        self._width_deg = 0.0
         self._dragging = False
 
     def commanded_azimuth_deg(self) -> float:
         return self._commanded_azimuth_deg
+
+    def width_deg(self) -> float:
+        return self._width_deg
+
+    def set_width_deg(self, width_deg: float) -> None:
+        """Show the directivity-blend "width" as a shaded wedge around the
+        commanded needle (see app/storage/models.SteeringEvent for what
+        width_deg means — it's a test-bench-defined blend, not a native
+        beamformer parameter)."""
+        self._width_deg = max(0.0, min(_MAX_WIDTH_DEG, width_deg))
+        self.update()
 
     def set_commanded_azimuth_deg(self, azimuth_deg: float, *, emit: bool = False) -> None:
         self._commanded_azimuth_deg = self._normalize(azimuth_deg)
@@ -86,6 +100,18 @@ class SteeringDial(QWidget):
             label_point = self._azimuth_to_point(label_deg, radius + 12, center)
             painter.setPen(QPen(_LABEL_COLOR))
             painter.drawText(label_point, f"{label_deg}°" if label_deg != 0 else "0° (front)")
+
+        if self._width_deg > 0.0:
+            wedge_radius = radius * 0.85
+            top_left = QPointF(center.x() - wedge_radius, center.y() - wedge_radius)
+            rect = (top_left.x(), top_left.y(), wedge_radius * 2, wedge_radius * 2)
+            # Qt angles are counter-clockwise from 3 o'clock, in 1/16ths of a degree;
+            # our azimuth is clockwise from 12 o'clock, so convert.
+            start_qt_angle = int((90.0 - (self._commanded_azimuth_deg + self._width_deg / 2.0)) * 16)
+            span_qt_angle = int(self._width_deg * 16)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(_WIDTH_WEDGE_COLOR))
+            painter.drawPie(*rect, start_qt_angle, span_qt_angle)
 
         if self._estimated_azimuth_deg is not None:
             tip = self._azimuth_to_point(self._estimated_azimuth_deg, radius * 0.75, center)

@@ -16,7 +16,7 @@ from pathlib import Path
 import soundfile as sf
 from PySide6.QtCore import QThread, Signal
 
-from app.analysis import noise_suppression, residual, sii, steering_error
+from app.analysis import noise_suppression, residual, sii, steering_error, steering_sweep
 from app.audio_io import downmix, wav_loader
 from app.config_reader import read_runtime_config_summary
 from app.processing.batch_adapter import BatchProcessingError, run_wav_replay
@@ -49,6 +49,7 @@ class BatchWorker(QThread):
         *,
         enable_suppression: bool = False,
         disable_limiter: bool = False,
+        steering_test_expected_azimuth_deg: float | None = None,
         result_store: ResultStore | None = None,
         parent=None,
     ) -> None:
@@ -58,6 +59,12 @@ class BatchWorker(QThread):
         self._steering_events = steering_events
         self._enable_suppression = enable_suppression
         self._disable_limiter = disable_limiter
+        # When set, an objective steering sweep (see analysis/steering_sweep.py)
+        # runs against each file: the SAME algorithm is re-rendered at a range
+        # of candidate azimuths and the measured energy-peak direction is
+        # compared to this expected/ground-truth angle for the test fixture.
+        # Optional because it costs several extra full-file renders per file.
+        self._steering_test_expected_azimuth_deg = steering_test_expected_azimuth_deg
         self._result_store = result_store or ResultStore()
         self._stop_requested = False
 
@@ -133,11 +140,52 @@ class BatchWorker(QThread):
         )
         sii_result = sii.compute_sii_before_after(beamformed_mono, processed_mono, sample_rate)
         commanded_events = steering_error.parse_steering_script(test.steering_script)
-        steering_samples = steering_error.compute_steering_error(commanded_events)
+
+        sweep_result = None
+        estimated_events = None
+        if self._steering_test_expected_azimuth_deg is not None:
+            sweep_result = steering_sweep.run_steering_sweep(
+                input_path,
+                self._config_path,
+                expected_azimuth_deg=self._steering_test_expected_azimuth_deg,
+            )
+            estimated_events = [
+                SteeringEvent(time_s=0.0, azimuth_deg=sweep_result.measured_peak_azimuth_deg, elevation_deg=0.0)
+            ]
+        steering_samples = steering_error.compute_steering_error(commanded_events, estimated_events)
+
+        steering_metrics = {
+            "commanded_events": [
+                {"time_s": e.time_s, "azimuth_deg": e.azimuth_deg, "elevation_deg": e.elevation_deg, "width_deg": e.width_deg}
+                for e in commanded_events
+            ],
+            "estimate_available": estimated_events is not None,
+        }
+        if sweep_result is not None:
+            steering_metrics["objective_sweep_test"] = sweep_result.as_dict()
+            steering_metrics["error_samples"] = [
+                {
+                    "time_s": s.time_s,
+                    "commanded_azimuth_deg": s.commanded_azimuth_deg,
+                    "estimated_azimuth_deg": s.estimated_azimuth_deg,
+                    "azimuth_error_deg": s.azimuth_error_deg,
+                }
+                for s in steering_samples
+            ]
+            steering_metrics["note"] = (
+                "estimate_available reflects an energy-peak beam-response sweep against the "
+                "expected direction below, not an independent DOA estimator — see "
+                "analysis/steering_sweep.py."
+            )
+        else:
+            steering_metrics["note"] = (
+                "No DOA estimator exists in the pipeline, and no steering sweep test was run for "
+                "this file; only commanded direction is available."
+            )
 
         metrics = {
             "noise_suppression": noise_metrics.as_dict(),
-            "sii": sii_result.as_dict(),
+            "intelligibility_proxy": sii_result.as_dict(),
             "residual": {
                 "beamform_stage_energy_ratio_db": residual.residual_energy_ratio_db(
                     beamformed_mono, suppressed_mono
@@ -146,14 +194,7 @@ class BatchWorker(QThread):
                     suppressed_mono, processed_mono
                 ),
             },
-            "steering": {
-                "commanded_events": [
-                    {"time_s": e.time_s, "azimuth_deg": e.azimuth_deg, "elevation_deg": e.elevation_deg}
-                    for e in commanded_events
-                ],
-                "estimate_available": False,
-                "note": "No DOA estimator exists in the pipeline yet; only commanded direction is available.",
-            },
+            "steering": steering_metrics,
         }
 
         metadata = {

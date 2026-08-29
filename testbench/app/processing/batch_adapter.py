@@ -38,10 +38,10 @@ def write_steering_script(events: list[SteeringEvent], path: str | Path) -> Path
     """
     path = Path(path)
     if not events:
-        events = [SteeringEvent(time_s=0.0, azimuth_deg=0.0, elevation_deg=0.0)]
-    lines = ["# time_s,azimuth_deg,elevation_deg"]
+        events = [SteeringEvent(time_s=0.0, azimuth_deg=0.0, elevation_deg=0.0, width_deg=0.0)]
+    lines = ["# time_s,azimuth_deg,elevation_deg,width_deg"]
     for event in sorted(events, key=lambda e: e.time_s):
-        lines.append(f"{event.time_s},{event.azimuth_deg},{event.elevation_deg}")
+        lines.append(f"{event.time_s},{event.azimuth_deg},{event.elevation_deg},{event.width_deg}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 

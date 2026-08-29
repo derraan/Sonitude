@@ -22,7 +22,19 @@ struct SteeringEvent
 {
   std::size_t frame_index = 0;
   sonitude::audio::BeamformerSteering target{};
+  float width_deg = 0.0F;
 };
+
+// Beam "width" has no native meaning in DelaySumBeamformer (a fixed
+// delay-and-sum array has no adjustable spatial width parameter). This tool
+// defines width as a directivity blend: the beamformed mono output is
+// linearly blended toward a simple omnidirectional average of the six
+// calibrated mic channels, in proportion to width_deg / kMaxWidthDeg.
+// 0 deg = fully directional (pure beamformer output, current behavior);
+// kMaxWidthDeg = fully omnidirectional. This is implemented entirely in this
+// tool around the unmodified IBeamformer output; DelaySumBeamformer itself
+// is untouched. See testbench/README.md, "Steering width definition".
+constexpr float kMaxWidthDeg = 180.0F;
 
 void PrintUsage()
 {
@@ -34,10 +46,15 @@ void PrintUsage()
             << "                      [--output-suppressed <mono_wav>]\n"
             << "\n"
             << "  --output-beamformed writes the mono signal immediately after the\n"
-            << "  beamformer, before suppression or limiting are applied.\n"
+            << "  beamformer (including the width blend, see below), before suppression\n"
+            << "  or limiting are applied.\n"
             << "  --output-suppressed writes the mono signal after suppression (if\n"
             << "  enabled) but before limiting. Both are diagnostic taps only; they do\n"
-            << "  not change the final --output render.\n";
+            << "  not change the final --output render.\n"
+            << "\n"
+            << "  Steering script columns: time_s,azimuth_deg,elevation_deg[,width_deg]\n"
+            << "  width_deg (0-" << kMaxWidthDeg << ", default 0) blends the beamformer\n"
+            << "  output toward an omnidirectional average; see --help text above.\n";
 }
 
 std::vector<SteeringEvent> LoadSteeringScript(const std::string& path, const std::uint32_t sample_rate_hz)
@@ -61,6 +78,7 @@ std::vector<SteeringEvent> LoadSteeringScript(const std::string& path, const std
     std::string t_s;
     std::string az_s;
     std::string el_s;
+    std::string width_s;
     if (!std::getline(ss, t_s, ',') || !std::getline(ss, az_s, ',') || !std::getline(ss, el_s, ','))
     {
       // allow optional header line
@@ -73,15 +91,22 @@ std::vector<SteeringEvent> LoadSteeringScript(const std::string& path, const std
     const double t = std::stod(t_s);
     const float az = std::stof(az_s);
     const float el = std::stof(el_s);
+    // Optional 4th column, width_deg; defaults to 0 (fully directional) for
+    // backward compatibility with existing 3-column scripts.
+    float width = 0.0F;
+    if (std::getline(ss, width_s, ',') && !width_s.empty())
+    {
+      width = std::clamp(std::stof(width_s), 0.0F, kMaxWidthDeg);
+    }
     events.push_back(
-        {static_cast<std::size_t>(std::max(0.0, t) * static_cast<double>(sample_rate_hz)), {az, el}});
+        {static_cast<std::size_t>(std::max(0.0, t) * static_cast<double>(sample_rate_hz)), {az, el}, width});
   }
   std::sort(events.begin(), events.end(), [](const SteeringEvent& a, const SteeringEvent& b) {
     return a.frame_index < b.frame_index;
   });
   if (events.empty())
   {
-    events.push_back({0, {0.0F, 0.0F}});
+    events.push_back({0, {0.0F, 0.0F}, 0.0F});
   }
   return events;
 }
@@ -198,6 +223,11 @@ int main(int argc, char** argv)
     beamformer.configure(
         geometry, runtime.steering, calibration, input_wav.sample_rate_hz, runtime.capture.period_frames);
     beamformer.setTarget(events.front().target);
+    float current_width_deg = events.front().width_deg;
+    // --enable-suppression forces suppression on regardless of config; when
+    // not passed, fall back to the config's own suppression.enabled, the
+    // same precedence sonitude_stream_process and sonitude_realtime use.
+    const bool suppression_enabled = enable_suppression || runtime.suppression.enabled;
     sonitude::dsp::ConservativeSuppressor suppressor;
     suppressor.configure(
         {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
@@ -227,18 +257,33 @@ int main(int argc, char** argv)
       while (event_index < events.size() && events[event_index].frame_index <= start)
       {
         beamformer.setTarget(events[event_index].target);
+        current_width_deg = events[event_index].width_deg;
         ++event_index;
       }
       const std::size_t count = std::min(kBlock, frames - start);
       beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
                          std::span<float>(mono.data() + start, count));
+      if (current_width_deg > 0.0F)
+      {
+        const float blend = std::clamp(current_width_deg / kMaxWidthDeg, 0.0F, 1.0F);
+        for (std::size_t i = start; i < start + count; ++i)
+        {
+          float omni = 0.0F;
+          for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+          {
+            omni += calibrated[i][ch];
+          }
+          omni /= static_cast<float>(sonitude::audio::kMicChannels);
+          mono[i] = ((1.0F - blend) * mono[i]) + (blend * omni);
+        }
+      }
       if (!beamformed_tap.empty())
       {
         std::copy(mono.begin() + static_cast<std::ptrdiff_t>(start),
                   mono.begin() + static_cast<std::ptrdiff_t>(start + count),
                   beamformed_tap.begin() + static_cast<std::ptrdiff_t>(start));
       }
-      if (enable_suppression)
+      if (suppression_enabled)
       {
         suppressor.setControl(true, 1.0F);
         suppressor.process(std::span<float>(mono.data() + start, count));

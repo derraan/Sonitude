@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGroupBox,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -54,6 +56,8 @@ class RealtimeTab(QWidget):
         self._block_size_spin.setSingleStep(64)
         self._block_size_spin.setValue(1024)
 
+        self._suppression_checkbox = QCheckBox("Enable Suppression")
+
         device_box = QGroupBox("Device")
         device_layout = QVBoxLayout(device_box)
         device_row = QHBoxLayout()
@@ -66,6 +70,7 @@ class RealtimeTab(QWidget):
         buffer_row.addWidget(QLabel("Buffer (frames):"))
         buffer_row.addWidget(self._block_size_spin)
         device_layout.addLayout(buffer_row)
+        device_layout.addWidget(self._suppression_checkbox)
 
         self._start_btn = QPushButton("START")
         self._stop_btn = QPushButton("STOP")
@@ -95,9 +100,16 @@ class RealtimeTab(QWidget):
         self._steering_dial = SteeringDial()
         self._steering_readout = QLabel("0°")
         self._steering_dial.azimuthChanged.connect(self._on_steering_changed)
+        self._width_slider = QSlider(Qt.Orientation.Horizontal)
+        self._width_slider.setRange(0, 180)
+        self._width_slider.setValue(0)
+        self._width_label = QLabel("Width: 0° (fully directional)")
+        self._width_slider.valueChanged.connect(self._on_width_changed)
         steering_layout = QVBoxLayout(steering_box)
         steering_layout.addWidget(self._steering_dial)
         steering_layout.addWidget(self._steering_readout, alignment=Qt.AlignmentFlag.AlignCenter)
+        steering_layout.addWidget(self._width_label)
+        steering_layout.addWidget(self._width_slider)
 
         self._raw_meters = [QProgressBar() for _ in range(6)]
         self._processed_meters = [QProgressBar() for _ in range(2)]
@@ -132,6 +144,10 @@ class RealtimeTab(QWidget):
         outer.addWidget(self.visualization_panel, stretch=1)
 
         self._refresh_devices()
+        try:
+            self._suppression_checkbox.setChecked(read_runtime_config_summary(self._config_path).suppression_enabled)
+        except Exception:  # noqa: BLE001 - default unchecked if config can't be read yet
+            pass
 
     def _refresh_devices(self) -> None:
         self._devices = list_input_devices()
@@ -152,7 +168,14 @@ class RealtimeTab(QWidget):
     def _on_steering_changed(self, azimuth_deg: float) -> None:
         self._steering_readout.setText(f"{azimuth_deg:.0f}°")
         if self._worker is not None:
-            self._worker.set_steering(azimuth_deg, 0.0)
+            self._worker.set_steering(azimuth_deg, 0.0, self._width_slider.value())
+
+    def _on_width_changed(self, width_deg: int) -> None:
+        descriptor = "fully directional" if width_deg == 0 else ("fully omnidirectional" if width_deg >= 180 else "blended")
+        self._width_label.setText(f"Width: {width_deg}° ({descriptor})")
+        self._steering_dial.set_width_deg(width_deg)
+        if self._worker is not None:
+            self._worker.set_steering(self._steering_dial.commanded_azimuth_deg(), 0.0, width_deg)
 
     def _on_start(self) -> None:
         index = self._device_combo.currentIndex()
@@ -160,19 +183,29 @@ class RealtimeTab(QWidget):
             QMessageBox.warning(self, "No device", "Select an input device first.")
             return
         device = self._devices[index]
-        if device.max_input_channels < 6:
-            QMessageBox.warning(self, "Not enough channels", "Selected device has fewer than 6 input channels.")
-            return
 
         config_summary = read_runtime_config_summary(self._config_path)
+        required_channels = max(config_summary.active_channel_map) + 1
+        if device.max_input_channels < required_channels:
+            QMessageBox.warning(
+                self,
+                "Not enough channels",
+                f"config's active_channel_map {config_summary.active_channel_map} requires at least "
+                f"{required_channels} device input channels, but the selected device only has "
+                f"{device.max_input_channels}.",
+            )
+            return
+
         self._active_sample_rate_hz = config_summary.capture_sample_rate_hz
         worker = RealtimeWorker(
             device.index,
             self._config_path,
             config_summary.capture_sample_rate_hz,
+            active_channel_map=config_summary.active_channel_map,
             block_size=self._block_size_spin.value(),
+            enable_suppression=self._suppression_checkbox.isChecked(),
         )
-        worker.set_steering(self._steering_dial.commanded_azimuth_deg(), 0.0)
+        worker.set_steering(self._steering_dial.commanded_azimuth_deg(), 0.0, self._width_slider.value())
         worker.levelsUpdated.connect(self._on_levels_updated)
         worker.blockProcessed.connect(self._on_block_processed)
         worker.errorOccurred.connect(self._on_worker_error)
