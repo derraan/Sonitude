@@ -221,6 +221,47 @@ bool BackendFromByte(const std::uint8_t value, sonitude::dsp::BinauralBackend& b
   }
 }
 
+bool BackendFromName(const std::string& name, sonitude::dsp::BinauralBackend& backend)
+{
+  if (name == "mono_reference")
+  {
+    backend = sonitude::dsp::BinauralBackend::MonoReference;
+    return true;
+  }
+  if (name == "itd_ild")
+  {
+    backend = sonitude::dsp::BinauralBackend::ItdIld;
+    return true;
+  }
+  if (name == "compact_hrtf")
+  {
+    backend = sonitude::dsp::BinauralBackend::CompactHrtf;
+    return true;
+  }
+  if (name == "full_hrtf_reference")
+  {
+    backend = sonitude::dsp::BinauralBackend::FullHrtfReference;
+    return true;
+  }
+  return false;
+}
+
+std::uint8_t BackendToByte(const sonitude::dsp::BinauralBackend backend)
+{
+  switch (backend)
+  {
+    case sonitude::dsp::BinauralBackend::MonoReference:
+      return kBackendMonoReference;
+    case sonitude::dsp::BinauralBackend::ItdIld:
+      return kBackendItdIld;
+    case sonitude::dsp::BinauralBackend::CompactHrtf:
+      return kBackendCompactHrtf;
+    case sonitude::dsp::BinauralBackend::FullHrtfReference:
+      return kBackendFullHrtfReference;
+  }
+  return kBackendNone;
+}
+
 const sonitude::dsp::HrtfTable* TableFor(const BinauralRuntime& runtime,
                                          const sonitude::dsp::BinauralBackend backend)
 {
@@ -377,7 +418,9 @@ int main(int argc, char** argv)
               << ",\"binaural_backends\":" << AvailableBackendsJson(binaural_runtime) << "}\n";
     std::cerr << "sonitude_stream_process ready: sample_rate_hz=" << sample_rate_hz
               << " suppression=" << (suppression_enabled ? "on" : "off")
-              << " limiter=" << (disable_limiter ? "off" : "on") << '\n';
+              << " limiter=" << (disable_limiter ? "off" : "on")
+              << " binaural_yaml=" << (runtime.binaural.enabled ? "on" : "off")
+              << " binaural_backend=" << runtime.binaural.backend << '\n';
 
     std::vector<sonitude::audio::MicFrame> mic_frames;
     std::vector<sonitude::audio::MicFrame> calibrated_frames;
@@ -529,20 +572,37 @@ int main(int argc, char** argv)
         out_flags |= kOutSuppressionApplied;
       }
 
-      const bool binaural_requested = (flags & kFlagBinauralEnabled) != 0;
-      const bool follow_steering = (flags & kFlagBinauralFollowSteering) != 0;
+      const bool protocol_binaural = (flags & kFlagBinauralEnabled) != 0;
+      const bool binaural_active = protocol_binaural || runtime.binaural.enabled;
+      const bool follow_steering =
+          protocol_binaural ? ((flags & kFlagBinauralFollowSteering) != 0)
+                            : runtime.binaural.direction.follow_steering;
       sonitude::dsp::BinauralBackend backend = sonitude::dsp::BinauralBackend::MonoReference;
       bool unavailable = false;
-      if (binaural_requested)
+      if (binaural_active)
       {
-        if (!BackendFromByte(binaural_backend, backend) || !BackendReady(binaural_runtime, backend))
+        std::uint8_t backend_byte = binaural_backend;
+        if (!protocol_binaural || backend_byte == kBackendNone)
+        {
+          sonitude::dsp::BinauralBackend yaml_backend = sonitude::dsp::BinauralBackend::MonoReference;
+          if (!BackendFromName(runtime.binaural.backend, yaml_backend))
+          {
+            unavailable = true;
+          }
+          else
+          {
+            backend_byte = BackendToByte(yaml_backend);
+          }
+        }
+        if (!unavailable &&
+            (!BackendFromByte(backend_byte, backend) || !BackendReady(binaural_runtime, backend)))
         {
           unavailable = true;
           backend = sonitude::dsp::BinauralBackend::MonoReference;
         }
       }
 
-      if (binaural_requested && !unavailable)
+      if (binaural_active && !unavailable)
       {
         if (!binaural_runtime.renderer_configured || binaural_runtime.configured_backend != backend)
         {
@@ -569,10 +629,15 @@ int main(int argc, char** argv)
 
       left.assign(frame_count, 0.0F);
       right.assign(frame_count, 0.0F);
-      if (binaural_requested && !unavailable)
+      if (binaural_active && !unavailable)
       {
         const sonitude::audio::BeamformerSteering binaural_dir =
-            follow_steering ? target : sonitude::audio::BeamformerSteering{binaural_az, binaural_el};
+            follow_steering
+                ? target
+                : (protocol_binaural
+                       ? sonitude::audio::BeamformerSteering{binaural_az, binaural_el}
+                       : sonitude::audio::BeamformerSteering{runtime.binaural.direction.azimuth_deg,
+                                                             runtime.binaural.direction.elevation_deg});
         binaural_runtime.renderer.setDirection(binaural_dir);
         binaural_runtime.renderer.process(std::span<const float>(mono.data(), frame_count),
                                           std::span<float>(left.data(), frame_count),
@@ -610,7 +675,7 @@ int main(int argc, char** argv)
         {
           out_flags |= kOutBinauralUnavailable;
         }
-        if (binaural_requested)
+        if (binaural_active)
         {
           out_flags |= kOutBinauralApplied;
         }

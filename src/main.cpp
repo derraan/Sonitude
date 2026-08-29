@@ -20,6 +20,8 @@
 #include "control/conversation_state_machine.hpp"
 #include "control/zones.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/binaural_renderer.hpp"
+#include "dsp/hrtf_table.hpp"
 #include "dsp/asrc_controller.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/calibration_applier.hpp"
@@ -43,6 +45,65 @@ struct PlaybackBlockRef
   std::size_t slot = 0;
   std::size_t frames = 0;
 };
+
+sonitude::dsp::BinauralBackend ParseBinauralBackend(const std::string& backend)
+{
+  if (backend == "itd_ild")
+  {
+    return sonitude::dsp::BinauralBackend::ItdIld;
+  }
+  if (backend == "compact_hrtf")
+  {
+    return sonitude::dsp::BinauralBackend::CompactHrtf;
+  }
+  if (backend == "full_hrtf_reference")
+  {
+    return sonitude::dsp::BinauralBackend::FullHrtfReference;
+  }
+  return sonitude::dsp::BinauralBackend::MonoReference;
+}
+
+std::string SiblingFile(const std::string& path, const std::string& filename)
+{
+  const auto pos = path.find_last_of("/\\");
+  if (pos == std::string::npos)
+  {
+    return filename;
+  }
+  return path.substr(0, pos + 1U) + filename;
+}
+
+std::unique_ptr<sonitude::dsp::HrtfTable> TryLoadHrtfTable(const std::string& path)
+{
+  if (path.empty())
+  {
+    return {};
+  }
+  try
+  {
+    return std::make_unique<sonitude::dsp::HrtfTable>(sonitude::dsp::LoadHrtfTableFromFile(path));
+  }
+  catch (const std::exception& ex)
+  {
+    std::cerr << "realtime: HRTF table not loaded from " << path << ": " << ex.what() << '\n';
+    return {};
+  }
+}
+
+const sonitude::dsp::HrtfTable* TableFor(const sonitude::dsp::HrtfTable* compact,
+                                         const sonitude::dsp::HrtfTable* reference,
+                                         const sonitude::dsp::BinauralBackend backend)
+{
+  if (backend == sonitude::dsp::BinauralBackend::CompactHrtf)
+  {
+    return compact;
+  }
+  if (backend == sonitude::dsp::BinauralBackend::FullHrtfReference)
+  {
+    return reference;
+  }
+  return nullptr;
+}
 #endif
 
 void PrintUsage()
@@ -223,9 +284,62 @@ int main(int argc, char** argv)
 
     constexpr std::size_t kPlaybackRingSlots = 16;
     const std::size_t period_frames = cap_worker.periodFrames();
+
+    const bool binaural_enabled = runtime_config.binaural.enabled;
+    const auto binaural_backend = ParseBinauralBackend(runtime_config.binaural.backend);
+    std::unique_ptr<sonitude::dsp::HrtfTable> compact_hrtf;
+    std::unique_ptr<sonitude::dsp::HrtfTable> reference_hrtf;
+    if (binaural_enabled &&
+        (binaural_backend == sonitude::dsp::BinauralBackend::CompactHrtf ||
+         binaural_backend == sonitude::dsp::BinauralBackend::FullHrtfReference))
+    {
+      compact_hrtf = TryLoadHrtfTable(runtime_config.binaural.profile.table_path);
+      if (!runtime_config.binaural.profile.table_path.empty())
+      {
+        reference_hrtf =
+            TryLoadHrtfTable(SiblingFile(runtime_config.binaural.profile.table_path, "reference.shrf"));
+      }
+    }
+    sonitude::dsp::BinauralRenderer binaural_renderer;
+    sonitude::dsp::StereoPeakLimiter stereo_limiter;
+    bool binaural_renderer_ready = false;
+    if (binaural_enabled)
+    {
+      const sonitude::dsp::HrtfTable* table =
+          TableFor(compact_hrtf.get(), reference_hrtf.get(), binaural_backend);
+      if ((binaural_backend == sonitude::dsp::BinauralBackend::CompactHrtf ||
+           binaural_backend == sonitude::dsp::BinauralBackend::FullHrtfReference) &&
+          (table == nullptr || table->empty()))
+      {
+        std::cerr << "realtime: binaural backend requires HRTF table; falling back to mono L=R\n";
+      }
+      else
+      {
+        try
+        {
+          binaural_renderer.configure({.sample_rate_hz = dsp_sample_rate_hz,
+                                       .backend = binaural_backend,
+                                       .transition_ms = runtime_config.binaural.transition.duration_ms,
+                                       .max_block_frames = period_frames,
+                                       .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
+                                                   .max_ild_db = runtime_config.binaural.model.max_ild_db},
+                                       .table = table});
+          stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
+          binaural_renderer_ready = true;
+          std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
+        }
+        catch (const std::exception& ex)
+        {
+          std::cerr << "realtime: binaural configure failed: " << ex.what() << '\n';
+        }
+      }
+    }
+
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
     std::vector<sonitude::audio::MicFrame> calibrated_frames(period_frames);
     std::vector<float> mono(period_frames, 0.0F);
+    std::vector<float> binaural_left(period_frames, 0.0F);
+    std::vector<float> binaural_right(period_frames, 0.0F);
     std::vector<sonitude::dsp::StereoSample> stereo(period_frames);
     std::vector<std::vector<sonitude::dsp::StereoSample>> playback_blocks(
         kPlaybackRingSlots, std::vector<sonitude::dsp::StereoSample>(period_frames));
@@ -336,10 +450,33 @@ int main(int argc, char** argv)
         counters.suppressor_gain_milli.store(
             static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),
             std::memory_order_relaxed);
-        for (std::size_t i = 0; i < frame_count; ++i)
+        if (binaural_renderer_ready)
         {
-          stereo[i].left = mono[i];
-          stereo[i].right = mono[i];
+          const sonitude::audio::BeamformerSteering binaural_dir =
+              runtime_config.binaural.direction.follow_steering
+                  ? snapshot.target
+                  : sonitude::audio::BeamformerSteering{
+                        runtime_config.binaural.direction.azimuth_deg,
+                        runtime_config.binaural.direction.elevation_deg};
+          binaural_renderer.setDirection(binaural_dir);
+          binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
+                                    std::span<float>(binaural_left.data(), frame_count),
+                                    std::span<float>(binaural_right.data(), frame_count));
+          stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
+                                 std::span<float>(binaural_right.data(), frame_count));
+          for (std::size_t i = 0; i < frame_count; ++i)
+          {
+            stereo[i].left = binaural_left[i];
+            stereo[i].right = binaural_right[i];
+          }
+        }
+        else
+        {
+          for (std::size_t i = 0; i < frame_count; ++i)
+          {
+            stereo[i].left = mono[i];
+            stereo[i].right = mono[i];
+          }
         }
       }
 

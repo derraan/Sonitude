@@ -1,26 +1,31 @@
-profile_name: "soundbubble_initial_planar_v1"
+# Sound Bubble headphone layout — vertical arc in the XZ plane (Y ≈ 0).
+# USB channel index 0..5 matches Sound_Bubble training / firmware order:
+#   0 left ear, 1 left arc, 2 left top, 3 right top, 4 right arc, 5 right ear.
+# Coordinates from Sound_Bubble/generate_adaptive_dataset.py (cm/100), Sonitude head frame:
+#   +Y front, +X listener-right, +Z up.
+profile_name: "soundbubble_vertical_v1"
 microphones:
-  - id: M0_upper_inner_left
+  - id: M0_left_ear
+    x: -0.1280
+    y: -0.0150
+    z: 0.0000
+  - id: M1_left_arc
+    x: -0.1020
+    y: 0.0000
+    z: 0.1130
+  - id: M2_left_top
     x: -0.0380
-    y: 0.1680
-    z: 0.0000
-  - id: M1_upper_inner_right
+    y: 0.0000
+    z: 0.1690
+  - id: M3_right_top
     x: 0.0380
-    y: 0.1680
-    z: 0.0000
-  - id: M2_upper_outer_left
-    x: -0.1040
-    y: 0.1150
-    z: 0.0000
-  - id: M3_upper_outer_right
-    x: 0.1040
-    y: 0.1150
-    z: 0.0000
-  - id: M4_left_earcup
-    x: -0.1295
     y: 0.0000
-    z: 0.0000
-  - id: M5_right_earcup
-    x: 0.1295
+    z: 0.1690
+  - id: M4_right_arc
+    x: 0.1060
     y: 0.0000
-    z: 0.0000
+    z: 0.1170
+  - id: M5_right_ear
+    x: 0.1310
+    y: -0.0150
+    z: 0.0070

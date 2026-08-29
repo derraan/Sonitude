@@ -137,9 +137,13 @@ class BinauralControls(QWidget):
             self._follow.setChecked(yaml_binaural.follow_steering)
             self._azimuth.setValue(yaml_binaural.azimuth_deg)
             self._elevation.setValue(yaml_binaural.elevation_deg)
-            self._enable.setChecked(yaml_binaural.enabled or hrtf_ready)
-        else:
-            self._enable.setChecked(hrtf_ready)
+            self._enable.setChecked(yaml_binaural.enabled)
+            if yaml_binaural.backend:
+                index = self._backend.findData(yaml_binaural.backend)
+                if index >= 0:
+                    self._backend.setCurrentIndex(index)
+        elif hrtf_ready:
+            self._enable.setChecked(True)
 
         self._sync_angle_widgets()
         unavailable = ", ".join(caps.unavailable_backends) or "none"

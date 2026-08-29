@@ -66,3 +66,18 @@ def read_runtime_config_summary(path: str | Path = DEFAULT_CONFIG_PATH) -> Runti
         suppression_enabled=bool(raw.get("suppression", {}).get("enabled", False)),
         binaural=_read_binaural_summary(raw),
     )
+
+
+def binaural_request_from_config(path: str | Path = DEFAULT_CONFIG_PATH):
+    """Build a BinauralRequest from runtime YAML (mirrors C++ binaural defaults)."""
+    from app.storage.models import BinauralRequest
+
+    summary = read_runtime_config_summary(path)
+    b = summary.binaural
+    return BinauralRequest(
+        enabled=b.enabled,
+        backend=b.backend,
+        azimuth_deg=b.azimuth_deg,
+        elevation_deg=b.elevation_deg,
+        follow_beamformer_steering=b.follow_steering,
+    )

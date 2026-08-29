@@ -21,6 +21,7 @@ import soundfile as sf
 from PySide6.QtCore import QThread, Signal
 
 from app.audio_io.block_queue import DEFAULT_CAPACITY, DropOldestQueue, QueueSnapshot
+from app.config_reader import binaural_request_from_config
 from app.processing.protocol import PROTOCOL_VERSION
 from app.processing.stream_adapter import StreamProcessor, StreamProtocolError
 from app.processing.suppression import SuppressionMode, parse_suppression_mode
@@ -74,7 +75,7 @@ class RealtimeWorker(QThread):
         self._suppression = mode
         self._disable_limiter = disable_limiter
         self._queue_capacity = max(1, int(queue_capacity))
-        self._binaural = binaural or BinauralRequest()
+        self._binaural = binaural or binaural_request_from_config(config_path)
         self.protocol_version = PROTOCOL_VERSION
 
         # active_channel_map selects and reorders which raw DEVICE channels

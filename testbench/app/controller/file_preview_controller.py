@@ -17,6 +17,7 @@ import soundfile as sf
 from PySide6.QtCore import QThread, Signal
 
 from app.audio_io.playback_engine import monitor_gain_linear
+from app.config_reader import binaural_request_from_config
 from app.processing.stream_adapter import StreamProcessor, StreamProtocolError
 from app.processing.suppression import SuppressionMode, parse_suppression_mode
 from app.storage.models import BinauralRequest
@@ -51,7 +52,7 @@ class FilePreviewWorker(QThread):
         self._suppression = parse_suppression_mode(suppression)
         self._active_channel_map = list(active_channel_map) if active_channel_map else [0, 1, 2, 3, 4, 5]
         self._lock = threading.Lock()
-        self._binaural = binaural or BinauralRequest()
+        self._binaural = binaural or binaural_request_from_config(config_path)
         self._azimuth_deg = 0.0
         self._elevation_deg = 0.0
         self._width_deg = 0.0

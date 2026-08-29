@@ -26,7 +26,7 @@ asrc:
 
 steering:
   speed_of_sound_mps: 343.0
-  reference_mic_index: 0
+  reference_mic_index: 2
   steering_ramp_ms: 150.0
   ambient_floor_linear: 0.25
 
@@ -69,8 +69,8 @@ telemetry:
   stats_period_ms: 1000
 
 binaural:
-  enabled: false
-  backend: mono_reference
+  enabled: true
+  backend: itd_ild
   direction:
     follow_steering: true
     azimuth_deg: 0.0
