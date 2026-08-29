@@ -1,8 +1,10 @@
 # Experimental spectral postfilter (PR-scope prototype)
 
-Status: **EXPERIMENTAL**. Disabled unless `suppression.backend: spectral` is selected
-and suppression is enabled. This document describes what was implemented, not a
-claim that the algorithm fits Pico 2 W, STM32H7, or the 6–10 ms M8 budget.
+Status: **EXPERIMENTAL**. The shipping suppressor remains `conservative` (or
+off). The audible path is a **narrowband MVDR** target look (STFT 128/32) plus
+optional spectral postfilter with internal guard-look contrast. Do **not**
+treat this as a measured 6–10 ms product, and do not claim arbitrary two-talker
+removal. Pico 2 W and STM32H7 remain NOT MEASURED.
 
 ## Inspection note (verified before implementation)
 
@@ -39,16 +41,76 @@ Pre-change (PR #32):
 Post-change:
 
 ```text
-6ch PCM -> map/cal -> delay-and-sum -> directional/omni blend (tools)
+6ch PCM -> map/cal -> STFT-domain MVDR (target + 3 internal guard looks)
+  -> directional/omni blend on the audible target only (tools)
   -> SuppressionStage: off | conservative | spectral (alternatives, not series)
   -> mono peak limiter (unchanged)
   -> optional binaural (unchanged)
   -> stereo limiter if binaural (unchanged)
 ```
 
-Post-beamform (not per-mic) so inter-channel phase used by the beamformer is not
-independently gain-modulated. Mono postfiltering is not direction or distance
-separation.
+Do not run separate nonlinear suppressors on each microphone. Guard PCM is never
+mixed into the audible output. Spectral mode feeds the same-hop target and guard
+periodograms into contrast + speech-protected noise updates, then one bounded
+gain on the **target** spectrum only.
+
+## Product architecture (implemented in this PR)
+
+```text
+6ch calibrated PCM
+  -> 6-channel 128/32 analysis STFT
+  -> per-bin MVDR toward the steered look (delay-and-sum fallback)
+  -> three internal MVDR guard looks (+90°, −90°, 180°; not played)
+  -> iSTFT of the target (and of guards when spectral NS is on)
+  -> optional width/omni blend on target PCM
+  -> spectral: shared-hop contrast + Wiener on the target STFT only
+  -> iSTFT -> enhanced mono -> binaural renderer -> limiter
+```
+
+The beamformer STFT and the postfilter STFT are **not yet merged**. Enabling
+spectral NS stacks a second 127-sample delay on top of MVDR.
+
+### What is realistically removable
+
+| Interference | Expected result |
+| --- | --- |
+| Fan, HVAC, broadband environmental noise | Good candidate for spectral suppression |
+| Off-axis external voice | Partially suppressible using target-versus-guard energy |
+| Voice near the target direction | Difficult; spatial contrast becomes weak |
+| Voice at the same direction and similar distance | Generally not separable with this classical pipeline |
+| Near versus distant source | Possible experimentally with near-field steering/RTFs; not established for the current array |
+| Wind and microphone handling noise | Needs dedicated detection/HPF; ordinary Wiener filtering is insufficient |
+
+Complete removal of arbitrary external voices is **not** feasible.
+
+### Latency (44.1 kHz, engineering estimate)
+
+| Term | Samples / time |
+| --- | --- |
+| Measured 128/32 STFT first-arrival | 127 samples ≈ 2.88 ms |
+| 64-frame capture or playback period | 1.45 ms |
+| One capture period + STFT + one playback period | ≈ 5.78 ms |
+
+MVDR adds another 127-sample first-arrival (~2.88 ms) **before** the postfilter
+STFT. Stacked MVDR + spectral NS is therefore **two** 128/32 transforms.
+
+Those figures are **before** DAC delay, ASRC, scheduling and safety buffers.
+
+| Claim | Status |
+| --- | --- |
+| 6 ms end-to-end | Not credible with the present architecture |
+| ~10 ms on a tightly controlled STM32H7 pipeline | Potentially achievable; currently unverified |
+| Pico → USB → Raspberry Pi → USB DAC ≤ 10 ms | Must not be claimed until impulse latency is measured |
+| Legacy WebRTC NS as primary transparency suppressor | Unsuitable: a 10 ms frame interface consumes the budget before the rest of the chain |
+
+### Validation required before treating spatial spectral suppression as working
+
+- Delay-aligned clean-speech attenuation
+- Target/noise SNR change (not RMS-only)
+- Two simultaneous talkers at known angles
+- Focus transitions
+- Startup with desired speech already present
+- Measured impulse delay and MCU worst-case execution time
 
 ## STFT
 
@@ -70,6 +132,21 @@ samples** (256/64). Reconstruction tests skip `delay + N` at the start and `N`
 at the tail. Absolute error threshold in tests: `2e-4`.
 
 ## Algorithm actually implemented
+
+### Narrowband MVDR (`MvdrBeamformer`)
+
+Per hop, per bin (except DC/Nyquist, which stay delay-and-sum): recursive
+covariance with ~80 ms forgetting, diagonal loading, distortionless solve
+`w = R^{-1}d / (d^H R^{-1}d)`, white-noise-gain clamp back to delay-and-sum.
+Steering vector uses the same far-field + calibration delay law as the former
+time-domain beamformer. `DelaySumBeamformer` is a compatibility alias.
+Covariance updates freeze during the steering crossfade.
+
+### Guard-look contrast (spectral backend)
+
+When guard looks are supplied, bins where the target periodogram exceeds the
+loudest guard are speech-protected; bins where a guard dominates are attenuated.
+Then:
 
 Name: **AsymmetricNoisePowerTracker + BoundedWienerGain** (heuristic / inspired, not a
 published algorithm identity). Previously labeled MinimaTrackedWienerPostfilter.
@@ -113,7 +190,7 @@ CMSIS-DSP FFT docs were not used in code; the replacement path is the
 | Key | Type | Units | Default | Range |
 | --- | --- | --- | --- | --- |
 | `suppression.enabled` | bool | — | false | — |
-| `suppression.backend` | string | — | `conservative` if omitted | `off` \| `conservative` \| `spectral` |
+| `suppression.backend` | string | — | `conservative` if omitted | `off` \| `conservative` \| `spectral` (not the shipping default) |
 | `suppression.fade_ms` | float | ms | 120 | [1, 1000] (conservative only) |
 | `suppression.activity_threshold` | float | linear | 0.03 | [0, 1] |
 | `suppression.confidence_threshold` | float | — | 0.6 | [0, 1] |
@@ -176,15 +253,18 @@ pass/fail MCU gate.
 - First allowed update initializes `λ` from the median spectrum; a leading
   full-band utterance can still colour the estimate if it is not tonal versus
   the median.
-- Not spatial, not distance estimation, not beamformer improvement.
+- MVDR plus guard contrast is spatial. It still cannot separate co-located
+  talkers or establish near versus far. Distance estimation is out of scope.
 - Testbench residual and intelligibility metrics delay-align the beamformed tap
   by `suppression_algorithmic_delay_samples` before subtraction.
 
-## Disabled follow-up (not in this PR)
+## Remaining work (not claimed done)
 
-Target / near / far / off-axis **guard beams** and spatial spectral contrast
-would compare post-beam spectra. Requires verified 6-channel health, calibration,
-and geometry first. Do not implement here.
+Merge the MVDR and postfilter STFTs into one hop clock (remove the stacked
+delay). Measure array-health/geometry, impulse e2e latency, and MCU worst-case
+execution time. Near/far RTF looks are experimental. Neural DSP remains out of
+scope. Until those are measured, keep `suppression.backend: conservative` as
+the shipping default. SCOPE-3 is user-vetoed for **in-tree MVDR only**.
 
 ## Test / bench commands
 

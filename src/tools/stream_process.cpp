@@ -47,6 +47,7 @@
 // and emits L=R of directional mono (protocol-defined fallback).
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -72,6 +73,7 @@
 #include "dsp/calibration_applier.hpp"
 #include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
+#include "dsp/spatial_looks.hpp"
 #include "dsp/suppression_stage.hpp"
 
 namespace
@@ -133,7 +135,7 @@ void PrintCapabilities()
             << "\"protocol_version\":3,"
             << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"],"
                "\"backends\":[\"off\",\"conservative\",\"spectral\"],"
-               "\"default_backend\":\"spectral\","
+               "\"default_backend\":\"conservative\","
                "\"implementation_status\":\"EXPERIMENTAL\","
                "\"note\":\"implementation_status applies to the spectral backend only\"},"
             << "\"taps\":[\"processed\"],"
@@ -539,6 +541,7 @@ int main(int argc, char** argv)
     std::vector<sonitude::audio::MicFrame> mic_frames;
     std::vector<sonitude::audio::MicFrame> calibrated_frames;
     std::vector<float> mono;
+    std::array<std::vector<float>, sonitude::dsp::kGuardLooks> guard_looks;
     std::vector<float> left;
     std::vector<float> right;
     std::vector<float> input_pcm;
@@ -672,8 +675,19 @@ int main(int argc, char** argv)
       }
 
       mono.assign(frame_count, 0.0F);
-      beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
-                         std::span<float>(mono.data(), frame_count));
+      sonitude::dsp::GuardLookSpans guards{};
+      if (suppression_backend == sonitude::dsp::SuppressionBackend::Spectral)
+      {
+        guards = sonitude::dsp::BindGuardLooks(guard_looks, frame_count);
+        beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+                           std::span<float>(mono.data(), frame_count),
+                           guards);
+      }
+      else
+      {
+        beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+                           std::span<float>(mono.data(), frame_count));
+      }
 
       const float clamped_blend = std::clamp(blend_deg, 0.0F, kMaxBlendDeg);
       if (clamped_blend > 0.0F)
@@ -715,7 +729,15 @@ int main(int argc, char** argv)
           suppressor.setConfidenceThreshold(live.confidence_threshold);
         }
         suppressor.setControl(focus_active, focus_active ? live.confidence : 0.0F);
-        suppressor.process(std::span<float>(mono.data(), frame_count));
+        if (suppression_backend == sonitude::dsp::SuppressionBackend::Spectral)
+        {
+          suppressor.process(std::span<float>(mono.data(), frame_count),
+                             sonitude::dsp::ConstGuardLooks(guards));
+        }
+        else
+        {
+          suppressor.process(std::span<float>(mono.data(), frame_count));
+        }
         if (suppression_backend != sonitude::dsp::SuppressionBackend::Off)
         {
           out_flags |= kOutSuppressionApplied;

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -21,6 +22,7 @@
 #include "dsp/calibration_applier.hpp"
 #include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
+#include "dsp/spatial_looks.hpp"
 #include "dsp/suppression_stage.hpp"
 
 namespace
@@ -32,15 +34,13 @@ struct SteeringEvent
   float width_deg = 0.0F;
 };
 
-// Beam "width" has no native meaning in DelaySumBeamformer (a fixed
-// delay-and-sum array has no adjustable spatial width parameter). This tool
+// Beam "width" has no native meaning in MvdrBeamformer. This tool
 // defines width as a directivity blend: the beamformed mono output is
 // linearly blended toward a simple omnidirectional average of the six
 // calibrated mic channels, in proportion to width_deg / kMaxWidthDeg.
-// 0 deg = fully directional (pure beamformer output, current behavior);
-// kMaxWidthDeg = fully omnidirectional. This is implemented entirely in this
-// tool around the unmodified IBeamformer output; DelaySumBeamformer itself
-// is untouched. See testbench/README.md, "Steering width definition".
+// 0 deg = fully directional (pure beamformer output);
+// kMaxWidthDeg = fully omnidirectional. Implemented in this tool around
+// IBeamformer output. See testbench/README.md, "Steering width definition".
 constexpr float kMaxWidthDeg = 180.0F;
 
 enum class SuppressionMode
@@ -147,7 +147,7 @@ void PrintCapabilities()
             << "\"protocol_version\":2,"
             << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"],"
                "\"backends\":[\"off\",\"conservative\",\"spectral\"],"
-               "\"default_backend\":\"spectral\","
+               "\"default_backend\":\"conservative\","
                "\"implementation_status\":\"EXPERIMENTAL\","
                "\"note\":\"implementation_status applies to the spectral backend only\"},"
             << "\"taps\":[\"beamformed\",\"suppressed\",\"processed\",\"binaural\"],"
@@ -511,6 +511,7 @@ int main(int argc, char** argv)
     }
 
     std::vector<float> mono(frames, 0.0F);
+    std::array<std::vector<float>, sonitude::dsp::kGuardLooks> guard_looks;
     std::vector<float> left;
     std::vector<float> right;
     std::vector<float> beamformed_tap;
@@ -549,8 +550,19 @@ int main(int argc, char** argv)
         ++event_index;
       }
       const std::size_t count = std::min(kProcessBlock, frames - start);
-      beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
-                         std::span<float>(mono.data() + start, count));
+      sonitude::dsp::GuardLookSpans guards{};
+      if (suppression_backend == sonitude::dsp::SuppressionBackend::Spectral)
+      {
+        guards = sonitude::dsp::BindGuardLooks(guard_looks, count);
+        beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
+                           std::span<float>(mono.data() + start, count),
+                           guards);
+      }
+      else
+      {
+        beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
+                           std::span<float>(mono.data() + start, count));
+      }
       if (current_width_deg > 0.0F)
       {
         const float blend = std::clamp(current_width_deg / kMaxWidthDeg, 0.0F, 1.0F);
@@ -574,7 +586,15 @@ int main(int argc, char** argv)
       if (suppression_enabled)
       {
         suppressor.setControl(true, 1.0F);
-        suppressor.process(std::span<float>(mono.data() + start, count));
+        if (suppression_backend == sonitude::dsp::SuppressionBackend::Spectral)
+        {
+          suppressor.process(std::span<float>(mono.data() + start, count),
+                             sonitude::dsp::ConstGuardLooks(guards));
+        }
+        else
+        {
+          suppressor.process(std::span<float>(mono.data() + start, count));
+        }
       }
       if (!suppressed_tap.empty())
       {

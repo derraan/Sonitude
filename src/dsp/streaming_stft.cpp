@@ -58,6 +58,7 @@ bool StreamingStft::prepare(const double sample_rate,
   sample_rate_ = sample_rate;
   fft_size_ = config.fft_size;
   hop_size_ = config.hop_size;
+  synthesize_ = config.synthesize;
   PeriodicHann(window_, fft_size_);
   const float cola = ColaOfWindowSquared(window_, hop_size_);
   if (!(cola > 1.0e-6F) || !std::isfinite(cola))
@@ -70,9 +71,17 @@ bool StreamingStft::prepare(const double sample_rate,
   time_scratch_.assign(fft_size_, 0.0F);
   re_.assign(fft_size_, 0.0F);
   im_.assign(fft_size_, 0.0F);
-  ola_.assign(fft_size_, 0.0F);
-  const std::size_t fifo = maximum_block_frames + fft_size_ + hop_size_;
-  out_fifo_.assign(fifo, 0.0F);
+  if (synthesize_)
+  {
+    ola_.assign(fft_size_, 0.0F);
+    const std::size_t fifo = maximum_block_frames + fft_size_ + hop_size_;
+    out_fifo_.assign(fifo, 0.0F);
+  }
+  else
+  {
+    ola_.clear();
+    out_fifo_.clear();
+  }
 
   reset();
   ready_ = true;
@@ -135,6 +144,10 @@ void StreamingStft::ProcessHop(SpectralHopFn hop_fn, void* hop_context) noexcept
   {
     hop_fn(hop_context, re_.data(), im_.data(), fft_size_);
   }
+  if (!synthesize_)
+  {
+    return;
+  }
   fft_.inverse(re_.data(), im_.data(), time_scratch_.data());
   for (std::size_t i = 0; i < fft_size_; ++i)
   {
@@ -146,6 +159,48 @@ void StreamingStft::ProcessHop(SpectralHopFn hop_fn, void* hop_context) noexcept
   }
   std::memmove(ola_.data(), ola_.data() + hop_size_, (fft_size_ - hop_size_) * sizeof(float));
   std::fill(ola_.begin() + static_cast<std::ptrdiff_t>(fft_size_ - hop_size_), ola_.end(), 0.0F);
+}
+
+void StreamingStft::feed(const float sample, SpectralHopFn hop_fn, void* hop_context) noexcept
+{
+  if (!ready_ || analysis_ring_.empty())
+  {
+    return;
+  }
+  analysis_ring_[ring_write_] = sample;
+  ring_write_ = (ring_write_ + 1U) % fft_size_;
+  ++hop_filled_;
+  if (hop_filled_ == hop_size_)
+  {
+    hop_filled_ = 0;
+    ProcessHop(hop_fn, hop_context);
+  }
+}
+
+void StreamingStft::overlapAddSpectrum(const float* re, const float* im) noexcept
+{
+  if (!ready_ || !synthesize_ || re == nullptr || im == nullptr || re_.empty())
+  {
+    return;
+  }
+  std::memcpy(re_.data(), re, fft_size_ * sizeof(float));
+  std::memcpy(im_.data(), im, fft_size_ * sizeof(float));
+  fft_.inverse(re_.data(), im_.data(), time_scratch_.data());
+  for (std::size_t i = 0; i < fft_size_; ++i)
+  {
+    ola_[i] += time_scratch_[i] * window_[i] * ola_scale_;
+  }
+  for (std::size_t i = 0; i < hop_size_; ++i)
+  {
+    PushOutput(ola_[i]);
+  }
+  std::memmove(ola_.data(), ola_.data() + hop_size_, (fft_size_ - hop_size_) * sizeof(float));
+  std::fill(ola_.begin() + static_cast<std::ptrdiff_t>(fft_size_ - hop_size_), ola_.end(), 0.0F);
+}
+
+float StreamingStft::pop() noexcept
+{
+  return PopOutput();
 }
 
 void StreamingStft::process(const std::span<const float> input,
@@ -164,15 +219,8 @@ void StreamingStft::process(const std::span<const float> input,
   }
   for (std::size_t i = 0; i < n; ++i)
   {
-    analysis_ring_[ring_write_] = input[i];
-    ring_write_ = (ring_write_ + 1U) % fft_size_;
-    ++hop_filled_;
-    if (hop_filled_ == hop_size_)
-    {
-      hop_filled_ = 0;
-      ProcessHop(hop_fn, hop_context);
-    }
-    output[i] = PopOutput();
+    feed(input[i], hop_fn, hop_context);
+    output[i] = synthesize_ ? PopOutput() : 0.0F;
   }
   for (std::size_t i = n; i < output.size(); ++i)
   {

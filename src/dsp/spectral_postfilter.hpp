@@ -1,9 +1,11 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <span>
 #include <vector>
 
+#include "dsp/spatial_looks.hpp"
 #include "dsp/streaming_stft.hpp"
 
 namespace sonitude::dsp
@@ -19,6 +21,10 @@ class AsymmetricNoisePowerTracker
   bool prepare(std::size_t n_bins, double hop_hz);
   void reset() noexcept;
   void update(std::span<const float> power, bool allow_update) noexcept;
+  void update(std::span<const float> power,
+              bool allow_update,
+              std::span<const float> max_guard_power,
+              float protect_ratio) noexcept;
   [[nodiscard]] std::span<const float> noisePower() const noexcept;
   [[nodiscard]] std::span<const float> smoothedPower() const noexcept;
   [[nodiscard]] std::size_t binCount() const noexcept { return n_bins_; }
@@ -81,6 +87,9 @@ class SpectralPostfilter
   void setConfidenceThreshold(float threshold) noexcept;
   void setEstimatorHold(bool hold) noexcept;
   void process(std::span<const float> input, std::span<float> output) noexcept;
+  void process(std::span<const float> target,
+               std::span<float> output,
+               GuardLookConstSpans guards) noexcept;
 
   [[nodiscard]] bool ready() const noexcept { return ready_; }
   [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept;
@@ -98,20 +107,35 @@ class SpectralPostfilter
   BoundedWienerGain& gainRule() noexcept { return wiener_; }
 
  private:
+  struct GuardHopContext
+  {
+    SpectralPostfilter* self = nullptr;
+    std::size_t index = 0;
+  };
+
   static void OnHop(void* context, float* re, float* im, std::size_t fft_size) noexcept;
+  static void OnGuardHop(void* context, float* re, float* im, std::size_t fft_size) noexcept;
+  void StoreGuardPower(std::size_t index, const float* re, const float* im, std::size_t fft_size) noexcept;
   void ProcessSpectrum(float* re, float* im, std::size_t fft_size) noexcept;
 
   bool ready_ = false;
   bool focus_active_ = true;
+  bool have_spatial_ = false;
   float confidence_ = 1.0F;
   bool estimator_hold_ = false;
   SpectralPostfilterConfig config_{};
   StreamingStft stft_{};
+  std::array<StreamingStft, kGuardLooks> guard_stft_{};
+  std::array<GuardHopContext, kGuardLooks> guard_ctx_{};
   AsymmetricNoisePowerTracker tracker_{};
   BoundedWienerGain wiener_{};
   std::vector<float> power_{};
   std::vector<float> gains_{};
+  std::vector<float> spatial_gain_{};
+  std::array<std::vector<float>, kGuardLooks> guard_power_{};
+  std::vector<float> max_guard_power_{};
   float last_mean_gain_ = 1.0F;
   float apply_mix_ = 1.0F;
+  float spatial_coeff_ = 0.5F;
 };
 }  // namespace sonitude::dsp

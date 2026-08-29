@@ -14,11 +14,14 @@ constexpr float kMaxXi = 1.0e6F;
 constexpr float kNoiseOverestimate = 2.0F;
 // Bins this far above the cross-frequency median of S are treated as tonal.
 constexpr float kTonalMedianRatio = 6.0F;
+constexpr float kSpatialBias = 1.0F;
+constexpr float kProtectRatio = 4.0F;
 constexpr float kTauPsdSmoothSec = 0.032F;
 constexpr float kTauNoiseRiseSec = 0.48F;
 constexpr float kTauDecisionDirectedSec = 0.048F;
 constexpr float kTauGainSec = 0.016F;
 constexpr float kTauBypassSec = 0.016F;
+constexpr float kTauSpatialSec = 0.016F;
 
 float CoeffFromTau(const float tau_sec, const double hop_hz)
 {
@@ -76,23 +79,47 @@ void AsymmetricNoisePowerTracker::reset() noexcept
   have_first_ = false;
 }
 
+void AsymmetricNoisePowerTracker::update(const std::span<const float> power, const bool allow_update) noexcept
+{
+  update(power, allow_update, {}, 0.0F);
+}
+
 void AsymmetricNoisePowerTracker::update(const std::span<const float> power,
-                                         const bool allow_update) noexcept
+                                         const bool allow_update,
+                                         const std::span<const float> max_guard_power,
+                                         const float protect_ratio) noexcept
 {
   const std::size_t n = std::min(n_bins_, power.size());
   if (!allow_update)
   {
     return;
   }
+  const bool spatial = max_guard_power.size() >= n && protect_ratio > 0.0F;
+  auto protected_bin = [&](const std::size_t k) {
+    if (!spatial)
+    {
+      return false;
+    }
+    const float pg = std::max(Sanitize(max_guard_power[k]), kEps);
+    return (std::max(Sanitize(power[k]), kEps) / pg) > protect_ratio;
+  };
   if (!have_first_)
   {
+    std::size_t used = 0;
     for (std::size_t k = 0; k < n; ++k)
     {
       const float p = std::max(Sanitize(power[k]), kEps);
       smoothed_[k] = p;
-      median_scratch_[k] = p;
+      if (!protected_bin(k))
+      {
+        median_scratch_[used++] = p;
+      }
     }
-    const float med = MedianOf(median_scratch_, n);
+    if (used == 0)
+    {
+      return;
+    }
+    const float med = MedianOf(median_scratch_, used);
     for (std::size_t k = 0; k < n; ++k)
     {
       noise_[k] = med;
@@ -110,7 +137,7 @@ void AsymmetricNoisePowerTracker::update(const std::span<const float> power,
   const float tonal_floor = med * kTonalMedianRatio;
   for (std::size_t k = 0; k < n; ++k)
   {
-    if (smoothed_[k] > tonal_floor)
+    if (protected_bin(k) || smoothed_[k] > tonal_floor)
     {
       continue;
     }
@@ -229,7 +256,7 @@ bool SpectralPostfilter::prepare(const double sample_rate,
   {
     return false;
   }
-  if (!stft_.prepare(sample_rate, maximum_block_frames, {config.fft_size, config.hop_size}))
+  if (!stft_.prepare(sample_rate, maximum_block_frames, {config.fft_size, config.hop_size, true}))
   {
     return false;
   }
@@ -240,12 +267,26 @@ bool SpectralPostfilter::prepare(const double sample_rate,
   {
     return false;
   }
+  for (std::size_t g = 0; g < kGuardLooks; ++g)
+  {
+    if (!guard_stft_[g].prepare(sample_rate, maximum_block_frames,
+                                {config.fft_size, config.hop_size, false}))
+    {
+      return false;
+    }
+    guard_ctx_[g] = GuardHopContext{this, g};
+    guard_power_[g].assign(n_bins, 0.0F);
+  }
   config_ = config;
   config_.confidence_threshold = std::clamp(config.confidence_threshold, 0.0F, 1.0F);
   power_.assign(n_bins, 0.0F);
   gains_.assign(n_bins, 1.0F);
+  spatial_gain_.assign(n_bins, 1.0F);
+  max_guard_power_.assign(n_bins, 0.0F);
   last_mean_gain_ = 1.0F;
   apply_mix_ = 0.0F;
+  spatial_coeff_ = CoeffFromTau(kTauSpatialSec, hop_hz);
+  have_spatial_ = false;
   focus_active_ = true;
   confidence_ = 1.0F;
   estimator_hold_ = false;
@@ -256,12 +297,20 @@ bool SpectralPostfilter::prepare(const double sample_rate,
 void SpectralPostfilter::reset() noexcept
 {
   stft_.reset();
+  for (std::size_t g = 0; g < kGuardLooks; ++g)
+  {
+    guard_stft_[g].reset();
+    std::fill(guard_power_[g].begin(), guard_power_[g].end(), 0.0F);
+  }
   tracker_.reset();
   wiener_.reset();
   std::fill(power_.begin(), power_.end(), 0.0F);
   std::fill(gains_.begin(), gains_.end(), 1.0F);
+  std::fill(spatial_gain_.begin(), spatial_gain_.end(), 1.0F);
+  std::fill(max_guard_power_.begin(), max_guard_power_.end(), 0.0F);
   last_mean_gain_ = 1.0F;
   apply_mix_ = 0.0F;
+  have_spatial_ = false;
   estimator_hold_ = false;
 }
 
@@ -286,6 +335,30 @@ void SpectralPostfilter::OnHop(void* context, float* re, float* im, const std::s
   static_cast<SpectralPostfilter*>(context)->ProcessSpectrum(re, im, fft_size);
 }
 
+void SpectralPostfilter::OnGuardHop(void* context, float* re, float* im, const std::size_t fft_size) noexcept
+{
+  auto* ctx = static_cast<GuardHopContext*>(context);
+  ctx->self->StoreGuardPower(ctx->index, re, im, fft_size);
+}
+
+void SpectralPostfilter::StoreGuardPower(const std::size_t index,
+                                         const float* const re,
+                                         const float* const im,
+                                         const std::size_t fft_size) noexcept
+{
+  if (index >= kGuardLooks)
+  {
+    return;
+  }
+  const std::size_t n_bins = std::min(guard_power_[index].size(), (fft_size / 2U) + 1U);
+  for (std::size_t k = 0; k < n_bins; ++k)
+  {
+    const float r = Sanitize(re[k]);
+    const float i = Sanitize(im[k]);
+    guard_power_[index][k] = (r * r) + (i * i);
+  }
+}
+
 void SpectralPostfilter::ProcessSpectrum(float* const re, float* const im, const std::size_t fft_size) noexcept
 {
   const std::size_t n_bins = (fft_size / 2U) + 1U;
@@ -294,11 +367,30 @@ void SpectralPostfilter::ProcessSpectrum(float* const re, float* const im, const
     const float r = Sanitize(re[k]);
     const float i = Sanitize(im[k]);
     power_[k] = (r * r) + (i * i);
+    float pg = kEps;
+    if (have_spatial_)
+    {
+      for (std::size_t g = 0; g < kGuardLooks; ++g)
+      {
+        if (k < guard_power_[g].size())
+        {
+          pg = std::max(pg, guard_power_[g][k]);
+        }
+      }
+    }
+    max_guard_power_[k] = pg;
   }
 
   const bool focused = focus_active_ && (confidence_ >= config_.confidence_threshold);
   const bool allow_noise = focused && !estimator_hold_;
-  tracker_.update(power_, allow_noise);
+  if (have_spatial_)
+  {
+    tracker_.update(power_, allow_noise, max_guard_power_, kProtectRatio);
+  }
+  else
+  {
+    tracker_.update(power_, allow_noise);
+  }
 
   const double hop_hz =
       stft_.hopSize() == 0 ? 0.0 : stft_.sampleRate() / static_cast<double>(stft_.hopSize());
@@ -320,8 +412,23 @@ void SpectralPostfilter::ProcessSpectrum(float* const re, float* const im, const
   double power_sum = 0.0;
   for (std::size_t k = 0; k < n_bins; ++k)
   {
-    float g = std::clamp(Sanitize(gains_[k]), 0.0F, 1.0F);
+    float g_sp = 1.0F;
+    bool protected_bin = false;
+    if (have_spatial_)
+    {
+      const float ratio = power_[k] / std::max(max_guard_power_[k], kEps);
+      protected_bin = ratio > kProtectRatio;
+      const float instant = ratio / (ratio + kSpatialBias);
+      spatial_gain_[k] = (spatial_coeff_ * spatial_gain_[k]) + ((1.0F - spatial_coeff_) * instant);
+      g_sp = std::clamp(spatial_gain_[k], 0.0F, 1.0F);
+    }
+    float g_w = std::clamp(Sanitize(gains_[k]), 0.0F, 1.0F);
+    float g = protected_bin ? std::max(g_sp, g_w) : (g_sp * g_w);
     g = ((1.0F - apply_mix_) * 1.0F) + (apply_mix_ * g);
+    if (have_spatial_ && focused && apply_mix_ < 1.0e-4F)
+    {
+      g = g_sp;
+    }
     g = std::clamp(g, 0.0F, 1.0F);
     gains_[k] = g;
     re[k] *= g;
@@ -341,12 +448,20 @@ void SpectralPostfilter::ProcessSpectrum(float* const re, float* const im, const
 
 void SpectralPostfilter::process(const std::span<const float> input, const std::span<float> output) noexcept
 {
+  process(input, output, GuardLookConstSpans{});
+}
+
+void SpectralPostfilter::process(const std::span<const float> target,
+                                 const std::span<float> output,
+                                 const GuardLookConstSpans guards) noexcept
+{
+  have_spatial_ = !guards[0].empty() && guards[0].size() >= target.size();
   if (!ready_)
   {
-    const std::size_t n = std::min(input.size(), output.size());
+    const std::size_t n = std::min(target.size(), output.size());
     for (std::size_t i = 0; i < n; ++i)
     {
-      output[i] = Sanitize(input[i]);
+      output[i] = Sanitize(target[i]);
     }
     for (std::size_t i = n; i < output.size(); ++i)
     {
@@ -354,23 +469,50 @@ void SpectralPostfilter::process(const std::span<const float> input, const std::
     }
     return;
   }
-  if (input.data() == output.data())
+
+  if (!have_spatial_)
   {
-    for (float& s : output)
+    if (target.data() == output.data())
     {
-      s = Sanitize(s);
+      for (float& s : output)
+      {
+        s = Sanitize(s);
+      }
+      stft_.process(output, output, &SpectralPostfilter::OnHop, this);
+      return;
     }
-    stft_.process(output, output, &SpectralPostfilter::OnHop, this);
+    for (std::size_t i = 0; i < target.size() && i < output.size(); ++i)
+    {
+      output[i] = Sanitize(target[i]);
+    }
+    stft_.process(std::span<const float>(output.data(), std::min(target.size(), output.size())),
+                  output,
+                  &SpectralPostfilter::OnHop,
+                  this);
     return;
   }
-  for (std::size_t i = 0; i < input.size() && i < output.size(); ++i)
+
+  const std::size_t n = std::min(target.size(), output.size());
+  const bool in_place = target.data() == output.data();
+  for (std::size_t i = 0; i < n; ++i)
   {
-    output[i] = Sanitize(input[i]);
+    const float x = Sanitize(in_place ? output[i] : target[i]);
+    if (in_place)
+    {
+      output[i] = x;
+    }
+    for (std::size_t g = 0; g < kGuardLooks; ++g)
+    {
+      const float gs = (i < guards[g].size()) ? Sanitize(guards[g][i]) : 0.0F;
+      guard_stft_[g].feed(gs, &SpectralPostfilter::OnGuardHop, &guard_ctx_[g]);
+    }
+    stft_.feed(x, &SpectralPostfilter::OnHop, this);
+    output[i] = stft_.pop();
   }
-  stft_.process(std::span<const float>(output.data(), std::min(input.size(), output.size())),
-                output,
-                &SpectralPostfilter::OnHop,
-                this);
+  for (std::size_t i = n; i < output.size(); ++i)
+  {
+    output[i] = 0.0F;
+  }
 }
 
 std::size_t SpectralPostfilter::algorithmicDelaySamples() const noexcept
@@ -381,7 +523,13 @@ std::size_t SpectralPostfilter::algorithmicDelaySamples() const noexcept
 
 std::size_t SpectralPostfilter::persistentBytes() const noexcept
 {
-  return stft_.persistentBytes() + tracker_.persistentBytes() + wiener_.persistentBytes() +
-         ((power_.size() + gains_.size()) * sizeof(float));
+  std::size_t bytes = stft_.persistentBytes() + tracker_.persistentBytes() + wiener_.persistentBytes() +
+                      ((power_.size() + gains_.size() + spatial_gain_.size() + max_guard_power_.size()) *
+                       sizeof(float));
+  for (std::size_t g = 0; g < kGuardLooks; ++g)
+  {
+    bytes += guard_stft_[g].persistentBytes() + (guard_power_[g].size() * sizeof(float));
+  }
+  return bytes;
 }
 }  // namespace sonitude::dsp

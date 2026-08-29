@@ -6,6 +6,7 @@
 #include <string>
 
 #include "dsp/spectral_postfilter.hpp"
+#include "dsp/spatial_looks.hpp"
 #include "dsp/suppressor.hpp"
 
 namespace sonitude::dsp
@@ -40,6 +41,7 @@ class SuppressionStage
   void setConfidenceThreshold(float threshold) noexcept;
   void setEstimatorHold(bool hold) noexcept;
   void process(std::span<float> mono);
+  void process(std::span<float> target, GuardLookConstSpans guards);
 
   [[nodiscard]] SuppressionBackend backend() const noexcept { return backend_; }
   [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept;

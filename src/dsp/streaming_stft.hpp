@@ -18,6 +18,7 @@ struct StreamingStftConfig
 {
   std::size_t fft_size = 128;
   std::size_t hop_size = 32;
+  bool synthesize = true;
 };
 
 // Allocation-free after prepare. Streaming short-STFT with periodic Hann
@@ -34,6 +35,14 @@ class StreamingStft
                std::span<float> output,
                SpectralHopFn hop_fn = nullptr,
                void* hop_context = nullptr) noexcept;
+  // One sample. Hop callback runs when a hop is complete. Synthesis-only
+  // instances should call pop() after each feed; analysis-only instances
+  // ignore pop().
+  void feed(float sample, SpectralHopFn hop_fn = nullptr, void* hop_context = nullptr) noexcept;
+  // Inverse + OLA of an external spectrum. Call once per analysis hop on a
+  // prepare(..., {.synthesize = true}) instance. Does not consume analysis PCM.
+  void overlapAddSpectrum(const float* re, const float* im) noexcept;
+  [[nodiscard]] float pop() noexcept;
 
   [[nodiscard]] bool ready() const noexcept { return ready_; }
   [[nodiscard]] std::size_t fftSize() const noexcept { return fft_size_; }
@@ -51,6 +60,7 @@ class StreamingStft
   float PopOutput() noexcept;
 
   bool ready_ = false;
+  bool synthesize_ = true;
   double sample_rate_ = 0.0;
   std::size_t fft_size_ = 0;
   std::size_t hop_size_ = 0;

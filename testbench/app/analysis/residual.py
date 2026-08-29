@@ -1,10 +1,10 @@
 """Residual/error signal computation.
 
 IMPORTANT: the beamformer changes channel count (6 -> 1) and applies a
-per-channel steering delay, so a raw sample-domain subtraction between the
-6-channel input and the mono/stereo output is not meaningful (see
-testbench/README.md, "Residual definition"). Only same-domain, same-alignment
-signal pairs should ever be subtracted here:
+steering-vector delay plus its own 128/32 STFT (127 samples). A raw sample-domain
+subtraction between the 6-channel input and the mono/stereo output is not
+meaningful (see testbench/README.md, "Residual definition"). Only same-domain,
+same-alignment signal pairs should ever be subtracted here:
 
   - beamform residual = delay-aligned pre-suppression mono − post-suppression mono
   - limiter residual   = pre-limiter mono      - post-limiter mono

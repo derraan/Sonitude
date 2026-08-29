@@ -70,7 +70,7 @@ class SteeringControls(QWidget):
         layout.addWidget(self._blend_label)
         layout.addWidget(self._blend_slider)
         blend_note = QLabel(
-            "Delay-and-sum beamformer only: changes which direction is emphasized in the mono "
+            "MVDR beamformer: changes which direction is emphasized in the mono "
             "tap. Does not pan L/R — headphone spatial image comes from the binaural renderer."
         )
         apply_secondary_note(blend_note)

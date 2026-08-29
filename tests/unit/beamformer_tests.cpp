@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <span>
 #include <stdexcept>
@@ -9,6 +10,7 @@
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/spatial_looks.hpp"
 #include "tests/support/synth_signals.hpp"
 
 namespace
@@ -258,6 +260,63 @@ void TestLeftRightAzimuthConvention()
   const double right_rms = sonitude::tests::support::ComputeRms(out_right, 512);
   Require(left_rms > right_rms * 1.2, "listener-left steering should beat listener-right steering");
 }
+
+void TestGuardLooksAreInternalAndOffAxis()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 4096;
+  const auto geometry = BuildGeometry();
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 850.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::DelaySumBeamformer bf;
+  bf.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> target(kFrames, 0.0F);
+  std::array<std::vector<float>, sonitude::dsp::kGuardLooks> guard_buf;
+  const auto guards = sonitude::dsp::BindGuardLooks(guard_buf, kFrames);
+  bf.process(mic, target, guards);
+
+  const double target_rms = sonitude::tests::support::ComputeRms(target, 512);
+  const double side_rms = sonitude::tests::support::ComputeRms(guard_buf[0], 512);
+  const double rear_rms = sonitude::tests::support::ComputeRms(guard_buf[2], 512);
+  Require(target_rms > side_rms * 1.15, "target look should beat +90 guard for an on-axis source");
+  Require(target_rms > rear_rms * 1.15, "target look should beat rear guard for an on-axis source");
+}
+
+void TestMvdrNullsOffAxisInterferer()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 8192;
+  const auto geometry = BuildGeometry();
+  const auto target_src = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto interf_src = sonitude::tests::support::GenerateSine(kFrames, kFs, 1100.0);
+  auto mic = sonitude::tests::support::GeneratePlaneWave(
+      target_src, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+  const auto interf = sonitude::tests::support::GeneratePlaneWave(
+      interf_src, geometry, kFs, 0, 90.0F, 0.0F, 343.0F);
+  for (std::size_t i = 0; i < kFrames; ++i)
+  {
+    for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+    {
+      mic[i][ch] += interf[i][ch];
+    }
+  }
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> out(kFrames, 0.0F);
+  bf.process(mic, out);
+
+  const double out_rms = sonitude::tests::support::ComputeRms(out, 1024);
+  const double target_rms = sonitude::tests::support::ComputeRms(target_src, 1024);
+  const double mix_ref = sonitude::tests::support::ComputeRms(interf_src, 1024);
+  Require(out_rms < (target_rms + mix_ref) * 0.85,
+          "MVDR target look should suppress some off-axis interferer energy");
+  Require(out_rms > target_rms * 0.4, "MVDR should not cancel the look direction");
+}
 }  // namespace
 
 void RunBeamformerTests()
@@ -267,4 +326,6 @@ void RunBeamformerTests()
   TestRepeatedIdenticalSetTargetSettles();
   TestCalibrationDelayClosure();
   TestLeftRightAzimuthConvention();
+  TestGuardLooksAreInternalAndOffAxis();
+  TestMvdrNullsOffAxisInterferer();
 }

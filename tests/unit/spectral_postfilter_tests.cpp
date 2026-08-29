@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -7,8 +8,11 @@
 #include <string>
 #include <vector>
 
+#include "dsp/beamformer.hpp"
+#include "dsp/spatial_looks.hpp"
 #include "dsp/spectral_postfilter.hpp"
 #include "tests/support/alloc_counter.hpp"
+#include "tests/support/synth_signals.hpp"
 
 namespace
 {
@@ -467,6 +471,86 @@ void TestCoLocatedSpectraAreNotSpatialSeparation()
   pf.process(mix, out);
   Require(AllFinite(out), "co-located equal spectra remain finite");
 }
+
+sonitude::app::GeometryConfig TestGeometry()
+{
+  sonitude::app::GeometryConfig g;
+  g.profile_name = "unit_test_geometry";
+  g.microphones = {
+      {"M0", -0.038, 0.168, 0.0}, {"M1", 0.038, 0.168, 0.0}, {"M2", -0.090, 0.050, 0.0},
+      {"M3", 0.090, 0.050, 0.0},  {"M4", -0.060, 0.000, 0.0}, {"M5", 0.060, 0.000, 0.0},
+  };
+  return g;
+}
+
+sonitude::app::CalibrationConfig TestCalibration()
+{
+  sonitude::app::CalibrationConfig c;
+  c.sample_rate_hz = 44100;
+  c.channels.resize(sonitude::audio::kMicChannels);
+  for (std::size_t i = 0; i < c.channels.size(); ++i)
+  {
+    c.channels[i].id = "M" + std::to_string(i);
+    c.channels[i].polarity = 1;
+    c.channels[i].gain_linear = 1.0F;
+    c.channels[i].delay_samples = 0.0F;
+  }
+  return c;
+}
+
+void TestTwoTalkersGuardContrast()
+{
+  constexpr std::uint32_t kFs = 44100;
+  constexpr std::size_t kFrames = 44100;
+  const auto geometry = TestGeometry();
+  const double f_target = 4.0 * static_cast<double>(kFs) / 128.0;
+  const double f_off = 8.0 * static_cast<double>(kFs) / 128.0;
+  const auto src_t = sonitude::tests::support::GenerateSine(kFrames, kFs, f_target);
+  const auto src_o = sonitude::tests::support::GenerateSine(kFrames, kFs, f_off);
+  auto mic_t = sonitude::tests::support::GeneratePlaneWave(src_t, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+  const auto mic_o = sonitude::tests::support::GeneratePlaneWave(src_o, geometry, kFs, 0, 90.0F, 0.0F, 343.0F);
+  for (std::size_t i = 0; i < kFrames; ++i)
+  {
+    for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+    {
+      mic_t[i][ch] = (0.35F * mic_t[i][ch]) + (0.35F * mic_o[i][ch]);
+    }
+  }
+
+  sonitude::app::SteeringConfig steering{};
+  steering.speed_of_sound_mps = 343.0F;
+  steering.reference_mic_index = 0;
+  steering.steering_ramp_ms = 1.0F;
+  sonitude::dsp::DelaySumBeamformer bf;
+  bf.configure(geometry, steering, TestCalibration(), kFs, 256);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> target(kFrames, 0.0F);
+  std::array<std::vector<float>, sonitude::dsp::kGuardLooks> guard_buf;
+  const auto guards = sonitude::dsp::BindGuardLooks(guard_buf, kFrames);
+  bf.process(mic_t, target, guards);
+
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(static_cast<double>(kFs), 256, {.enabled = true, .gain_floor_db = -12.0F}),
+          "two-talker prepare");
+  std::vector<float> out(kFrames, 0.0F);
+  pf.setControl(true, 1.0F);
+  pf.process(target, out, sonitude::dsp::ConstGuardLooks(guards));
+
+  const std::size_t delay = pf.algorithmicDelaySamples();
+  const std::size_t a = 8000;
+  const std::size_t b = kFrames - delay - 500;
+  const auto in_t = ProjectTone(target, f_target, kFs, a, b, 0.0);
+  const auto out_t = ProjectTone(out, f_target, kFs, a + delay, b + delay, -static_cast<double>(delay));
+  const auto in_o = ProjectTone(target, f_off, kFs, a, b, 0.0);
+  const auto out_o = ProjectTone(out, f_off, kFs, a + delay, b + delay, -static_cast<double>(delay));
+  const double att_t = DbRatio(out_t.target_rms, in_t.target_rms);
+  const double att_o = DbRatio(out_o.target_rms, in_o.target_rms);
+  Require(AllFinite(out), "two-talker output finite");
+  Require(att_t > att_o + 1.0,
+          "off-axis talker should be attenuated more than the target, target=" + std::to_string(att_t) +
+              " off=" + std::to_string(att_o));
+  Require(att_t > -6.0, "desired talker should not be floored, att=" + std::to_string(att_t));
+}
 }  // namespace
 
 void RunSpectralPostfilterTests()
@@ -486,4 +570,5 @@ void RunSpectralPostfilterTests()
   TestConfidenceThresholdIsHonored();
   TestPersistentBytesCountsEstimator();
   TestCoLocatedSpectraAreNotSpatialSeparation();
+  TestTwoTalkersGuardContrast();
 }
