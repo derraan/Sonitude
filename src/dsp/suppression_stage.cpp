@@ -44,6 +44,11 @@ const char* SuppressionBackendName(const SuppressionBackend backend) noexcept
   }
 }
 
+const char* SuppressionImplementationStatus(const SuppressionBackend backend) noexcept
+{
+  return backend == SuppressionBackend::Spectral ? "EXPERIMENTAL" : "";
+}
+
 void SuppressionStage::configure(const SuppressionStageConfig& config)
 {
   ready_ = false;
@@ -89,6 +94,14 @@ void SuppressionStage::setControl(const bool focus_active, const float confidenc
   else if (backend_ == SuppressionBackend::Spectral)
   {
     spectral_.setControl(focus_active, confidence);
+  }
+}
+
+void SuppressionStage::setConfidenceThreshold(const float threshold) noexcept
+{
+  if (backend_ == SuppressionBackend::Spectral)
+  {
+    spectral_.setConfidenceThreshold(threshold);
   }
 }
 

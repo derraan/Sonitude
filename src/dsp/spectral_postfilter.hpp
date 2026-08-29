@@ -8,10 +8,12 @@
 
 namespace sonitude::dsp
 {
-// Running-minima noise PSD tracker. Baseline smoother-plus-minima rule, not
-// Cohen IMCRA/MCRA: no bias correction, no two-stage search, no SPP as in
-// those publications.
-class MinimaNoiseTracker
+// Asymmetric per-bin noise-power tracker. Not Martin's minima statistics, not
+// Cohen MCRA/IMCRA: no sliding minimum, no bias correction, no SPP.
+// Bins that sit well above the cross-frequency median are treated as tonal and
+// are not absorbed into λ. allow_update=false freezes smoothed power and λ,
+// including first-frame initialization.
+class AsymmetricNoisePowerTracker
 {
  public:
   bool prepare(std::size_t n_bins, double hop_hz);
@@ -20,6 +22,8 @@ class MinimaNoiseTracker
   [[nodiscard]] std::span<const float> noisePower() const noexcept;
   [[nodiscard]] std::span<const float> smoothedPower() const noexcept;
   [[nodiscard]] std::size_t binCount() const noexcept { return n_bins_; }
+  [[nodiscard]] bool initialized() const noexcept { return have_first_; }
+  [[nodiscard]] std::size_t persistentBytes() const noexcept;
 
  private:
   std::size_t n_bins_ = 0;
@@ -27,12 +31,13 @@ class MinimaNoiseTracker
   float rise_coeff_ = 0.01F;
   std::vector<float> smoothed_{};
   std::vector<float> noise_{};
+  std::vector<float> median_scratch_{};
   bool have_first_ = false;
 };
 
-// Bounded Wiener G = xi/(1+xi) with decision-directed a priori SNR, time
-// smoothing, and a 3-bin frequency smoother. Gains clamped to [gain_floor, 1].
-// Not Ephraim–Malah OM-LSA.
+// Bounded Wiener G = xi/(1+xi). The recursive term is G_prev² * γ_current, a
+// host heuristic, not Ephraim–Malah decision-directed a priori SNR (which
+// recurses on the previous posterior). Gains clamped to [gain_floor, 1].
 class BoundedWienerGain
 {
  public:
@@ -43,6 +48,7 @@ class BoundedWienerGain
                std::span<float> gain_out) noexcept;
   [[nodiscard]] float meanGain() const noexcept { return mean_gain_; }
   [[nodiscard]] float gainFloor() const noexcept { return gain_floor_; }
+  [[nodiscard]] std::size_t persistentBytes() const noexcept;
 
  private:
   std::size_t n_bins_ = 0;
@@ -61,6 +67,7 @@ struct SpectralPostfilterConfig
   std::size_t fft_size = 128;
   std::size_t hop_size = 32;
   float gain_floor_db = -12.0F;
+  float confidence_threshold = 0.6F;
 };
 
 class SpectralPostfilter
@@ -71,6 +78,7 @@ class SpectralPostfilter
                const SpectralPostfilterConfig& config);
   void reset() noexcept;
   void setControl(bool focus_active, float confidence) noexcept;
+  void setConfidenceThreshold(float threshold) noexcept;
   void setEstimatorHold(bool hold) noexcept;
   void process(std::span<const float> input, std::span<float> output) noexcept;
 
@@ -86,7 +94,7 @@ class SpectralPostfilter
     return stft_.calculatedLookaheadSamples();
   }
 
-  MinimaNoiseTracker& noiseTracker() noexcept { return tracker_; }
+  AsymmetricNoisePowerTracker& noiseTracker() noexcept { return tracker_; }
   BoundedWienerGain& gainRule() noexcept { return wiener_; }
 
  private:
@@ -97,13 +105,13 @@ class SpectralPostfilter
   bool focus_active_ = true;
   float confidence_ = 1.0F;
   bool estimator_hold_ = false;
-  std::size_t init_hops_remaining_ = 0;
   SpectralPostfilterConfig config_{};
   StreamingStft stft_{};
-  MinimaNoiseTracker tracker_{};
+  AsymmetricNoisePowerTracker tracker_{};
   BoundedWienerGain wiener_{};
   std::vector<float> power_{};
   std::vector<float> gains_{};
   float last_mean_gain_ = 1.0F;
+  float apply_mix_ = 1.0F;
 };
 }  // namespace sonitude::dsp

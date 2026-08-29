@@ -133,8 +133,9 @@ void PrintCapabilities()
             << "\"protocol_version\":3,"
             << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"],"
                "\"backends\":[\"off\",\"conservative\",\"spectral\"],"
-               "\"default_backend\":\"conservative\","
-               "\"implementation_status\":\"EXPERIMENTAL\"},"
+               "\"default_backend\":\"spectral\","
+               "\"implementation_status\":\"EXPERIMENTAL\","
+               "\"note\":\"implementation_status applies to the spectral backend only\"},"
             << "\"taps\":[\"processed\"],"
             << "\"binaural\":{"
             << "\"available\":true,"
@@ -496,7 +497,8 @@ int main(int argc, char** argv)
                           .spectral = {.enabled = true,
                                        .fft_size = runtime.suppression.spectral.fft_size,
                                        .hop_size = runtime.suppression.spectral.hop_size,
-                                       .gain_floor_db = runtime.suppression.spectral.gain_floor_db}});
+                                       .gain_floor_db = runtime.suppression.spectral.gain_floor_db,
+                                       .confidence_threshold = runtime.suppression.confidence_threshold}});
     have_live_suppressor_params = true;
     last_live_suppressor = default_live_suppressor;
 
@@ -514,8 +516,9 @@ int main(int argc, char** argv)
     const char* requested = suppression_mode == SuppressionMode::On
                                 ? "on"
                                 : (suppression_mode == SuppressionMode::Off ? "off" : "auto");
+    const bool suppression_resolved = suppression_backend != sonitude::dsp::SuppressionBackend::Off;
     std::cerr << "sonitude_resolved {\"protocol_version\":3,\"suppression_requested\":\"" << requested
-              << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
+              << "\",\"suppression_resolved\":" << (suppression_resolved ? "true" : "false")
               << ",\"suppression_backend_requested\":\"" << backend_name << "\""
               << ",\"suppression_backend_resolved\":\""
               << sonitude::dsp::SuppressionBackendName(suppression_backend) << "\""
@@ -523,7 +526,8 @@ int main(int argc, char** argv)
               << ",\"suppression_hop_size\":" << runtime.suppression.spectral.hop_size
               << ",\"suppression_gain_floor_db\":" << runtime.suppression.spectral.gain_floor_db
               << ",\"suppression_algorithmic_delay_samples\":" << suppressor.algorithmicDelaySamples()
-              << ",\"suppression_implementation_status\":\"EXPERIMENTAL\""
+              << ",\"suppression_implementation_status\":\""
+              << sonitude::dsp::SuppressionImplementationStatus(suppression_backend) << "\""
               << ",\"limiter_disabled\":" << (disable_limiter ? "true" : "false")
               << ",\"binaural_backends\":" << AvailableBackendsJson(binaural_runtime) << "}\n";
     std::cerr << "sonitude_stream_process ready: sample_rate_hz=" << sample_rate_hz
@@ -706,9 +710,16 @@ int main(int argc, char** argv)
           last_live_suppressor = live;
           have_live_suppressor_params = true;
         }
+        else if (suppression_backend == sonitude::dsp::SuppressionBackend::Spectral)
+        {
+          suppressor.setConfidenceThreshold(live.confidence_threshold);
+        }
         suppressor.setControl(focus_active, focus_active ? live.confidence : 0.0F);
         suppressor.process(std::span<float>(mono.data(), frame_count));
-        out_flags |= kOutSuppressionApplied;
+        if (suppression_backend != sonitude::dsp::SuppressionBackend::Off)
+        {
+          out_flags |= kOutSuppressionApplied;
+        }
       }
 
       const bool protocol_binaural = (flags & kFlagBinauralEnabled) != 0;

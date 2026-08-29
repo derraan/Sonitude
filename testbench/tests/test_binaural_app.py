@@ -4,7 +4,11 @@ from pathlib import Path
 
 from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.processing.batch_adapter import binaural_cli_args
-from app.processing.capabilities import parse_capabilities_json, preferred_binaural_backend
+from app.processing.capabilities import (
+    parse_capabilities_json,
+    preferred_binaural_backend,
+    preferred_suppression_backend,
+)
 from app.storage.models import BinauralRequest
 
 
@@ -13,6 +17,35 @@ def test_preferred_backend_skips_mono_reference_when_hrtf_exists() -> None:
     assert preferred_binaural_backend(available, "mono_reference") == "array_downmix"
     assert preferred_binaural_backend(available, "itd_ild") == "itd_ild"
     assert preferred_binaural_backend(["array_downmix", "mono_reference"], None) == "array_downmix"
+
+
+def test_parse_capabilities_json_lists_suppression_backends() -> None:
+    caps = parse_capabilities_json(
+        {
+            "protocol_version": 2,
+            "suppression": {
+                "modes": ["auto", "on", "off"],
+                "backends": ["off", "conservative", "spectral"],
+                "default_backend": "conservative",
+                "implementation_status": "EXPERIMENTAL",
+            },
+            "binaural": {"available": False, "backends": ["mono_reference"]},
+        }
+    )
+    assert caps.suppression.backend_supported("spectral")
+    assert caps.suppression.default_backend == "conservative"
+    assert caps.suppression.implementation_status == "EXPERIMENTAL"
+
+
+def test_preferred_suppression_backend_honors_yaml() -> None:
+    available = ["off", "conservative", "spectral"]
+    assert preferred_suppression_backend(available, "spectral") == "spectral"
+    assert preferred_suppression_backend(available, None) == "spectral"
+
+
+def test_config_reader_exposes_suppression_backend() -> None:
+    summary = read_runtime_config_summary(DEFAULT_CONFIG_PATH)
+    assert summary.suppression.backend == "spectral"
 
 
 def test_parse_capabilities_json_lists_hrtf_backends() -> None:

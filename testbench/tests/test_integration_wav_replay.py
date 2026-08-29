@@ -234,6 +234,9 @@ def test_spectral_backend_is_experimental_and_off_is_bit_exact(
     assert off.resolved.get("suppression_algorithmic_delay_samples") in (0, 0.0)
     assert spectral.resolved.get("suppression_backend_resolved") == "spectral"
     assert spectral.resolved.get("suppression_implementation_status") == "EXPERIMENTAL"
+    assert conservative.resolved.get("suppression_implementation_status") in ("", None)
+    assert off.resolved.get("suppression_resolved") is False
+    assert off.resolved.get("suppression_implementation_status") in ("", None)
     assert spectral.resolved.get("suppression_fft_size") == 128
     assert spectral.resolved.get("suppression_hop_size") == 32
     assert spectral.resolved.get("suppression_algorithmic_delay_samples") == 127

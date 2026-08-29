@@ -20,6 +20,7 @@ enum class SuppressionBackend
 SuppressionBackend ParseSuppressionBackend(const std::string& name);
 SuppressionBackend ResolveEnabledBackend(bool enabled, const std::string& backend_name);
 const char* SuppressionBackendName(SuppressionBackend backend) noexcept;
+const char* SuppressionImplementationStatus(SuppressionBackend backend) noexcept;
 
 struct SuppressionStageConfig
 {
@@ -36,6 +37,7 @@ class SuppressionStage
   void configure(const SuppressionStageConfig& config);
   void reset() noexcept;
   void setControl(bool focus_active, float confidence) noexcept;
+  void setConfidenceThreshold(float threshold) noexcept;
   void setEstimatorHold(bool hold) noexcept;
   void process(std::span<float> mono);
 

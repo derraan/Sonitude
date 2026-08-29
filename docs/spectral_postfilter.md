@@ -71,8 +71,8 @@ at the tail. Absolute error threshold in tests: `2e-4`.
 
 ## Algorithm actually implemented
 
-Name: **MinimaTrackedWienerPostfilter** (baseline / inspired, not a published
-algorithm identity).
+Name: **AsymmetricNoisePowerTracker + BoundedWienerGain** (heuristic / inspired, not a
+published algorithm identity). Previously labeled MinimaTrackedWienerPostfilter.
 
 Clean-room original code. Not copied from SpeexDSP, RNNoise, or paper
 reference implementations.
@@ -83,16 +83,23 @@ published equations and parameter meanings. This backend uses:
 1. Periodogram `P[k] = Re{X[k]}² + Im{X[k]}²` for `k = 0..N/2`.
 2. Smoothed power `S` with time constant 32 ms at the hop rate:
    `S ← a_s S + (1-a_s) P`, `a_s = exp(-T_hop / 0.032)`.
-3. Noise `λ`: snap down to `S` when `S < λ`; else if updates allowed
-   `λ ← λ + a_rise (S-λ)` with rise τ = 0.48 s.
-4. Presence (update freeze): at least 3 bins with `S/λ > 10` after a 50 ms
-   init where updates are always allowed (except estimator hold).
-5. Decision-directed a priori SNR
+3. Noise `λ` is an asymmetric smoother, not a sliding minimum. On the first
+   allowed update, every bin is initialized to the **cross-frequency median** of
+   `P`, not to `P[k]`. Later hops snap `λ` down to `S` when `S < λ`, else rise
+   slowly (`τ = 0.48 s`). Bins with `S > 6 · median(S)` are treated as tonal and
+   are not absorbed into `λ`.
+4. Learning is permitted only while focus is active, confidence is at/above the
+   configured threshold, and the estimator is not held. Unfocused / below-threshold
+   hops freeze `S` and `λ` completely (no first-frame init, no downward snap).
+5. Heuristic a priori SNR
    `ξ = a_dd (G_prev² γ) + (1-a_dd) max(γ-1, 0)`
-   with `γ = P / (2 λ)` (noise overestimate 2) and τ_dd = 48 ms.
+   with `γ = P / (2 λ)` (noise overestimate 2) and τ_dd = 48 ms. This is **not**
+   the Ephraim–Malah decision-directed recurrence (no stored previous posterior).
 6. Wiener `G = ξ/(1+ξ)`, clamp `[G_floor, 1]`, time-smoothed (τ = 16 ms),
-   then 3-bin frequency smoother `[0.25, 0.5, 0.25]`.
-7. No bin amplification. Hermitian bins share `G[k]`.
+   then 3-bin frequency smoother `[0.25, 0.5, 0.25]`. A bypass mix ramps toward
+   the Wiener gain when focused and initialized, and toward unity otherwise.
+7. No bin amplification. Hermitian bins share `G[k]`. Telemetry `currentGain()`
+   is power-weighted across bins.
 
 Consulted only to bound naming (not implemented): Cohen, IEEE Trans. Speech
 Audio Process., 11(5):466–475, 2003 (IMCRA); Cohen & Berdugo, Signal
@@ -119,19 +126,25 @@ without `backend` remains conservative when enabled. Unknown backend strings
 fail validation (not remapped).
 
 CLI: `--suppression-backend off|conservative|spectral` on wav_replay and
-stream_process. GUI is **not** updated; use YAML/CLI. Stream protocol v3 live
-conservative knobs are ignored when the spectral backend is selected.
+stream_process. The testbench GUI exposes a capability-gated backend selector
+and passes it on recorded, preview, and real-time paths. Conservative live
+knobs (ambient floor, fade, activity, envelope) are disabled for spectral;
+focus and confidence remain active. Stream protocol v3 live conservative knobs
+are ignored when the spectral backend is selected, except confidence threshold.
 
 Provenance (`sonitude_resolved`): backend requested/resolved, FFT, hop, gain
-floor dB, algorithmic delay samples, `implementation_status: EXPERIMENTAL`.
+floor dB, algorithmic delay samples from the prepared processor,
+`implementation_status: EXPERIMENTAL` only when the resolved backend is spectral.
+`suppression_resolved` is true only when a processing backend is actually selected
+(not `off`).
 
 ## Init / reset / invalid input / discontinuities
 
 - `prepare` validates and allocates. `process` does not allocate.
-- Reset restores STFT FIFOs, noise=`1`, gains=`G_floor`, 50 ms init window.
+- Reset restores STFT FIFOs, noise=`1` (uninitialized), gains=`1`, bypass mix=`0`.
 - Non-finite input samples are replaced with 0 before the STFT.
 - `sonitude_realtime`: after a capture XRUN skip, the next processed block
-  holds noise-estimator updates.
+  holds noise-estimator updates (complete freeze).
 - Stream gaps abort; they do not conceal. No firmware invalid-frame flag exists
   beyond ALSA XRUN skip.
 
@@ -160,8 +173,12 @@ pass/fail MCU gate.
 - Mono Wiener postfilter cannot separate co-located sources with the same
   spectrum.
 - Can colour speech and produce musical noise.
-- First ~50 ms is a bootstrap; a leading full-band utterance can be attenuated.
+- First allowed update initializes `λ` from the median spectrum; a leading
+  full-band utterance can still colour the estimate if it is not tonal versus
+  the median.
 - Not spatial, not distance estimation, not beamformer improvement.
+- Testbench residual and intelligibility metrics delay-align the beamformed tap
+  by `suppression_algorithmic_delay_samples` before subtraction.
 
 ## Disabled follow-up (not in this PR)
 

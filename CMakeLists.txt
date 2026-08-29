@@ -329,6 +329,10 @@ if(SONITUDE_BUILD_TESTS)
     NAME sonitude_unit_tests
     COMMAND sonitude_unit_tests
   )
+  add_test(
+    NAME sonitude_spectral_bench
+    COMMAND sonitude_spectral_bench
+  )
 
   if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
     target_compile_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)

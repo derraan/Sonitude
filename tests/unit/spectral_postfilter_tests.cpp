@@ -57,6 +57,57 @@ double Rms(const std::vector<float>& x, const std::size_t skip)
   return std::sqrt(s / static_cast<double>(x.size() - skip));
 }
 
+constexpr double kPi = 3.14159265358979323846;
+
+struct ToneProjection
+{
+  double target_rms = 0.0;
+  double residual_rms = 0.0;
+};
+
+ToneProjection ProjectTone(const std::vector<float>& x,
+                           const double freq,
+                           const double fs,
+                           const std::size_t begin,
+                           const std::size_t end,
+                           const double time_origin)
+{
+  ToneProjection out;
+  if (end <= begin || end > x.size())
+  {
+    return out;
+  }
+  const double n = static_cast<double>(end - begin);
+  const double w = 2.0 * kPi * freq / fs;
+  double c = 0.0;
+  double s = 0.0;
+  for (std::size_t i = begin; i < end; ++i)
+  {
+    const double t = w * (static_cast<double>(i) + time_origin);
+    const double xi = static_cast<double>(x[i]);
+    c += xi * std::cos(t);
+    s += xi * std::sin(t);
+  }
+  const double ac = 2.0 * c / n;
+  const double as = 2.0 * s / n;
+  out.target_rms = std::hypot(ac, as) / std::sqrt(2.0);
+  double resid = 0.0;
+  for (std::size_t i = begin; i < end; ++i)
+  {
+    const double t = w * (static_cast<double>(i) + time_origin);
+    const double pred = (ac * std::cos(t)) + (as * std::sin(t));
+    const double e = static_cast<double>(x[i]) - pred;
+    resid += e * e;
+  }
+  out.residual_rms = std::sqrt(resid / n);
+  return out;
+}
+
+double DbRatio(const double num, const double den)
+{
+  return 20.0 * std::log10(std::max(num, 1.0e-20) / std::max(den, 1.0e-20));
+}
+
 bool AllFinite(const std::vector<float>& x)
 {
   return std::all_of(x.begin(), x.end(), [](const float v) { return std::isfinite(v); });
@@ -64,7 +115,7 @@ bool AllFinite(const std::vector<float>& x)
 
 void TestTrackerIndependent()
 {
-  sonitude::dsp::MinimaNoiseTracker tracker;
+  sonitude::dsp::AsymmetricNoisePowerTracker tracker;
   Require(tracker.prepare(8, 1378.125), "tracker prepare");
   std::vector<float> p(8, 0.04F);
   tracker.update(p, true);
@@ -261,7 +312,7 @@ void TestChunkResetAllocDelay()
 
 void TestHoldFreezesNoise()
 {
-  sonitude::dsp::MinimaNoiseTracker tracker;
+  sonitude::dsp::AsymmetricNoisePowerTracker tracker;
   Require(tracker.prepare(4, 1000.0), "hold tracker");
   std::vector<float> p(4, 0.02F);
   tracker.update(p, true);
@@ -269,27 +320,135 @@ void TestHoldFreezesNoise()
   std::fill(p.begin(), p.end(), 0.5F);
   tracker.update(p, false);
   Require(std::fabs(tracker.noisePower()[0] - frozen) < 1.0e-6F, "hold must freeze upward noise updates");
+  std::fill(p.begin(), p.end(), 0.001F);
+  tracker.update(p, false);
+  Require(std::fabs(tracker.noisePower()[0] - frozen) < 1.0e-6F, "hold must freeze downward snaps too");
+  Require(std::fabs(tracker.smoothedPower()[0] - 0.02F) < 1.0e-4F, "hold must freeze smoothed power");
 }
 
-void TestMixtureSnrFixture()
+void TestMixtureSnrWithNoiseLeadIn()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "lead-in prepare");
+  const double fs = 44100.0;
+  const double freq = 4.0 * fs / 128.0;
+  const std::size_t n = 44100;
+  const std::size_t lead = 8000;
+  const auto tone = Sine(n, freq, fs, 0.25F);
+  const auto noise = Lcg(n, 99, 0.15F);
+  std::vector<float> mix(n, 0.0F);
+  for (std::size_t i = 0; i < n; ++i)
+  {
+    mix[i] = noise[i] + (i >= lead ? tone[i] : 0.0F);
+  }
+  std::vector<float> out(n, 0.0F);
+  pf.setControl(true, 1.0F);
+  pf.process(mix, out);
+  const std::size_t delay = pf.algorithmicDelaySamples();
+  const std::size_t a = lead + 4000;
+  const std::size_t b = n - delay - 500;
+  const auto in_t = ProjectTone(mix, freq, fs, a, b, 0.0);
+  const auto out_t = ProjectTone(out, freq, fs, a + delay, b + delay, -static_cast<double>(delay));
+  const double snr_in = DbRatio(in_t.target_rms, in_t.residual_rms);
+  const double snr_out = DbRatio(out_t.target_rms, out_t.residual_rms);
+  const double d_snr = snr_out - snr_in;
+  const double target_att = DbRatio(out_t.target_rms, in_t.target_rms);
+  Require(d_snr > 0.5, "noise-lead-in mixture must improve coherent SNR, dSNR=" + std::to_string(d_snr));
+  Require(target_att > -6.0, "noise-lead-in must not floor the tone, att=" + std::to_string(target_att));
+}
+
+void TestMixtureSnrSimultaneousStart()
 {
   sonitude::dsp::SpectralPostfilter pf;
   Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "mixture prepare");
-  const double bin = 44100.0 / 128.0;
-  const auto speech = Sine(44100, 4.0 * bin, 44100.0, 0.25F);
+  const double fs = 44100.0;
+  const double freq = 4.0 * fs / 128.0;
+  const auto tone = Sine(44100, freq, fs, 0.25F);
   const auto noise = Lcg(44100, 99, 0.15F);
   std::vector<float> mix(44100, 0.0F);
   for (std::size_t i = 0; i < mix.size(); ++i)
   {
-    mix[i] = speech[i] + noise[i];
+    mix[i] = tone[i] + noise[i];
   }
   std::vector<float> out(mix.size(), 0.0F);
   pf.setControl(true, 1.0F);
   pf.process(mix, out);
-  const std::size_t skip = pf.algorithmicDelaySamples() + 8000;
-  const double mix_rms = Rms(mix, skip);
-  const double out_rms = Rms(out, skip);
-  Require(out_rms < mix_rms, "synthetic mixture fixture: output RMS should fall (not a real-world claim)");
+  const std::size_t delay = pf.algorithmicDelaySamples();
+  const std::size_t a = 8000;
+  const std::size_t b = mix.size() - delay - 500;
+  const auto in_t = ProjectTone(mix, freq, fs, a, b, 0.0);
+  const auto out_t = ProjectTone(out, freq, fs, a + delay, b + delay, -static_cast<double>(delay));
+  const double d_snr = DbRatio(out_t.target_rms, out_t.residual_rms) - DbRatio(in_t.target_rms, in_t.residual_rms);
+  const double target_att = DbRatio(out_t.target_rms, in_t.target_rms);
+  const double noise_att = DbRatio(out_t.residual_rms, in_t.residual_rms);
+  Require(d_snr > 0.0, "simultaneous tone+noise must not worsen coherent SNR, dSNR=" + std::to_string(d_snr));
+  Require(target_att > noise_att,
+          "target must not be attenuated more than residual noise, target=" + std::to_string(target_att) +
+              " noise=" + std::to_string(noise_att));
+}
+
+void TestTonePresentFromStartup()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "startup prepare");
+  const double fs = 44100.0;
+  const double freq = 4.0 * fs / 128.0;
+  const auto in = Sine(44100, freq, fs, 0.3F);
+  std::vector<float> out(in.size(), 0.0F);
+  pf.setControl(true, 1.0F);
+  pf.process(in, out);
+  const std::size_t delay = pf.algorithmicDelaySamples();
+  const std::size_t a = 4000;
+  const std::size_t b = in.size() - delay - 500;
+  const auto in_t = ProjectTone(in, freq, fs, a, b, 0.0);
+  const auto out_t = ProjectTone(out, freq, fs, a + delay, b + delay, -static_cast<double>(delay));
+  const double att = DbRatio(out_t.target_rms, in_t.target_rms);
+  Require(att > -6.0, "tone present from startup must not be learned as noise, att=" + std::to_string(att));
+}
+
+void TestFocusTransitionDoesNotLearnBypassAsNoise()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "focus prepare");
+  const double fs = 44100.0;
+  const double freq = 4.0 * fs / 128.0;
+  const auto in = Sine(44100, freq, fs, 0.3F);
+  std::vector<float> out(in.size(), 0.0F);
+  pf.setControl(false, 1.0F);
+  pf.process(std::span<const float>(in.data(), 20000), std::span<float>(out.data(), 20000));
+  pf.setControl(true, 1.0F);
+  pf.process(std::span<const float>(in.data() + 20000, 24100), std::span<float>(out.data() + 20000, 24100));
+  const std::size_t delay = pf.algorithmicDelaySamples();
+  const std::size_t a = 28000;
+  const std::size_t b = in.size() - delay - 500;
+  const auto in_t = ProjectTone(in, freq, fs, a, b, 0.0);
+  const auto out_t = ProjectTone(out, freq, fs, a + delay, b + delay, -static_cast<double>(delay));
+  const double att = DbRatio(out_t.target_rms, in_t.target_rms);
+  Require(att > -6.0, "focus-on after unfocused speech must not floor the target, att=" + std::to_string(att));
+}
+
+void TestConfidenceThresholdIsHonored()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 256,
+                    {.enabled = true, .gain_floor_db = -12.0F, .confidence_threshold = 0.9F}),
+          "threshold prepare");
+  const auto in = Lcg(20000, 7, 0.2F);
+  std::vector<float> out(in.size(), 0.0F);
+  pf.setControl(true, 0.5F);
+  pf.process(in, out);
+  const std::size_t skip = pf.algorithmicDelaySamples() + 2000;
+  const double ratio = Rms(out, skip) / std::max(Rms(in, skip), 1.0e-20);
+  Require(ratio > 0.85, "below-threshold confidence must stay near unity, ratio=" + std::to_string(ratio));
+}
+
+void TestPersistentBytesCountsEstimator()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 64, {.enabled = true, .fft_size = 128, .hop_size = 32}), "bytes prepare");
+  const std::size_t n_bins = (128U / 2U) + 1U;
+  Require(pf.persistentBytes() >= (8U * n_bins * sizeof(float)),
+          "persistentBytes must include tracker and gain arrays");
 }
 
 void TestCoLocatedSpectraAreNotSpatialSeparation()
@@ -320,6 +479,11 @@ void RunSpectralPostfilterTests()
   TestCleanSineNegativeControl();
   TestChunkResetAllocDelay();
   TestHoldFreezesNoise();
-  TestMixtureSnrFixture();
+  TestMixtureSnrWithNoiseLeadIn();
+  TestMixtureSnrSimultaneousStart();
+  TestTonePresentFromStartup();
+  TestFocusTransitionDoesNotLearnBypassAsNoise();
+  TestConfidenceThresholdIsHonored();
+  TestPersistentBytesCountsEstimator();
   TestCoLocatedSpectraAreNotSpatialSeparation();
 }

@@ -302,7 +302,8 @@ int main(int argc, char** argv)
          .spectral = {.enabled = true,
                       .fft_size = runtime_config.suppression.spectral.fft_size,
                       .hop_size = runtime_config.suppression.spectral.hop_size,
-                      .gain_floor_db = runtime_config.suppression.spectral.gain_floor_db}});
+                      .gain_floor_db = runtime_config.suppression.spectral.gain_floor_db,
+                      .confidence_threshold = runtime_config.suppression.confidence_threshold}});
     sonitude::dsp::PeakLimiter limiter;
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
 

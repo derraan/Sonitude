@@ -11,6 +11,18 @@
 
 namespace
 {
+const char* CompilerId() noexcept
+{
+#if defined(__clang__)
+  return "Clang " __VERSION__;
+#elif defined(__GNUC__)
+  return "GNU " __VERSION__;
+#elif defined(_MSC_VER)
+  return "MSVC";
+#else
+  return "unknown";
+#endif
+}
 std::vector<float> Lcg(const std::size_t n, std::uint32_t seed)
 {
   std::vector<float> out(n, 0.0F);
@@ -75,7 +87,7 @@ void RunConfig(const std::string& label,
   const double mean = std::accumulate(times_us.begin(), times_us.end(), 0.0) / static_cast<double>(times_us.size());
 
   std::cout << label
-            << " compiler=GNU/MinGW"
+            << " compiler=" << CompilerId()
             << " target=host"
             << " sample_rate_hz=" << fs
             << " block_frames=" << block

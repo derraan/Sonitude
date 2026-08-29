@@ -39,6 +39,7 @@ class StreamProcessor:
         sample_rate_hz: int | None = None,
         max_block_frames: int = 8192,
         suppression: SuppressionMode | str = SuppressionMode.AUTO,
+        suppression_backend: str | None = None,
         enable_suppression: bool | None = None,
         disable_limiter: bool = False,
         binary_path: str | Path | None = None,
@@ -54,6 +55,8 @@ class StreamProcessor:
         elif enable_suppression is False:
             mode = SuppressionMode.OFF
         command += cli_args_for(mode)
+        if suppression_backend:
+            command += ["--suppression-backend", suppression_backend]
         if disable_limiter:
             command.append("--disable-limiter")
 

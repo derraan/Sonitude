@@ -57,6 +57,7 @@ class RealtimeWorker(QThread):
         output_device_index: int | None = None,
         suppression: SuppressionMode | str = SuppressionMode.AUTO,
         enable_suppression: bool | None = None,
+        suppression_backend: str | None = None,
         disable_limiter: bool = False,
         queue_capacity: int = DEFAULT_CAPACITY,
         binaural: BinauralRequest | None = None,
@@ -75,6 +76,7 @@ class RealtimeWorker(QThread):
         elif enable_suppression is False:
             mode = SuppressionMode.OFF
         self._suppression = mode
+        self._suppression_backend = suppression_backend
         self._disable_limiter = disable_limiter
         self._queue_capacity = max(1, int(queue_capacity))
         self._binaural = binaural or binaural_request_from_config(config_path)
@@ -221,6 +223,7 @@ class RealtimeWorker(QThread):
                 sample_rate_hz=self._sample_rate_hz,
                 max_block_frames=max(8192, self._block_size * 4),
                 suppression=self._suppression,
+                suppression_backend=self._suppression_backend,
                 disable_limiter=self._disable_limiter,
             )
             input_stream = sd.InputStream(

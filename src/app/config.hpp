@@ -65,7 +65,7 @@ struct SpectralSuppressionConfig
 struct SuppressionConfig
 {
   bool enabled = false;
-  std::string backend = "conservative";
+  std::string backend = "spectral";
   float fade_ms = 120.0F;
   float activity_threshold = 0.03F;
   float confidence_threshold = 0.6F;
