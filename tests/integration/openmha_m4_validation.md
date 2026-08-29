@@ -54,7 +54,7 @@ Template:
 ## Step C: M7 evidence capture (offline suppressor comparison)
 
 1. Render Sonitude with suppressor enabled:
-   - `build/sonitude_wav_replay --input <input.wav> --config <runtime.yaml> --script <script.csv> --output <sonitude_m7.wav> --enable-suppression`
+   - `build/sonitude_wav_replay --input <input.wav> --config <runtime.yaml> --script <script.csv> --output <sonitude_m7.wav> --suppression on`
 2. Render openMHA offline reference chain (SCNR/coherence) to `<openmha_m7.wav>`.
 3. Compute and record SNR deltas against a shared clean target/reference fixture.
 

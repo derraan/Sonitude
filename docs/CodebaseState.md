@@ -248,6 +248,7 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 
 - **Real-time:** capture → calibration → beamformer → … → ASRC → ALSA playback on Pi.
 - **Offline:** `sonitude_wav_replay` renders beamformed mono from a 6-ch file + steering script, with optional `--output-binaural` stereo. `sonitude_stream_process` is the protocol-v2 stdin/stdout adapter used by the PySide6 test bench.
+- **Offline:** `sonitude_wav_replay` (M4) renders beamformed WAV from a 6-ch file + steering script without ALSA. `sonitude_stream_process` is a portable stdin/stdout adapter (protocol v2) for the same DSP chain; the PySide6 test bench in `testbench/` drives both tools and is **not** on the RT path.
 - **Tests:** `asrc_sim_tests.cpp` simulates ppm mismatch without wall clock to verify PI stability.
 
 **One-line summary:** align six mics toward the talker (beamformer), clean per-mic errors (calibration), play at a slightly variable rate (ASRC) so independent USB clocks do not XRUN, while a separate control loop sets steering without touching PCM.
@@ -283,6 +284,8 @@ Sonitude/
 │   ├── calibration.md          # Calibration schema + planned order
 │   ├── device_setup.md         # ALSA/RT runbook (planned)
 │   ├── latency_measurement.md  # M8 measurement method
+│   ├── pr32_testbench_software_proposal.md
+│   ├── binaural_renderer_dsp_proposal.md
 │   └── CodebaseState.md        # This document
 ├── scripts/
 │   ├── run_realtime.sh
@@ -296,7 +299,8 @@ Sonitude/
 │   ├── rt/                     # SPSC ring, block pool, RT thread, telemetry
 │   ├── spatial/                # ODAS parser, tracker, head-frame helpers
 │   ├── vad/                    # IVad interface stub only
-│   └── tools/                  # Probe/check/calibration/latency/replay CLIs
+│   └── tools/                  # Probe/check/calibration/latency/replay/stream_process CLIs
+├── testbench/                  # PySide6 algorithm test bench (non-RT)
 └── tests/
     ├── unit/                   # Single binary unit suite
     ├── fixtures/               # YAML fixtures for config tests
@@ -343,6 +347,8 @@ Sonitude/
 | `src/tools/wav_replay.cpp`                                                 | Offline renderer: mono `--output`, optional stereo `--output-binaural`         |
 | `src/tools/stream_process.cpp`                                             | Protocol v2 stdin/stdout adapter for the test bench                            |
 | `src/tools/binaural_bench.cpp`                                             | Desktop-only binaural throughput / RAM probe                                   |
+| `src/tools/wav_replay.cpp`                                                 | M4 offline renderer; test-bench taps, AUTO/ON/OFF suppression, `--capabilities` |
+| `src/tools/stream_process.cpp`                                             | Portable protocol-v2 stdin/stdout DSP adapter (no ALSA)                        |
 
 
 ---
@@ -742,6 +748,7 @@ Architecture target includes a future three-RT-thread split; current runtime sti
 - `sonitude_capture_check` / `sonitude_playback_check` / `sonitude_loopback_diag` (ALSA only)
 - `sonitude_calibration_capture` / `sonitude_calibration_estimate`
 - `sonitude_latency_marker` (M8 placeholder) / `sonitude_wav_replay` (M4 offline renderer)
+- `sonitude_stream_process` (portable protocol-v2 block adapter for the test bench)
 - `sonitude_odas_config_gen` (ODAS config generator)
 - `sonitude_unit_tests` (+ CTest name of same)
 

@@ -38,7 +38,10 @@ flowchart TB
 
     subgraph offline [Offline / diagnostics]
         WavReplay["sonitude_wav_replay\n6ch WAV → mono + optional stereo binaural"]
+        WavReplay["sonitude_wav_replay\n6ch WAV → mono WAV"]
+        StreamProc["sonitude_stream_process\nprotocol v2 block adapter"]
         Tools["probe / capture_check /\ncalibration_estimate"]
+        TestBench["PySide6 test bench\n(testbench/, non-RT)"]
     end
 
     Telem["Telemetry thread\natomic counters"]
@@ -55,6 +58,9 @@ flowchart TB
 
     Cal -.-> WavReplay
     Snap -.-> WavReplay
+    Snap -.-> StreamProc
+    WavReplay -.-> TestBench
+    StreamProc -.-> TestBench
 
     AlsaCap -.-> Telem
     Asrc -.-> Telem
@@ -224,6 +230,7 @@ See the [Milestones](#milestones) table above. Quick summary:
 ├── docs/
 ├── scripts/
 ├── src/
+├── testbench/          # PySide6 algorithm test bench (non-RT; see testbench/README.md)
 └── tests/
 ```
 
@@ -294,6 +301,18 @@ Passthrough requires ALSA and configured capture/playback devices. On Windows, b
 ctest --test-dir build --output-on-failure
 ```
 
+Algorithm test bench (after building `sonitude_wav_replay` and
+`sonitude_stream_process`):
+
+```bash
+cd testbench
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+CI sets `SONITUDE_BUILD_DIR` and `SONITUDE_REQUIRE_CPP=1` so integration
+tests fail if those binaries are missing. Details: `[testbench/README.md](testbench/README.md)`.
+
 
 
 ## Device and milestone documentation
@@ -305,4 +324,5 @@ ctest --test-dir build --output-on-failure
 - Latency measurement method and caveats: `[docs/latency_measurement.md](docs/latency_measurement.md)`
 - Binaural renderer (DSP, HRTF tables, protocol v2 tools): `[docs/binaural_renderer.md](docs/binaural_renderer.md)`
 - Full milestone gate checklist and evidence tracking: `[docs/milestones.md](docs/milestones.md)`
+- Algorithm test bench (PySide6, non-RT): `[testbench/README.md](testbench/README.md)`
 
