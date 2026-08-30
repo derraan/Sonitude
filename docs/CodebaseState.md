@@ -92,7 +92,7 @@ Default v1 baseline rules. **Unchecked veto = guardrail active** — Cursor must
 | - [ ] | **SCOPE-4** | **No unmeasured end-to-end latency claims.** Period arithmetic and config defaults are not product latency.                                    | Only M8 impulse/loopback measurement may support latency statements.                                  |
 | - [ ] | **SCOPE-5** | **No distance-estimation or strong automatic nulling claims.** At most one selected suppressor in v1.                                          | Avoids unsupported product statements and scope creep into M7+ behavior without gates.                |
 | - [ ] | **SCOPE-6** | **No milestone marked complete without its observable gate** (evidence in `docs/milestones.md`).                                               | Staged delivery integrity; no “implemented” without tests/evidence.                                   |
-| - [x] | **SCOPE-7** | **Reference-only Pico firmware vendoring is permitted**; host build integration and host-side firmware edits remain out of scope.                 | Keeps host app repo focused while preserving a reproducible firmware contract snapshot.                 |
+| - [x] | **SCOPE-7** | **Pico firmware is reference-only unless the user explicitly authorizes an isolated firmware experiment**; host build coupling remains out of scope. | Keeps host delivery focused while allowing evidence-gated, default-off embedded prototypes. |
 
 
 
@@ -104,6 +104,7 @@ Fill when the user checks a veto above (newest first).
 
 | Date | ID  | Reason (user-approved override) |
 | ---- | --- | ------------------------------- |
+| 2026-08-30 | SCOPE-7 | User requested a default-off RP2350/CMSIS-DSP MVDR and OVD scaffold in PR #34; no host CMake coupling or production claim. |
 | 2026-08-30 | SCOPE-3 | Replace delay-and-sum with in-tree STFT-domain MVDR; neural DSP still not in this PR. |
 | 2026-08-12 | SCOPE-7 | Keep vendored Pico firmware snapshot as read-only reference; no host CMake coupling or host-side firmware edits. |
 

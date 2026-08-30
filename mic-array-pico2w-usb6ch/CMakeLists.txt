@@ -112,3 +112,16 @@ target_link_libraries(pico_9822_led_animation INTERFACE pico_stdlib pico_9822)
 add_subdirectory("examples/usb_probe")
 add_subdirectory("examples/usb_microphone_array_6ch")
 add_subdirectory("examples/usb_microphone_array_led")
+
+
+###################################################
+# Experimental embedded MVDR port (user-approved SCOPE-7 exception)
+###################################################
+option(SONITUDE_BUILD_EXPERIMENTAL_MVDR
+    "Build the default-off RP2350/CMSIS-DSP MVDR scaffold" OFF)
+option(SONITUDE_DSP_FAST_MATH
+    "Enable -ffast-math only for the experimental DSP target" OFF)
+
+if(SONITUDE_BUILD_EXPERIMENTAL_MVDR)
+    add_subdirectory("examples/experimental_mvdr")
+endif()
