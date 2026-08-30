@@ -14,13 +14,13 @@ from app.processing.sonitude_binary_locator import find_binary
 KNOWN_BINAURAL_BACKENDS = ("array_downmix", "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference")
 PREFERRED_BINAURAL_BACKENDS = ("array_downmix", "compact_hrtf", "itd_ild", "full_hrtf_reference", "mono_reference")
 KNOWN_SUPPRESSION_BACKENDS = ("off", "conservative", "spectral")
-PREFERRED_SUPPRESSION_BACKENDS = ("spectral", "conservative", "off")
+PREFERRED_SUPPRESSION_BACKENDS = ("conservative", "spectral", "off")
 
 
 @dataclass
 class SuppressionCapabilities:
     backends: list[str] = field(default_factory=lambda: ["off", "conservative"])
-    default_backend: str = "spectral"
+    default_backend: str = "conservative"
     implementation_status: str = ""
     note: str = ""
 
@@ -107,13 +107,13 @@ def parse_capabilities_json(payload: dict) -> ToolCapabilities:
         suppression_backends = list(
             suppression_raw.get("backends", ["off", "conservative"])
         )
-        suppression_default = str(suppression_raw.get("default_backend", "spectral"))
+        suppression_default = str(suppression_raw.get("default_backend", "conservative"))
         suppression_status = str(suppression_raw.get("implementation_status", ""))
         suppression_note = str(suppression_raw.get("note", ""))
     else:
         suppression_modes = list(payload.get("suppression_modes", ["auto", "on", "off"]))
         suppression_backends = ["off", "conservative"]
-        suppression_default = "spectral"
+        suppression_default = "conservative"
         suppression_status = ""
         suppression_note = ""
 
