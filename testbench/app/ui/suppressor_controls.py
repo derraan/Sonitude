@@ -51,8 +51,9 @@ class SuppressorControls(QWidget):
         self._backend.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self._backend.setMinimumContentsLength(16)
         self._backend.setToolTip(
-            "C++ suppressor backend. Spectral adds STFT latency (~127 samples at 128/32). "
-            "Requires a rebuilt sonitude_wav_replay / sonitude_stream_process."
+            "C++ suppressor backend. Spectral NS shares the MVDR 128/32 hop "
+            "(no extra STFT delay). Requires a rebuilt sonitude_wav_replay / "
+            "sonitude_stream_process."
         )
 
         self._focus = QComboBox()

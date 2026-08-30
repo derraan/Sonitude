@@ -11,10 +11,9 @@ same-alignment signal pairs should ever be subtracted here:
 
 Both operands come from sonitude_wav_replay's diagnostic taps
 (--output-beamformed / --output-suppressed) and its final --output.
-The limiter pair is already time-aligned. The beamform pair is not when the
-spectral backend is active: the suppressed tap includes
-suppression_algorithmic_delay_samples (127 at FFT 128). Callers must pass
-that delay so the undelayed beamformed reference is shifted before subtraction.
+The limiter pair is already time-aligned. Spectral NS shares the MVDR hop, so
+the beamformed and suppressed taps have the same delay (pass delay_samples=0).
+Conservative remains a later PCM stage and is also aligned at delay_samples=0.
 """
 
 from __future__ import annotations

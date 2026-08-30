@@ -18,9 +18,9 @@ removal. Pico 2 W and STM32H7 remain NOT MEASURED.
 | Config | `runtime.suppression.{enabled,fade_ms,activity_threshold,confidence_threshold}` required; `backend` and `spectral.*` optional |
 | FFT in repo | None. Host radix-2 added with unnormalized forward / 1/N inverse. CMSIS-DSP not linked. |
 | Allocator tests | None prior; test-only `operator new` counter in `tests/support/alloc_counter.cpp` |
-| Binaural / limiter | Spectral is mono, after beamformer/blend, before existing mono limiter and binaural. Stereo limiter still last when binaural is on. |
+| Binaural / limiter | Spectral gains run in the MVDR hop before iSTFT. Conservative remains a later PCM stage. Mono limiter then optional binaural. Stereo limiter still last when binaural is on. |
 | XRUN into DSP | Capture XRUN skips the period (`readBlock` false). No concealment PCM is delivered. `setEstimatorHold` runs on the next successful period in `sonitude_realtime`. Stream protocol aborts on sequence gaps rather than concealing. |
-| Click-free backend switch | Conservative already ramps per sample. Backend is selected at configure/prepare. Live mid-stream spectral↔off is unsupported (delay mismatch). |
+| Click-free backend switch | Conservative already ramps per sample. Backend is selected at configure/prepare. Spectral and off now share the MVDR delay; live mid-stream backend switches are still unsupported. |
 
 Assumptions: six-channel map/order unchanged; Python does not reimplement DSP.
 
@@ -41,18 +41,19 @@ Pre-change (PR #32):
 Post-change:
 
 ```text
-6ch PCM -> map/cal -> STFT-domain MVDR (target + 3 internal guard looks)
+6ch PCM -> map/cal -> STFT-domain MVDR (target + 3 internal guard spectra)
+  -> optional spectral gain on the same hop (alternatives: off | conservative PCM)
   -> directional/omni blend on the audible target only (tools)
-  -> SuppressionStage: off | conservative | spectral (alternatives, not series)
+  -> conservative PCM stage only when that backend is selected
   -> mono peak limiter (unchanged)
   -> optional binaural (unchanged)
   -> stereo limiter if binaural (unchanged)
 ```
 
-Do not run separate nonlinear suppressors on each microphone. Guard PCM is never
-mixed into the audible output. Spectral mode feeds the same-hop target and guard
-periodograms into contrast + speech-protected noise updates, then one bounded
-gain on the **target** spectrum only.
+Do not run separate nonlinear suppressors on each microphone. Guard spectra are
+never inverse-transformed or mixed into the audible output. Spectral mode uses
+same-hop target and guard periodograms for contrast + speech-protected noise
+updates, then one bounded gain on the **target** spectrum only.
 
 ## Product architecture (implemented in this PR)
 
@@ -60,15 +61,14 @@ gain on the **target** spectrum only.
 6ch calibrated PCM
   -> 6-channel 128/32 analysis STFT
   -> per-bin MVDR toward the steered look (delay-and-sum fallback)
-  -> three internal MVDR guard looks (+90°, −90°, 180°; not played)
-  -> iSTFT of the target (and of guards when spectral NS is on)
+  -> three internal MVDR guard spectra (+90°, −90°, 180°; never inverse-transformed)
+  -> optional spectral gain on the target spectrum (same hop)
+  -> iSTFT of the target only
   -> optional width/omni blend on target PCM
-  -> spectral: shared-hop contrast + Wiener on the target STFT only
-  -> iSTFT -> enhanced mono -> binaural renderer -> limiter
+  -> enhanced mono -> binaural renderer -> limiter
 ```
 
-The beamformer STFT and the postfilter STFT are **not yet merged**. Enabling
-spectral NS stacks a second 127-sample delay on top of MVDR.
+There is one STFT hop clock. Spectral NS does **not** add a second 127-sample delay.
 
 ### What is realistically removable
 
@@ -91,8 +91,8 @@ Complete removal of arbitrary external voices is **not** feasible.
 | 64-frame capture or playback period | 1.45 ms |
 | One capture period + STFT + one playback period | ≈ 5.78 ms |
 
-MVDR adds another 127-sample first-arrival (~2.88 ms) **before** the postfilter
-STFT. Stacked MVDR + spectral NS is therefore **two** 128/32 transforms.
+MVDR and spectral NS share that 127-sample first-arrival. Conservative PCM
+suppression adds no extra delay.
 
 Those figures are **before** DAC delay, ASRC, scheduling and safety buffers.
 
@@ -198,9 +198,10 @@ CMSIS-DSP FFT docs were not used in code; the replacement path is the
 | `suppression.spectral.hop_size` | size | samples | 32 | 32 with 128, 64 with 256 |
 | `suppression.spectral.gain_floor_db` | float | dB | −12 | [−80, 0] |
 
-Resolve: if `enabled` is false, backend is **off** (no spectral delay). Old YAML
-without `backend` remains conservative when enabled. Unknown backend strings
-fail validation (not remapped).
+Resolve: if `enabled` is false, backend is **off**. Spectral adds no extra
+algorithmic delay beyond the MVDR 128/32 hop. Old YAML without `backend`
+remains conservative when enabled. Unknown backend strings fail validation
+(not remapped).
 
 CLI: `--suppression-backend off|conservative|spectral` on wav_replay and
 stream_process. The testbench GUI exposes a capability-gated backend selector
@@ -210,15 +211,16 @@ focus and confidence remain active. Stream protocol v3 live conservative knobs
 are ignored when the spectral backend is selected, except confidence threshold.
 
 Provenance (`sonitude_resolved`): backend requested/resolved, FFT, hop, gain
-floor dB, algorithmic delay samples from the prepared processor,
+floor dB, extra suppression delay samples (0 for the shared-hop spectral path),
 `implementation_status: EXPERIMENTAL` only when the resolved backend is spectral.
 `suppression_resolved` is true only when a processing backend is actually selected
 (not `off`).
 
 ## Init / reset / invalid input / discontinuities
 
-- `prepare` validates and allocates. `process` does not allocate.
-- Reset restores STFT FIFOs, noise=`1` (uninitialized), gains=`1`, bypass mix=`0`.
+- `prepare` validates and allocates. `processSpectrum` does not allocate.
+- Reset restores noise=`1` (uninitialized), gains=`1`, bypass mix=`0`. The MVDR
+  STFT FIFOs reset separately via `MvdrBeamformer::resetStream`.
 - Non-finite input samples are replaced with 0 before the STFT.
 - `sonitude_realtime`: after a capture XRUN skip, the next processed block
   holds noise-estimator updates (complete freeze).
@@ -231,7 +233,7 @@ floor dB, algorithmic delay samples from the prepared processor,
 | --- | --- | --- |
 | STFT reconstruction error | MEASURED (unit test) | `< 2e-4` abs after skip/tail |
 | Algorithmic delay 128/32 | MEASURED | 127 samples first-arrival |
-| Host block CPU | MEASURED | `sonitude_spectral_bench`; host only |
+| Host block CPU | NOT MEASURED | Standalone `sonitude_spectral_bench` removed; host-only |
 | Init/persistent RAM | MEASURED | `persistentBytes()` on host |
 | End-to-end latency | NOT MEASURED | No loopback/impulse rig in this PR |
 | Pico 2 W / RP2350 | NOT MEASURED | No target build or cycle counts |
@@ -255,13 +257,12 @@ pass/fail MCU gate.
   the median.
 - MVDR plus guard contrast is spatial. It still cannot separate co-located
   talkers or establish near versus far. Distance estimation is out of scope.
-- Testbench residual and intelligibility metrics delay-align the beamformed tap
-  by `suppression_algorithmic_delay_samples` before subtraction.
+- Testbench residual and intelligibility metrics treat beamformed and suppressed
+  taps as the same delay when spectral NS shares the MVDR hop.
 
 ## Remaining work (not claimed done)
 
-Merge the MVDR and postfilter STFTs into one hop clock (remove the stacked
-delay). Measure array-health/geometry, impulse e2e latency, and MCU worst-case
+Measure array-health/geometry, impulse e2e latency, and MCU worst-case
 execution time. Near/far RTF looks are experimental. Neural DSP remains out of
 scope. Until those are measured, keep `suppression.backend: conservative` as
 the shipping default. SCOPE-3 is user-vetoed for **in-tree MVDR only**.
@@ -270,8 +271,7 @@ the shipping default. SCOPE-3 is user-vetoed for **in-tree MVDR only**.
 
 ```text
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSONITUDE_WITH_ALSA=OFF
-cmake --build build --target sonitude_unit_tests sonitude_wav_replay sonitude_spectral_bench
+cmake --build build --target sonitude_unit_tests sonitude_wav_replay
 ./build/sonitude_unit_tests
-./build/sonitude_spectral_bench
 cd testbench && SONITUDE_BUILD_DIR=../build SONITUDE_REQUIRE_CPP=1 python -m pytest -q --tb=short
 ```

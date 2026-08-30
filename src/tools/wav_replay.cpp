@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -22,7 +21,6 @@
 #include "dsp/calibration_applier.hpp"
 #include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
-#include "dsp/spatial_looks.hpp"
 #include "dsp/suppression_stage.hpp"
 
 namespace
@@ -485,6 +483,7 @@ int main(int argc, char** argv)
                                        .hop_size = runtime.suppression.spectral.hop_size,
                                        .gain_floor_db = runtime.suppression.spectral.gain_floor_db,
                                        .confidence_threshold = runtime.suppression.confidence_threshold}});
+    beamformer.setSpectralPostfilter(suppressor.spectralFilter());
     const bool suppression_resolved = suppression_backend != sonitude::dsp::SuppressionBackend::Off;
     std::cerr << "sonitude_resolved {\"protocol_version\":2,\"suppression_requested\":\"" << requested
               << "\",\"suppression_resolved\":" << (suppression_resolved ? "true" : "false")
@@ -511,7 +510,6 @@ int main(int argc, char** argv)
     }
 
     std::vector<float> mono(frames, 0.0F);
-    std::array<std::vector<float>, sonitude::dsp::kGuardLooks> guard_looks;
     std::vector<float> left;
     std::vector<float> right;
     std::vector<float> beamformed_tap;
@@ -550,19 +548,12 @@ int main(int argc, char** argv)
         ++event_index;
       }
       const std::size_t count = std::min(kProcessBlock, frames - start);
-      sonitude::dsp::GuardLookSpans guards{};
-      if (suppression_backend == sonitude::dsp::SuppressionBackend::Spectral)
+      if (suppression_enabled)
       {
-        guards = sonitude::dsp::BindGuardLooks(guard_looks, count);
-        beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
-                           std::span<float>(mono.data() + start, count),
-                           guards);
+        suppressor.setControl(true, 1.0F);
       }
-      else
-      {
-        beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
-                           std::span<float>(mono.data() + start, count));
-      }
+      beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
+                         std::span<float>(mono.data() + start, count));
       if (current_width_deg > 0.0F)
       {
         const float blend = std::clamp(current_width_deg / kMaxWidthDeg, 0.0F, 1.0F);
@@ -583,18 +574,9 @@ int main(int argc, char** argv)
                   mono.begin() + static_cast<std::ptrdiff_t>(start + count),
                   beamformed_tap.begin() + static_cast<std::ptrdiff_t>(start));
       }
-      if (suppression_enabled)
+      if (suppression_backend == sonitude::dsp::SuppressionBackend::Conservative)
       {
-        suppressor.setControl(true, 1.0F);
-        if (suppression_backend == sonitude::dsp::SuppressionBackend::Spectral)
-        {
-          suppressor.process(std::span<float>(mono.data() + start, count),
-                             sonitude::dsp::ConstGuardLooks(guards));
-        }
-        else
-        {
-          suppressor.process(std::span<float>(mono.data() + start, count));
-        }
+        suppressor.process(std::span<float>(mono.data() + start, count));
       }
       if (!suppressed_tap.empty())
       {

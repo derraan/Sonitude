@@ -7,8 +7,8 @@ Last updated: 2026-08-30.
 ### Implementation status snapshot (M4–M7)
 
 ```text
-capture -> calibration -> STFT MVDR target (+ internal guard looks)
-  -> suppressor (conservative default; spectral contrast experimental)
+capture -> calibration -> STFT MVDR target (+ internal guard spectra)
+  -> optional same-hop spectral NS, else conservative PCM / off
   -> limiter -> binaural/ASRC -> playback
 ```
 
@@ -16,7 +16,7 @@ capture -> calibration -> STFT MVDR target (+ internal guard looks)
 | --- | --- | --- | --- |
 | Stage 2 | M3 calibration | in_progress | `CalibrationApplier` live in runtime; HW sweep evidence still pending |
 | Stage 3 | M4 beamformer | in_progress | STFT-domain MVDR (128/32), delay-and-sum fallback, steering crossfade. SCOPE-3 vetoed for MVDR. |
-| Stage 4 | M7 suppression/limiter | in_progress | Conservative default. Spectral path uses internal +90/−90/180 MVDR guard looks and target-only STFT gain. Experimental; not the shipping voice suppressor. |
+| Stage 4 | M7 suppression/limiter | in_progress | Conservative default. Spectral NS shares the MVDR 128/32 hop (guard spectra stay in the frequency domain). Experimental; not the shipping voice suppressor. |
 
 | Block | Status |
 | --- | --- |
@@ -185,7 +185,7 @@ Core **directional listening** DSP — **narrowband MVDR** (`MvdrBeamformer`; `D
 2. 128/32 STFT of all six channels; per bin solve distortionless MVDR (delay-and-sum fallback on DC/Nyquist, failed solve, or excess white-noise gain).
 3. Inverse STFT → audible **mono**. Three extra looks (+90°, −90°, 180°) are formed the same way for spectral contrast only.
 
-- **Algorithmic delay:** 127 samples (128/32 first-arrival), stacked with spectral NS if that backend is on.
+- **Algorithmic delay:** 127 samples (128/32 first-arrival). Spectral NS shares this hop.
 - **Click-free steering:** dual-look **crossfade** over `steering_ramp_ms`; covariance frozen during the fade.
 - **Control handoff:** non-RT thread publishes a **steering snapshot**; audio thread reads it only.
 

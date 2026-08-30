@@ -77,8 +77,10 @@ class SpectralPostfilter
   void processSpectrum(std::span<float> re,
                        std::span<float> im,
                        GuardSpectrumConstSpans guards = {}) noexcept;
+  // Apply the last hop's gains without updating the estimator. Used on the
+  // outgoing look during a steering crossfade so one hop still has one update.
+  void applyStoredGains(std::span<float> re, std::span<float> im) const noexcept;
 
-  [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept { return 0; }
   [[nodiscard]] float currentGain() const noexcept { return last_mean_gain_; }
   [[nodiscard]] std::size_t persistentBytes() const noexcept;
 

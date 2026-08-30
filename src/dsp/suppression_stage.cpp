@@ -115,30 +115,11 @@ void SuppressionStage::setEstimatorHold(const bool hold) noexcept
 
 void SuppressionStage::process(const std::span<float> mono)
 {
-  process(mono, GuardLookConstSpans{});
-}
-
-void SuppressionStage::process(const std::span<float> target, const GuardLookConstSpans guards)
-{
-  if (!ready_ || backend_ == SuppressionBackend::Off || target.empty())
+  if (!ready_ || backend_ != SuppressionBackend::Conservative || mono.empty())
   {
     return;
   }
-  if (backend_ == SuppressionBackend::Conservative)
-  {
-    conservative_.process(target);
-    return;
-  }
-  spectral_.process(target, target, guards);
-}
-
-std::size_t SuppressionStage::algorithmicDelaySamples() const noexcept
-{
-  if (backend_ != SuppressionBackend::Spectral || !ready_)
-  {
-    return 0;
-  }
-  return spectral_.algorithmicDelaySamples();
+  conservative_.process(mono);
 }
 
 float SuppressionStage::currentGain() const noexcept

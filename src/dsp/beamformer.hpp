@@ -40,9 +40,6 @@ class MvdrBeamformer final : public IBeamformer
   void setTarget(audio::BeamformerSteering target) override;
   void setSpectralPostfilter(SpectralPostfilter* filter) noexcept { spectral_filter_ = filter; }
   void process(std::span<const audio::MicFrame> input, std::span<float> mono_out) override;
-  void process(std::span<const audio::MicFrame> input,
-               std::span<float> target_out,
-               GuardLookSpans guards);
   void resetStream() noexcept
   {
     if (crossfading_)
@@ -53,10 +50,8 @@ class MvdrBeamformer final : public IBeamformer
     for (auto& stft : mic_stft_) stft.reset();
     target_stft_.reset();
     pending_stft_.reset();
-    for (auto& stft : guard_stft_) stft.reset();
     for (auto& bin : cov_) bin = {};
     crossfading_ = false;
-    emit_guards_ = false;
     fade_cursor_ = 0;
   }
   [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept;
@@ -84,7 +79,6 @@ class MvdrBeamformer final : public IBeamformer
   std::size_t ramp_samples_ = 1;
   std::size_t fade_cursor_ = 0;
   bool crossfading_ = false;
-  bool emit_guards_ = false;
   SpectralPostfilter* spectral_filter_ = nullptr;
 
   app::SteeringConfig steering_config_{};
@@ -99,7 +93,6 @@ class MvdrBeamformer final : public IBeamformer
   std::array<MicHopContext, audio::kMicChannels> mic_ctx_{};
   StreamingStft target_stft_{};
   StreamingStft pending_stft_{};
-  std::array<StreamingStft, kGuardLooks> guard_stft_{};
 
   std::array<std::vector<float>, audio::kMicChannels> x_re_{};
   std::array<std::vector<float>, audio::kMicChannels> x_im_{};

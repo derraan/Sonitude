@@ -10,7 +10,7 @@
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
 #include "dsp/beamformer.hpp"
-#include "dsp/spatial_looks.hpp"
+#include "dsp/spectral_postfilter.hpp"
 #include "tests/support/synth_signals.hpp"
 
 namespace
@@ -261,28 +261,30 @@ void TestLeftRightAzimuthConvention()
   Require(left_rms > right_rms * 1.2, "listener-left steering should beat listener-right steering");
 }
 
-void TestGuardLooksAreInternalAndOffAxis()
+void TestSpectralSharesSingleStftDelay()
 {
   constexpr std::uint32_t kFs = 16000;
-  constexpr std::size_t kFrames = 4096;
-  const auto geometry = BuildGeometry();
-  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 850.0);
-  const auto mic = sonitude::tests::support::GeneratePlaneWave(
-      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
-
+  constexpr std::size_t kFrames = 2048;
   sonitude::dsp::DelaySumBeamformer bf;
-  bf.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
-  bf.setTarget({0.0F, 0.0F});
-  std::vector<float> target(kFrames, 0.0F);
-  std::array<std::vector<float>, sonitude::dsp::kGuardLooks> guard_buf;
-  const auto guards = sonitude::dsp::BindGuardLooks(guard_buf, kFrames);
-  bf.process(mic, target, guards);
+  bf.configure(BuildGeometry(), BuildSteering(), BuildCalibration(), kFs, kFrames);
+  Require(bf.algorithmicDelaySamples() == 127, "MVDR first-arrival is one 128/32 STFT");
 
-  const double target_rms = sonitude::tests::support::ComputeRms(target, 512);
-  const double side_rms = sonitude::tests::support::ComputeRms(guard_buf[0], 512);
-  const double rear_rms = sonitude::tests::support::ComputeRms(guard_buf[2], 512);
-  Require(target_rms > side_rms * 1.15, "target look should beat +90 guard for an on-axis source");
-  Require(target_rms > rear_rms * 1.15, "target look should beat rear guard for an on-axis source");
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(static_cast<double>(kFs), kFrames, {.enabled = true, .gain_floor_db = -12.0F}),
+          "shared-hop postfilter prepare");
+  bf.setSpectralPostfilter(&pf);
+  Require(bf.algorithmicDelaySamples() == 127,
+          "attaching spectral NS must not add a second STFT delay");
+
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, BuildGeometry(), kFs, 0, 0.0F, 0.0F, 343.0F);
+  std::vector<float> out(kFrames, 0.0F);
+  bf.setTarget({0.0F, 0.0F});
+  pf.setControl(true, 1.0F);
+  bf.process(mic, out);
+  Require(std::all_of(out.begin(), out.end(), [](const float v) { return std::isfinite(v); }),
+          "shared-hop spectral MVDR output must stay finite");
 }
 
 void TestMvdrNullsOffAxisInterferer()
@@ -326,6 +328,6 @@ void RunBeamformerTests()
   TestRepeatedIdenticalSetTargetSettles();
   TestCalibrationDelayClosure();
   TestLeftRightAzimuthConvention();
-  TestGuardLooksAreInternalAndOffAxis();
+  TestSpectralSharesSingleStftDelay();
   TestMvdrNullsOffAxisInterferer();
 }

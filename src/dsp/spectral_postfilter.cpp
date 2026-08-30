@@ -400,6 +400,28 @@ void SpectralPostfilter::processSpectrum(const std::span<float> re,
                         : 1.0F;
 }
 
+void SpectralPostfilter::applyStoredGains(const std::span<float> re,
+                                          const std::span<float> im) const noexcept
+{
+  if (!ready_ || re.size() < config_.fft_size || im.size() < config_.fft_size)
+  {
+    return;
+  }
+  const std::size_t n_bins = gains_.size();
+  for (std::size_t k = 0; k < n_bins; ++k)
+  {
+    const float gain = std::clamp(Sanitize(gains_[k]), 0.0F, 1.0F);
+    re[k] = Sanitize(re[k]) * gain;
+    im[k] = Sanitize(im[k]) * gain;
+    if (k != 0U && k * 2U != config_.fft_size)
+    {
+      const std::size_t mirror = config_.fft_size - k;
+      re[mirror] = Sanitize(re[mirror]) * gain;
+      im[mirror] = Sanitize(im[mirror]) * gain;
+    }
+  }
+}
+
 std::size_t SpectralPostfilter::persistentBytes() const noexcept
 {
   return tracker_.persistentBytes() + wiener_.persistentBytes() +

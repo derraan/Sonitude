@@ -6,7 +6,6 @@
 #include <string>
 
 #include "dsp/spectral_postfilter.hpp"
-#include "dsp/spatial_looks.hpp"
 #include "dsp/suppressor.hpp"
 
 namespace sonitude::dsp
@@ -40,13 +39,17 @@ class SuppressionStage
   void setControl(bool focus_active, float confidence) noexcept;
   void setConfidenceThreshold(float threshold) noexcept;
   void setEstimatorHold(bool hold) noexcept;
+  // Conservative: in-place PCM. Spectral: no-op; gains run inside the MVDR hop.
   void process(std::span<float> mono);
-  void process(std::span<float> target, GuardLookConstSpans guards);
 
   [[nodiscard]] SuppressionBackend backend() const noexcept { return backend_; }
-  [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept;
+  [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept { return 0; }
   [[nodiscard]] float currentGain() const noexcept;
   [[nodiscard]] bool ready() const noexcept { return ready_; }
+  [[nodiscard]] SpectralPostfilter* spectralFilter() noexcept
+  {
+    return (backend_ == SuppressionBackend::Spectral && ready_) ? &spectral_ : nullptr;
+  }
 
  private:
   bool ready_ = false;

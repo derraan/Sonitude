@@ -118,7 +118,7 @@ Core **directional listening** DSP — **narrowband MVDR**:
 2. 128/32 STFT of six channels; per-bin distortionless MVDR (delay-and-sum fallback).
 3. Inverse STFT → mono. Internal +90/−90/180 looks exist for spectral contrast only.
 
-- **Delay:** 127 samples at 128/32; stacked if spectral NS is also on.
+- **Delay:** 127 samples at 128/32. Spectral NS shares that hop.
 - **Click-free steering:** dual-look crossfade over `steering_ramp_ms`; covariance frozen during the fade.
 - **Control handoff:** non-RT thread publishes a steering snapshot; audio thread reads it only.
 

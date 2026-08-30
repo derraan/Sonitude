@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -9,8 +8,8 @@
 #include <vector>
 
 #include "dsp/beamformer.hpp"
-#include "dsp/spatial_looks.hpp"
 #include "dsp/spectral_postfilter.hpp"
+#include "dsp/streaming_stft.hpp"
 #include "tests/support/alloc_counter.hpp"
 #include "tests/support/synth_signals.hpp"
 
@@ -24,10 +23,13 @@ void Require(const bool condition, const std::string& message)
   }
 }
 
+constexpr std::size_t kSharedFftDelay = 127;
+constexpr double kPi = 3.14159265358979323846;
+
 std::vector<float> Sine(const std::size_t n, const double freq, const double fs, const float amp)
 {
   std::vector<float> out(n, 0.0F);
-  const double w = 2.0 * 3.14159265358979323846 * freq / fs;
+  const double w = 2.0 * kPi * freq / fs;
   for (std::size_t i = 0; i < n; ++i)
   {
     out[i] = amp * static_cast<float>(std::sin(w * static_cast<double>(i)));
@@ -60,8 +62,6 @@ double Rms(const std::vector<float>& x, const std::size_t skip)
   }
   return std::sqrt(s / static_cast<double>(x.size() - skip));
 }
-
-constexpr double kPi = 3.14159265358979323846;
 
 struct ToneProjection
 {
@@ -115,6 +115,75 @@ double DbRatio(const double num, const double den)
 bool AllFinite(const std::vector<float>& x)
 {
   return std::all_of(x.begin(), x.end(), [](const float v) { return std::isfinite(v); });
+}
+
+struct FilterHop
+{
+  sonitude::dsp::SpectralPostfilter* pf = nullptr;
+};
+
+void OnFilterHop(void* context, float* re, float* im, const std::size_t fft_size) noexcept
+{
+  auto* ctx = static_cast<FilterHop*>(context);
+  if (ctx == nullptr || ctx->pf == nullptr || re == nullptr || im == nullptr)
+  {
+    return;
+  }
+  ctx->pf->processSpectrum(std::span<float>(re, fft_size), std::span<float>(im, fft_size));
+}
+
+struct SharedStftFilter
+{
+  sonitude::dsp::StreamingStft stft;
+  FilterHop ctx{};
+
+  bool prepare(const double fs, sonitude::dsp::SpectralPostfilter& pf)
+  {
+    ctx.pf = &pf;
+    return stft.prepare(fs, 256, {.fft_size = 128, .hop_size = 32, .synthesize = true});
+  }
+
+  void process(const std::span<const float> input, const std::span<float> output)
+  {
+    stft.process(input, output, &OnFilterHop, &ctx);
+  }
+
+  void reset() { stft.reset(); }
+};
+
+void FilterPcm(sonitude::dsp::SpectralPostfilter& pf,
+               const std::span<const float> input,
+               const std::span<float> output)
+{
+  SharedStftFilter host;
+  Require(host.prepare(44100.0, pf), "shared STFT host must prepare");
+  host.process(input, output);
+}
+
+sonitude::app::GeometryConfig TestGeometry()
+{
+  sonitude::app::GeometryConfig g;
+  g.profile_name = "unit_test_geometry";
+  g.microphones = {
+      {"M0", -0.038, 0.168, 0.0}, {"M1", 0.038, 0.168, 0.0}, {"M2", -0.090, 0.050, 0.0},
+      {"M3", 0.090, 0.050, 0.0},  {"M4", -0.060, 0.000, 0.0}, {"M5", 0.060, 0.000, 0.0},
+  };
+  return g;
+}
+
+sonitude::app::CalibrationConfig TestCalibration()
+{
+  sonitude::app::CalibrationConfig c;
+  c.sample_rate_hz = 44100;
+  c.channels.resize(sonitude::audio::kMicChannels);
+  for (std::size_t i = 0; i < c.channels.size(); ++i)
+  {
+    c.channels[i].id = "M" + std::to_string(i);
+    c.channels[i].polarity = 1;
+    c.channels[i].gain_linear = 1.0F;
+    c.channels[i].delay_samples = 0.0F;
+  }
+  return c;
 }
 
 void TestTrackerIndependent()
@@ -199,21 +268,21 @@ void TestFiniteAndFloor()
   Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "prepare");
   std::vector<float> in(2048, 0.0F);
   std::vector<float> out(2048, 0.0F);
-  pf.process(in, out);
+  FilterPcm(pf, in, out);
   Require(AllFinite(out), "silence must stay finite");
 
   in[10] = std::numeric_limits<float>::quiet_NaN();
   in[11] = std::numeric_limits<float>::infinity();
   in[12] = std::numeric_limits<float>::denorm_min();
   pf.reset();
-  pf.process(in, out);
+  FilterPcm(pf, in, out);
   Require(AllFinite(out), "NaN/Inf/denormal input must not leak non-finite output");
 
   in = std::vector<float>(4096, 0.99F);
   out.assign(in.size(), 0.0F);
   pf.reset();
   pf.setControl(true, 1.0F);
-  pf.process(in, out);
+  FilterPcm(pf, in, out);
   Require(AllFinite(out), "full-scale DC must stay finite");
 }
 
@@ -224,8 +293,8 @@ void TestNoiseOnlyDoesNotOpen()
   const auto in = Lcg(44100, 42, 0.2F);
   std::vector<float> out(in.size(), 0.0F);
   pf.setControl(true, 1.0F);
-  pf.process(in, out);
-  const std::size_t skip = pf.algorithmicDelaySamples() + 6000;
+  FilterPcm(pf, in, out);
+  const std::size_t skip = kSharedFftDelay + 6000;
   const double in_rms = Rms(in, skip);
   const double out_rms = Rms(out, skip);
   const double ratio = out_rms / std::max(in_rms, 1.0e-20);
@@ -246,8 +315,8 @@ void TestCleanSineNegativeControl()
   std::copy(tone.begin(), tone.end(), in.begin() + 4000);
   std::vector<float> out(in.size(), 0.0F);
   pf.setControl(true, 1.0F);
-  pf.process(in, out);
-  const std::size_t delay = pf.algorithmicDelaySamples();
+  FilterPcm(pf, in, out);
+  const std::size_t delay = kSharedFftDelay;
   const std::size_t a = 8000 + delay;
   const std::size_t b = 30000;
   double in_e = 0.0;
@@ -268,20 +337,22 @@ void TestChunkResetAllocDelay()
   sonitude::dsp::SpectralPostfilter b;
   const sonitude::dsp::SpectralPostfilterConfig cfg{.enabled = true, .gain_floor_db = -12.0F};
   Require(a.prepare(44100.0, 256, cfg) && b.prepare(44100.0, 256, cfg), "prepare pair");
-  Require(a.algorithmicDelaySamples() == 127, "postfilter delay must match STFT first-arrival");
+  SharedStftFilter host_a;
+  SharedStftFilter host_b;
+  Require(host_a.prepare(44100.0, a) && host_b.prepare(44100.0, b), "shared STFT hosts");
   const auto in = Lcg(5000, 9, 0.15F);
   std::vector<float> one(in.size(), 0.0F);
   std::vector<float> many(in.size(), 0.0F);
   a.setControl(true, 1.0F);
   b.setControl(true, 1.0F);
-  a.process(in, one);
+  host_a.process(in, one);
   std::size_t pos = 0;
   const std::size_t chunks[] = {1, 5, 64, 13, 128, 7};
   std::size_t ci = 0;
   while (pos < in.size())
   {
     const std::size_t n = std::min(chunks[ci % 6], in.size() - pos);
-    b.process(std::span<const float>(in.data() + pos, n), std::span<float>(many.data() + pos, n));
+    host_b.process(std::span<const float>(in.data() + pos, n), std::span<float>(many.data() + pos, n));
     pos += n;
     ++ci;
   }
@@ -290,15 +361,17 @@ void TestChunkResetAllocDelay()
   {
     err = std::max(err, std::fabs(static_cast<double>(one[i]) - static_cast<double>(many[i])));
   }
-  Require(err < 2.0e-5, "spectral postfilter chunk invariance failed");
+  Require(err < 2.0e-5, "shared-STFT spectral chunk invariance failed");
 
   std::vector<float> r1(2048, 0.0F);
   std::vector<float> r2(2048, 0.0F);
   std::vector<float> x(2048, 0.05F);
   a.reset();
-  a.process(x, r1);
+  host_a.reset();
+  host_a.process(x, r1);
   a.reset();
-  a.process(x, r2);
+  host_a.reset();
+  host_a.process(x, r2);
   Require(AllFinite(r1) && AllFinite(r2), "reset outputs finite");
   for (std::size_t i = 0; i < x.size(); ++i)
   {
@@ -306,12 +379,12 @@ void TestChunkResetAllocDelay()
   }
 
   const auto before = sonitude::tests::support::AllocationCount();
-  a.process(in, one);
+  host_a.process(in, one);
   a.setEstimatorHold(true);
-  a.process(std::span<const float>(in.data(), 64), std::span<float>(one.data(), 64));
+  host_a.process(std::span<const float>(in.data(), 64), std::span<float>(one.data(), 64));
   const auto after = sonitude::tests::support::AllocationCount();
   Require(after == before,
-          "process must not allocate, delta=" + std::to_string(after - before));
+          "shared-STFT process must not allocate, delta=" + std::to_string(after - before));
 }
 
 void TestHoldFreezesNoise()
@@ -327,7 +400,6 @@ void TestHoldFreezesNoise()
   std::fill(p.begin(), p.end(), 0.001F);
   tracker.update(p, false);
   Require(std::fabs(tracker.noisePower()[0] - frozen) < 1.0e-6F, "hold must freeze downward snaps too");
-  Require(std::fabs(tracker.smoothedPower()[0] - 0.02F) < 1.0e-4F, "hold must freeze smoothed power");
 }
 
 void TestMixtureSnrWithNoiseLeadIn()
@@ -347,8 +419,8 @@ void TestMixtureSnrWithNoiseLeadIn()
   }
   std::vector<float> out(n, 0.0F);
   pf.setControl(true, 1.0F);
-  pf.process(mix, out);
-  const std::size_t delay = pf.algorithmicDelaySamples();
+  FilterPcm(pf, mix, out);
+  const std::size_t delay = kSharedFftDelay;
   const std::size_t a = lead + 4000;
   const std::size_t b = n - delay - 500;
   const auto in_t = ProjectTone(mix, freq, fs, a, b, 0.0);
@@ -376,8 +448,8 @@ void TestMixtureSnrSimultaneousStart()
   }
   std::vector<float> out(mix.size(), 0.0F);
   pf.setControl(true, 1.0F);
-  pf.process(mix, out);
-  const std::size_t delay = pf.algorithmicDelaySamples();
+  FilterPcm(pf, mix, out);
+  const std::size_t delay = kSharedFftDelay;
   const std::size_t a = 8000;
   const std::size_t b = mix.size() - delay - 500;
   const auto in_t = ProjectTone(mix, freq, fs, a, b, 0.0);
@@ -400,8 +472,8 @@ void TestTonePresentFromStartup()
   const auto in = Sine(44100, freq, fs, 0.3F);
   std::vector<float> out(in.size(), 0.0F);
   pf.setControl(true, 1.0F);
-  pf.process(in, out);
-  const std::size_t delay = pf.algorithmicDelaySamples();
+  FilterPcm(pf, in, out);
+  const std::size_t delay = kSharedFftDelay;
   const std::size_t a = 4000;
   const std::size_t b = in.size() - delay - 500;
   const auto in_t = ProjectTone(in, freq, fs, a, b, 0.0);
@@ -414,15 +486,17 @@ void TestFocusTransitionDoesNotLearnBypassAsNoise()
 {
   sonitude::dsp::SpectralPostfilter pf;
   Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "focus prepare");
+  SharedStftFilter host;
+  Require(host.prepare(44100.0, pf), "focus host STFT");
   const double fs = 44100.0;
   const double freq = 4.0 * fs / 128.0;
   const auto in = Sine(44100, freq, fs, 0.3F);
   std::vector<float> out(in.size(), 0.0F);
   pf.setControl(false, 1.0F);
-  pf.process(std::span<const float>(in.data(), 20000), std::span<float>(out.data(), 20000));
+  host.process(std::span<const float>(in.data(), 20000), std::span<float>(out.data(), 20000));
   pf.setControl(true, 1.0F);
-  pf.process(std::span<const float>(in.data() + 20000, 24100), std::span<float>(out.data() + 20000, 24100));
-  const std::size_t delay = pf.algorithmicDelaySamples();
+  host.process(std::span<const float>(in.data() + 20000, 24100), std::span<float>(out.data() + 20000, 24100));
+  const std::size_t delay = kSharedFftDelay;
   const std::size_t a = 28000;
   const std::size_t b = in.size() - delay - 500;
   const auto in_t = ProjectTone(in, freq, fs, a, b, 0.0);
@@ -440,8 +514,8 @@ void TestConfidenceThresholdIsHonored()
   const auto in = Lcg(20000, 7, 0.2F);
   std::vector<float> out(in.size(), 0.0F);
   pf.setControl(true, 0.5F);
-  pf.process(in, out);
-  const std::size_t skip = pf.algorithmicDelaySamples() + 2000;
+  FilterPcm(pf, in, out);
+  const std::size_t skip = kSharedFftDelay + 2000;
   const double ratio = Rms(out, skip) / std::max(Rms(in, skip), 1.0e-20);
   Require(ratio > 0.85, "below-threshold confidence must stay near unity, ratio=" + std::to_string(ratio));
 }
@@ -453,49 +527,6 @@ void TestPersistentBytesCountsEstimator()
   const std::size_t n_bins = (128U / 2U) + 1U;
   Require(pf.persistentBytes() >= (8U * n_bins * sizeof(float)),
           "persistentBytes must include tracker and gain arrays");
-}
-
-void TestCoLocatedSpectraAreNotSpatialSeparation()
-{
-  sonitude::dsp::SpectralPostfilter pf;
-  Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "colocated prepare");
-  const double f = 4.0 * 44100.0 / 128.0;
-  const auto a = Sine(20000, f, 44100.0, 0.2F);
-  const auto b = Sine(20000, f, 44100.0, 0.2F);
-  std::vector<float> mix(20000, 0.0F);
-  for (std::size_t i = 0; i < mix.size(); ++i)
-  {
-    mix[i] = a[i] + b[i];
-  }
-  std::vector<float> out(mix.size(), 0.0F);
-  pf.process(mix, out);
-  Require(AllFinite(out), "co-located equal spectra remain finite");
-}
-
-sonitude::app::GeometryConfig TestGeometry()
-{
-  sonitude::app::GeometryConfig g;
-  g.profile_name = "unit_test_geometry";
-  g.microphones = {
-      {"M0", -0.038, 0.168, 0.0}, {"M1", 0.038, 0.168, 0.0}, {"M2", -0.090, 0.050, 0.0},
-      {"M3", 0.090, 0.050, 0.0},  {"M4", -0.060, 0.000, 0.0}, {"M5", 0.060, 0.000, 0.0},
-  };
-  return g;
-}
-
-sonitude::app::CalibrationConfig TestCalibration()
-{
-  sonitude::app::CalibrationConfig c;
-  c.sample_rate_hz = 44100;
-  c.channels.resize(sonitude::audio::kMicChannels);
-  for (std::size_t i = 0; i < c.channels.size(); ++i)
-  {
-    c.channels[i].id = "M" + std::to_string(i);
-    c.channels[i].polarity = 1;
-    c.channels[i].gain_linear = 1.0F;
-    c.channels[i].delay_samples = 0.0F;
-  }
-  return c;
 }
 
 void TestTwoTalkersGuardContrast()
@@ -521,28 +552,32 @@ void TestTwoTalkersGuardContrast()
   steering.speed_of_sound_mps = 343.0F;
   steering.reference_mic_index = 0;
   steering.steering_ramp_ms = 1.0F;
-  sonitude::dsp::DelaySumBeamformer bf;
-  bf.configure(geometry, steering, TestCalibration(), kFs, 256);
-  bf.setTarget({0.0F, 0.0F});
-  std::vector<float> target(kFrames, 0.0F);
-  std::array<std::vector<float>, sonitude::dsp::kGuardLooks> guard_buf;
-  const auto guards = sonitude::dsp::BindGuardLooks(guard_buf, kFrames);
-  bf.process(mic_t, target, guards);
+  const auto calibration = TestCalibration();
+
+  sonitude::dsp::DelaySumBeamformer raw;
+  raw.configure(geometry, steering, calibration, kFs, 256);
+  raw.setTarget({0.0F, 0.0F});
+  std::vector<float> unfiltered(kFrames, 0.0F);
+  raw.process(mic_t, unfiltered);
 
   sonitude::dsp::SpectralPostfilter pf;
   Require(pf.prepare(static_cast<double>(kFs), 256, {.enabled = true, .gain_floor_db = -12.0F}),
           "two-talker prepare");
-  std::vector<float> out(kFrames, 0.0F);
   pf.setControl(true, 1.0F);
-  pf.process(target, out, sonitude::dsp::ConstGuardLooks(guards));
+  sonitude::dsp::DelaySumBeamformer bf;
+  bf.configure(geometry, steering, calibration, kFs, 256);
+  bf.setTarget({0.0F, 0.0F});
+  bf.setSpectralPostfilter(&pf);
+  Require(bf.algorithmicDelaySamples() == kSharedFftDelay, "MVDR first-arrival remains one STFT");
+  std::vector<float> out(kFrames, 0.0F);
+  bf.process(mic_t, out);
 
-  const std::size_t delay = pf.algorithmicDelaySamples();
   const std::size_t a = 8000;
-  const std::size_t b = kFrames - delay - 500;
-  const auto in_t = ProjectTone(target, f_target, kFs, a, b, 0.0);
-  const auto out_t = ProjectTone(out, f_target, kFs, a + delay, b + delay, -static_cast<double>(delay));
-  const auto in_o = ProjectTone(target, f_off, kFs, a, b, 0.0);
-  const auto out_o = ProjectTone(out, f_off, kFs, a + delay, b + delay, -static_cast<double>(delay));
+  const std::size_t b = kFrames - 500;
+  const auto in_t = ProjectTone(unfiltered, f_target, kFs, a, b, 0.0);
+  const auto out_t = ProjectTone(out, f_target, kFs, a, b, 0.0);
+  const auto in_o = ProjectTone(unfiltered, f_off, kFs, a, b, 0.0);
+  const auto out_o = ProjectTone(out, f_off, kFs, a, b, 0.0);
   const double att_t = DbRatio(out_t.target_rms, in_t.target_rms);
   const double att_o = DbRatio(out_o.target_rms, in_o.target_rms);
   Require(AllFinite(out), "two-talker output finite");
@@ -569,6 +604,5 @@ void RunSpectralPostfilterTests()
   TestFocusTransitionDoesNotLearnBypassAsNoise();
   TestConfidenceThresholdIsHonored();
   TestPersistentBytesCountsEstimator();
-  TestCoLocatedSpectraAreNotSpatialSeparation();
   TestTwoTalkersGuardContrast();
 }

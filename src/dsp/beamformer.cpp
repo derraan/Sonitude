@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "dsp/spectral_postfilter.hpp"
 #include "spatial/angles.hpp"
 
 namespace sonitude::dsp
@@ -252,10 +253,6 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   }
   for (std::size_t g = 0; g < kGuardLooks; ++g)
   {
-    if (!guard_stft_[g].prepare(sr, fifo_frames, synthesis))
-    {
-      throw std::runtime_error("MVDR guard STFT prepare failed");
-    }
     guard_y_re_[g].assign(kFftSize, 0.0F);
     guard_y_im_[g].assign(kFftSize, 0.0F);
   }
@@ -281,7 +278,6 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   pending_delays_ = current_delays_;
   updateGuardDelays();
   crossfading_ = false;
-  emit_guards_ = false;
   fade_cursor_ = 0;
   configured_ = true;
 }
@@ -460,46 +456,50 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
   }
 
   FormLookSpectrum(current_delays_, y_re_, y_im_);
-  target_stft_.overlapAddSpectrum(y_re_.data(), y_im_.data());
   if (crossfading_)
   {
     FormLookSpectrum(pending_delays_, pending_y_re_, pending_y_im_);
+  }
+  if (spectral_filter_ != nullptr)
+  {
+    for (std::size_t g = 0; g < kGuardLooks; ++g)
+    {
+      FormLookSpectrum(guard_delays_[g], guard_y_re_[g], guard_y_im_[g]);
+    }
+    const auto guards = BindGuardSpectra(guard_y_re_, guard_y_im_);
+    if (crossfading_)
+    {
+      spectral_filter_->processSpectrum(pending_y_re_, pending_y_im_, guards);
+      spectral_filter_->applyStoredGains(y_re_, y_im_);
+    }
+    else
+    {
+      spectral_filter_->processSpectrum(y_re_, y_im_, guards);
+    }
+  }
+  target_stft_.overlapAddSpectrum(y_re_.data(), y_im_.data());
+  if (crossfading_)
+  {
     pending_stft_.overlapAddSpectrum(pending_y_re_.data(), pending_y_im_.data());
   }
   else
   {
     pending_stft_.overlapAddSpectrum(y_re_.data(), y_im_.data());
   }
-  if (emit_guards_)
-  {
-    for (std::size_t g = 0; g < kGuardLooks; ++g)
-    {
-      FormLookSpectrum(guard_delays_[g], guard_y_re_[g], guard_y_im_[g]);
-      guard_stft_[g].overlapAddSpectrum(guard_y_re_[g].data(), guard_y_im_[g].data());
-    }
-  }
 }
 
 void MvdrBeamformer::process(const std::span<const audio::MicFrame> input,
                              const std::span<float> mono_out)
 {
-  process(input, mono_out, GuardLookSpans{});
-}
-
-void MvdrBeamformer::process(const std::span<const audio::MicFrame> input,
-                             const std::span<float> target_out,
-                             const GuardLookSpans guards)
-{
   if (!configured_)
   {
     throw std::runtime_error("beamformer used before configure");
   }
-  if (target_out.size() < input.size())
+  if (mono_out.size() < input.size())
   {
     throw std::runtime_error("mono_out span too small for input");
   }
 
-  emit_guards_ = !guards[0].empty();
   for (std::size_t i = 0; i < input.size(); ++i)
   {
     for (std::size_t ch = 0; ch < audio::kMicChannels; ++ch)
@@ -510,13 +510,13 @@ void MvdrBeamformer::process(const std::span<const audio::MicFrame> input,
     const float pending_y = pending_stft_.pop();
     if (!crossfading_)
     {
-      target_out[i] = current_y;
+      mono_out[i] = current_y;
     }
     else
     {
       const float alpha =
           static_cast<float>(fade_cursor_) / static_cast<float>(std::max<std::size_t>(1U, ramp_samples_));
-      target_out[i] = ((1.0F - alpha) * current_y) + (alpha * pending_y);
+      mono_out[i] = ((1.0F - alpha) * current_y) + (alpha * pending_y);
       ++fade_cursor_;
       if (fade_cursor_ >= ramp_samples_)
       {
@@ -524,17 +524,6 @@ void MvdrBeamformer::process(const std::span<const audio::MicFrame> input,
         fade_cursor_ = 0;
         current_delays_ = pending_delays_;
         std::swap(target_stft_, pending_stft_);
-      }
-    }
-    if (emit_guards_)
-    {
-      for (std::size_t g = 0; g < kGuardLooks; ++g)
-      {
-        const float gy = guard_stft_[g].pop();
-        if (i < guards[g].size())
-        {
-          guards[g][i] = gy;
-        }
       }
     }
   }
