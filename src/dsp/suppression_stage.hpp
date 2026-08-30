@@ -47,10 +47,6 @@ class SuppressionStage
   [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept;
   [[nodiscard]] float currentGain() const noexcept;
   [[nodiscard]] bool ready() const noexcept { return ready_; }
-  [[nodiscard]] const SpectralPostfilter* spectral() const noexcept
-  {
-    return backend_ == SuppressionBackend::Spectral ? &spectral_ : nullptr;
-  }
 
  private:
   bool ready_ = false;
