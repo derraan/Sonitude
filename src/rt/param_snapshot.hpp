@@ -2,7 +2,8 @@
 
 #include <array>
 #include <atomic>
-#include <cstdint>
+#include <cstddef>
+#include <type_traits>
 
 namespace sonitude::rt
 {
@@ -10,39 +11,45 @@ template <typename T>
 class SnapshotBuffer
 {
  public:
-  explicit SnapshotBuffer(const T& initial) : slots_{initial, initial} {}
+  static_assert(std::is_trivially_copyable_v<T>, "RT snapshots must be trivially copyable");
+
+  explicit SnapshotBuffer(const T& initial) : slots_{initial, initial, initial} {}
 
   void publish(const T& value)
   {
-    const std::uint64_t seq0 = sequence_.load(std::memory_order_relaxed);
-    sequence_.store(seq0 + 1U, std::memory_order_release);  // writer busy (odd)
-    const std::size_t slot = static_cast<std::size_t>(((seq0 / 2U) + 1U) % 2U);
+    const std::size_t published = published_.load(std::memory_order_acquire);
+    const std::size_t reading = reading_.load(std::memory_order_acquire);
+    std::size_t slot = 0;
+    while (slot == published || slot == reading)
+    {
+      ++slot;
+    }
     slots_[slot] = value;
-    sequence_.store(seq0 + 2U, std::memory_order_release);  // publish complete (even)
+    published_.store(slot, std::memory_order_release);
   }
 
   T acquire() const
   {
     for (;;)
     {
-      const std::uint64_t seq1 = sequence_.load(std::memory_order_acquire);
-      if ((seq1 & 1U) != 0U)
+      const std::size_t slot = published_.load(std::memory_order_acquire);
+      reading_.store(slot, std::memory_order_release);
+      if (published_.load(std::memory_order_acquire) != slot)
       {
+        reading_.store(kNotReading, std::memory_order_release);
         continue;
       }
-      const std::size_t slot = static_cast<std::size_t>((seq1 / 2U) % 2U);
       const T value = slots_[slot];
-      const std::uint64_t seq2 = sequence_.load(std::memory_order_acquire);
-      if (seq1 == seq2)
-      {
-        return value;
-      }
+      reading_.store(kNotReading, std::memory_order_release);
+      return value;
     }
   }
 
  private:
-  mutable std::atomic<std::uint64_t> sequence_{0};
-  std::array<T, 2> slots_{};
+  static constexpr std::size_t kNotReading = 3;
+  std::array<T, 3> slots_{};
+  std::atomic<std::size_t> published_{0};
+  mutable std::atomic<std::size_t> reading_{kNotReading};
 };
 
 template <typename T>
