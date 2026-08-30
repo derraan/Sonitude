@@ -531,6 +531,6 @@ void MvdrBeamformer::process(const std::span<const audio::MicFrame> input,
 
 std::size_t MvdrBeamformer::algorithmicDelaySamples() const noexcept
 {
-  return target_stft_.ready() ? (kFftSize - 1U) : 0U;
+  return configured_ ? (kFftSize - 1U) : 0U;
 }
 }  // namespace sonitude::dsp

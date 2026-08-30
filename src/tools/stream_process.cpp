@@ -121,7 +121,7 @@ void PrintUsage()
             << "  sonitude_stream_process --config <runtime_yaml>\n"
             << "                          [--sample-rate <hz>] [--max-block-frames <n>]\n"
             << "                          [--suppression auto|on|off]\n"
-            << "                          [--suppression-backend off|conservative|spectral]\n"
+            << "                          [--suppression-backend conservative|spectral]\n"
             << "                          [--enable-suppression] [--disable-suppression]\n"
             << "                          [--disable-limiter]\n"
             << "                          [--capabilities]\n";
@@ -132,10 +132,7 @@ void PrintCapabilities()
   std::cout << "{"
             << "\"protocol_version\":3,"
             << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"],"
-               "\"backends\":[\"off\",\"conservative\",\"spectral\"],"
-               "\"default_backend\":\"conservative\","
-               "\"implementation_status\":\"EXPERIMENTAL\","
-               "\"note\":\"implementation_status applies to the spectral backend only\"},"
+               "\"backends\":[\"conservative\",\"spectral\"]},"
             << "\"taps\":[\"processed\"],"
             << "\"binaural\":{"
             << "\"available\":true,"
@@ -218,7 +215,8 @@ void ConfigureConservativeStage(sonitude::dsp::SuppressionStage& stage,
                                 const std::uint32_t sample_rate_hz,
                                 const std::size_t max_block_frames)
 {
-  stage.configure({.backend = sonitude::dsp::SuppressionBackend::Conservative,
+  stage.configure({.enabled = true,
+                   .backend = sonitude::dsp::SuppressionBackend::Conservative,
                    .sample_rate_hz = sample_rate_hz,
                    .maximum_block_frames = max_block_frames,
                    .conservative = {.ambient_floor_linear = std::clamp(params.ambient_floor_linear, 0.0F, 1.0F),
@@ -468,14 +466,14 @@ int main(int argc, char** argv)
     sonitude::dsp::CalibrationApplier calibration_applier(
         calibration.channels, geometry_ids, sample_rate_hz, runtime.calibration_dc_block_hz);
 
-    sonitude::dsp::DelaySumBeamformer beamformer;
+    sonitude::dsp::MvdrBeamformer beamformer;
     beamformer.configure(geometry, runtime.steering, calibration, sample_rate_hz, max_block_frames);
 
     const bool suppression_enabled = ResolveSuppression(suppression_mode, runtime.suppression.enabled);
     const std::string backend_name =
         suppression_backend_override.value_or(runtime.suppression.backend);
     const auto suppression_backend =
-        sonitude::dsp::ResolveEnabledBackend(suppression_enabled, backend_name);
+        sonitude::dsp::ParseSuppressionBackend(backend_name.empty() ? "conservative" : backend_name);
     sonitude::dsp::SuppressionStage suppressor;
     bool have_live_suppressor_params = false;
     LiveSuppressorParams last_live_suppressor{};
@@ -487,7 +485,8 @@ int main(int argc, char** argv)
         .envelope_attack_coeff = 0.35F,
         .envelope_release_coeff = 0.01F,
         .confidence = 1.0F};
-    suppressor.configure({.backend = suppression_backend,
+    suppressor.configure({.enabled = suppression_enabled,
+                          .backend = suppression_backend,
                           .sample_rate_hz = sample_rate_hz,
                           .maximum_block_frames = max_block_frames,
                           .conservative = {.ambient_floor_linear = default_live_suppressor.ambient_floor_linear,
@@ -517,18 +516,15 @@ int main(int argc, char** argv)
     const char* requested = suppression_mode == SuppressionMode::On
                                 ? "on"
                                 : (suppression_mode == SuppressionMode::Off ? "off" : "auto");
-    const bool suppression_resolved = suppression_backend != sonitude::dsp::SuppressionBackend::Off;
     std::cerr << "sonitude_resolved {\"protocol_version\":3,\"suppression_requested\":\"" << requested
-              << "\",\"suppression_resolved\":" << (suppression_resolved ? "true" : "false")
+              << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
               << ",\"suppression_backend_requested\":\"" << backend_name << "\""
               << ",\"suppression_backend_resolved\":\""
               << sonitude::dsp::SuppressionBackendName(suppression_backend) << "\""
               << ",\"suppression_fft_size\":" << runtime.suppression.spectral.fft_size
               << ",\"suppression_hop_size\":" << runtime.suppression.spectral.hop_size
               << ",\"suppression_gain_floor_db\":" << runtime.suppression.spectral.gain_floor_db
-              << ",\"suppression_algorithmic_delay_samples\":" << suppressor.algorithmicDelaySamples()
-              << ",\"suppression_implementation_status\":\""
-              << sonitude::dsp::SuppressionImplementationStatus(suppression_backend) << "\""
+              << ",\"suppression_algorithmic_delay_samples\":0"
               << ",\"limiter_disabled\":" << (disable_limiter ? "true" : "false")
               << ",\"binaural_backends\":" << AvailableBackendsJson(binaural_runtime) << "}\n";
     std::cerr << "sonitude_stream_process ready: sample_rate_hz=" << sample_rate_hz
@@ -719,14 +715,8 @@ int main(int argc, char** argv)
       std::uint32_t out_flags = 0;
       if (suppression_enabled)
       {
-        if (suppression_backend == sonitude::dsp::SuppressionBackend::Conservative)
-        {
-          suppressor.process(std::span<float>(mono.data(), frame_count));
-        }
-        if (suppression_backend != sonitude::dsp::SuppressionBackend::Off)
-        {
-          out_flags |= kOutSuppressionApplied;
-        }
+        suppressor.process(std::span<float>(mono.data(), frame_count));
+        out_flags |= kOutSuppressionApplied;
       }
 
       const bool protocol_binaural = (flags & kFlagBinauralEnabled) != 0;

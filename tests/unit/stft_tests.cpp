@@ -245,19 +245,14 @@ void TestReportedLookahead()
 {
   sonitude::dsp::StreamingStft stft;
   Require(stft.prepare(44100.0, 64, {.fft_size = 128, .hop_size = 32}), "lookahead prepare");
-  Require(stft.calculatedLookaheadSamples() == 96, "N-H for 128/32 is 96 samples (calculated)");
   const std::size_t measured = MeasureImpulseDelay(stft, 80, 2048);
   Require(MeasureImpulseDelay(stft, 240, 2048) == measured,
           "impulse delay must be independent of impulse position");
-  Require(measured >= stft.calculatedLookaheadSamples(),
-          "measured first-arrival should be at least the calculated N-H lookahead");
-  // Locked from this fixture: periodic Hann, hop-synchronous OLA, host radix-2.
   Require(measured == 127,
           "128/32 first-arrival delay must stay 127 samples, got " + std::to_string(measured));
 
   sonitude::dsp::StreamingStft stft256;
   Require(stft256.prepare(44100.0, 64, {.fft_size = 256, .hop_size = 64}), "256 lookahead prepare");
-  Require(stft256.calculatedLookaheadSamples() == 192, "N-H for 256/64 is 192 samples (calculated)");
   const std::size_t measured256 = MeasureImpulseDelay(stft256, 80, 2048);
   Require(measured256 == 255,
           "256/64 first-arrival delay must stay 255 samples, got " + std::to_string(measured256));

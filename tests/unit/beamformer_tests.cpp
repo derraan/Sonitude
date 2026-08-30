@@ -68,13 +68,13 @@ void TestAlignmentBeatsOffAxis()
   const auto mic = sonitude::tests::support::GeneratePlaneWave(
       source, geometry, kFs, 0, 25.0F, 0.0F, 343.0F);
 
-  sonitude::dsp::DelaySumBeamformer on_axis;
+  sonitude::dsp::MvdrBeamformer on_axis;
   on_axis.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   on_axis.setTarget({25.0F, 0.0F});
   std::vector<float> on(kFrames, 0.0F);
   on_axis.process(mic, on);
 
-  sonitude::dsp::DelaySumBeamformer off_axis;
+  sonitude::dsp::MvdrBeamformer off_axis;
   off_axis.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   off_axis.setTarget({-65.0F, 0.0F});
   std::vector<float> off(kFrames, 0.0F);
@@ -97,7 +97,7 @@ void TestClickFreeRetarget()
   const auto mic = sonitude::tests::support::GeneratePlaneWave(
       source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
 
-  sonitude::dsp::DelaySumBeamformer beam;
+  sonitude::dsp::MvdrBeamformer beam;
   beam.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   beam.setTarget({-70.0F, 0.0F});
 
@@ -135,14 +135,14 @@ void TestRepeatedIdenticalSetTargetSettles()
   const auto mic = sonitude::tests::support::GeneratePlaneWave(
       source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
 
-  sonitude::dsp::DelaySumBeamformer settled;
+  sonitude::dsp::MvdrBeamformer settled;
   settled.configure(geometry, steering, BuildCalibration(), kFs, 256);
   settled.setTarget({45.0F, 0.0F});
   std::vector<float> settled_out(frames, 0.0F);
   settled.process(std::span<const sonitude::audio::MicFrame>(mic.data(), frames),
                   std::span<float>(settled_out.data(), frames));
 
-  sonitude::dsp::DelaySumBeamformer live;
+  sonitude::dsp::MvdrBeamformer live;
   live.configure(geometry, steering, BuildCalibration(), kFs, 256);
   std::vector<float> live_out(frames, 0.0F);
   for (std::size_t start = 0; start < frames; start += 256)
@@ -191,7 +191,7 @@ void TestCalibrationDelayClosure()
     }
   }
 
-  sonitude::dsp::DelaySumBeamformer no_cal;
+  sonitude::dsp::MvdrBeamformer no_cal;
   no_cal.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   no_cal.setTarget({0.0F, 0.0F});
   std::vector<float> out_no_cal(kFrames, 0.0F);
@@ -202,7 +202,7 @@ void TestCalibrationDelayClosure()
   {
     correction[i] = -mismatch[i];
   }
-  sonitude::dsp::DelaySumBeamformer with_cal;
+  sonitude::dsp::MvdrBeamformer with_cal;
   with_cal.configure(geometry, BuildSteering(), BuildCalibration(correction), kFs, kFrames);
   with_cal.setTarget({0.0F, 0.0F});
   std::vector<float> out_with_cal(kFrames, 0.0F);
@@ -210,7 +210,7 @@ void TestCalibrationDelayClosure()
 
   const auto aligned = sonitude::tests::support::GeneratePlaneWave(
       source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
-  sonitude::dsp::DelaySumBeamformer ideal_beam;
+  sonitude::dsp::MvdrBeamformer ideal_beam;
   ideal_beam.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   ideal_beam.setTarget({0.0F, 0.0F});
   std::vector<float> out_ideal(kFrames, 0.0F);
@@ -244,13 +244,13 @@ void TestLeftRightAzimuthConvention()
   }
   Require(lead_sum > 0.0, "left-side source should lead at left ear channel");
 
-  sonitude::dsp::DelaySumBeamformer left_steer;
+  sonitude::dsp::MvdrBeamformer left_steer;
   left_steer.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   left_steer.setTarget({-90.0F, 0.0F});
   std::vector<float> out_left(kFrames, 0.0F);
   left_steer.process(mic, out_left);
 
-  sonitude::dsp::DelaySumBeamformer right_steer;
+  sonitude::dsp::MvdrBeamformer right_steer;
   right_steer.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   right_steer.setTarget({90.0F, 0.0F});
   std::vector<float> out_right(kFrames, 0.0F);
@@ -265,7 +265,7 @@ void TestSpectralSharesSingleStftDelay()
 {
   constexpr std::uint32_t kFs = 16000;
   constexpr std::size_t kFrames = 2048;
-  sonitude::dsp::DelaySumBeamformer bf;
+  sonitude::dsp::MvdrBeamformer bf;
   bf.configure(BuildGeometry(), BuildSteering(), BuildCalibration(), kFs, kFrames);
   Require(bf.algorithmicDelaySamples() == 127, "MVDR first-arrival is one 128/32 STFT");
 

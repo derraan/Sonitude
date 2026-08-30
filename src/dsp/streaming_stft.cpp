@@ -227,20 +227,4 @@ void StreamingStft::process(const std::span<const float> input,
     output[i] = 0.0F;
   }
 }
-
-std::size_t StreamingStft::calculatedLookaheadSamples() const noexcept
-{
-  if (fft_size_ <= hop_size_)
-  {
-    return 0;
-  }
-  return fft_size_ - hop_size_;
-}
-
-std::size_t StreamingStft::persistentBytes() const noexcept
-{
-  const auto floats = window_.size() + analysis_ring_.size() + time_scratch_.size() + re_.size() +
-                      im_.size() + ola_.size() + out_fifo_.size();
-  return (floats * sizeof(float)) + fft_.coefficientBytes();
-}
 }  // namespace sonitude::dsp

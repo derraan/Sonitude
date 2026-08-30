@@ -44,16 +44,6 @@ class StreamingStft
   void overlapAddSpectrum(const float* re, const float* im) noexcept;
   [[nodiscard]] float pop() noexcept;
 
-  [[nodiscard]] bool ready() const noexcept { return ready_; }
-  [[nodiscard]] std::size_t fftSize() const noexcept { return fft_size_; }
-  [[nodiscard]] std::size_t hopSize() const noexcept { return hop_size_; }
-  [[nodiscard]] double sampleRate() const noexcept { return sample_rate_; }
-  // Classic OLA look-ahead N-H. Not a substitute for the impulse first-arrival
-  // measurement used as algorithmic delay.
-  [[nodiscard]] std::size_t calculatedLookaheadSamples() const noexcept;
-  [[nodiscard]] std::size_t persistentBytes() const noexcept;
-  [[nodiscard]] float olaScale() const noexcept { return ola_scale_; }
-
  private:
   void ProcessHop(SpectralHopFn hop_fn, void* hop_context) noexcept;
   void PushOutput(float sample) noexcept;

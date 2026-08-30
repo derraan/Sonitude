@@ -403,7 +403,7 @@ flowchart TB
 
 ### M4 beamformer — openMHA-aligned design
 
-The in-tree `IBeamformer` (M4) follows the openMHA delay-and-sum convention:
+The in-tree `MvdrBeamformer` (M4) follows the openMHA delay-and-sum convention for its fallback path:
 
 1. **Far-field plane-wave delays** from mic positions (YAML geometry) and steering direction **u**, using the same speed-of-sound parameter as config (`343 m/s` default).
 2. **Per-channel fractional delay** — 8-tap windowed-sinc FIR (Sonitude choice for Pi NEON); openMHA uses equivalent delay lines in the DS plugin.

@@ -38,7 +38,7 @@ struct SteeringEvent
 // calibrated mic channels, in proportion to width_deg / kMaxWidthDeg.
 // 0 deg = fully directional (pure beamformer output);
 // kMaxWidthDeg = fully omnidirectional. Implemented in this tool around
-// IBeamformer output. See testbench/README.md, "Steering width definition".
+// MvdrBeamformer output. See testbench/README.md, "Steering width definition".
 constexpr float kMaxWidthDeg = 180.0F;
 
 enum class SuppressionMode
@@ -144,10 +144,7 @@ void PrintCapabilities()
   std::cout << "{"
             << "\"protocol_version\":2,"
             << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"],"
-               "\"backends\":[\"off\",\"conservative\",\"spectral\"],"
-               "\"default_backend\":\"conservative\","
-               "\"implementation_status\":\"EXPERIMENTAL\","
-               "\"note\":\"implementation_status applies to the spectral backend only\"},"
+               "\"backends\":[\"conservative\",\"spectral\"]},"
             << "\"taps\":[\"beamformed\",\"suppressed\",\"processed\",\"binaural\"],"
             << "\"binaural\":{"
             << "\"available\":true,"
@@ -167,7 +164,7 @@ void PrintUsage()
             << "  sonitude_wav_replay --input <six_channel_wav> --config <runtime_yaml>\n"
             << "                      --script <steering_csv> --output <mono_wav>\n"
             << "                      [--suppression auto|on|off]\n"
-            << "                      [--suppression-backend off|conservative|spectral]\n"
+            << "                      [--suppression-backend conservative|spectral]\n"
             << "                      [--enable-suppression] [--disable-suppression] [--disable-limiter]\n"
             << "                      [--output-beamformed <mono_wav>]\n"
             << "                      [--output-suppressed <mono_wav>]\n"
@@ -415,7 +412,7 @@ int main(int argc, char** argv)
         std::span<sonitude::audio::MicFrame>(calibrated.data(), calibrated.size()));
 
     const auto events = LoadSteeringScript(script_path, input_wav.sample_rate_hz);
-    sonitude::dsp::DelaySumBeamformer beamformer;
+    sonitude::dsp::MvdrBeamformer beamformer;
     beamformer.configure(
         geometry, runtime.steering, calibration, input_wav.sample_rate_hz, runtime.capture.period_frames);
     beamformer.setTarget(events.front().target);
@@ -427,7 +424,7 @@ int main(int argc, char** argv)
     const std::string backend_name =
         suppression_backend_override.value_or(runtime.suppression.backend);
     const auto suppression_backend =
-        sonitude::dsp::ResolveEnabledBackend(suppression_enabled, backend_name);
+        sonitude::dsp::ParseSuppressionBackend(backend_name.empty() ? "conservative" : backend_name);
     const bool binaural_enabled = !output_binaural_path.empty();
     const bool binaural_follow =
         binaural_follow_override.value_or(runtime.binaural.direction.follow_steering);
@@ -471,7 +468,8 @@ int main(int argc, char** argv)
     }
 
     sonitude::dsp::SuppressionStage suppressor;
-    suppressor.configure({.backend = suppression_backend,
+    suppressor.configure({.enabled = suppression_enabled,
+                          .backend = suppression_backend,
                           .sample_rate_hz = input_wav.sample_rate_hz,
                           .maximum_block_frames = kBlock,
                           .conservative = {.ambient_floor_linear = runtime.steering.ambient_floor_linear,
@@ -484,18 +482,15 @@ int main(int argc, char** argv)
                                        .gain_floor_db = runtime.suppression.spectral.gain_floor_db,
                                        .confidence_threshold = runtime.suppression.confidence_threshold}});
     beamformer.setSpectralPostfilter(suppressor.spectralFilter());
-    const bool suppression_resolved = suppression_backend != sonitude::dsp::SuppressionBackend::Off;
     std::cerr << "sonitude_resolved {\"protocol_version\":2,\"suppression_requested\":\"" << requested
-              << "\",\"suppression_resolved\":" << (suppression_resolved ? "true" : "false")
+              << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
               << ",\"suppression_backend_requested\":\"" << backend_name << "\""
               << ",\"suppression_backend_resolved\":\""
               << sonitude::dsp::SuppressionBackendName(suppression_backend) << "\""
               << ",\"suppression_fft_size\":" << runtime.suppression.spectral.fft_size
               << ",\"suppression_hop_size\":" << runtime.suppression.spectral.hop_size
               << ",\"suppression_gain_floor_db\":" << runtime.suppression.spectral.gain_floor_db
-              << ",\"suppression_algorithmic_delay_samples\":" << suppressor.algorithmicDelaySamples()
-              << ",\"suppression_implementation_status\":\""
-              << sonitude::dsp::SuppressionImplementationStatus(suppression_backend) << "\""
+              << ",\"suppression_algorithmic_delay_samples\":0"
               << ",\"limiter_disabled\":" << (disable_limiter ? "true" : "false")
               << ",\"binaural_backend\":\"" << binaural_backend << "\",\"binaural_available\":true"
               << ",\"binaural_follow_steering\":" << (binaural_follow ? "true" : "false")
@@ -574,10 +569,7 @@ int main(int argc, char** argv)
                   mono.begin() + static_cast<std::ptrdiff_t>(start + count),
                   beamformed_tap.begin() + static_cast<std::ptrdiff_t>(start));
       }
-      if (suppression_backend == sonitude::dsp::SuppressionBackend::Conservative)
-      {
-        suppressor.process(std::span<float>(mono.data() + start, count));
-      }
+      suppressor.process(std::span<float>(mono.data() + start, count));
       if (!suppressed_tap.empty())
       {
         std::copy(mono.begin() + static_cast<std::ptrdiff_t>(start),

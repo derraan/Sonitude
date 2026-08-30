@@ -55,7 +55,7 @@ float MedianOf(std::vector<float>& scratch, const std::size_t n)
 }
 }  // namespace
 
-bool AsymmetricNoisePowerTracker::prepare(const std::size_t n_bins, const double hop_hz)
+bool SpectralPostfilter::NoiseTracker::prepare(const std::size_t n_bins, const double hop_hz)
 {
   if (n_bins < 2 || !(hop_hz > 0.0))
   {
@@ -71,20 +71,20 @@ bool AsymmetricNoisePowerTracker::prepare(const std::size_t n_bins, const double
   return true;
 }
 
-void AsymmetricNoisePowerTracker::reset() noexcept
+void SpectralPostfilter::NoiseTracker::reset() noexcept
 {
   std::fill(smoothed_.begin(), smoothed_.end(), 0.0F);
   std::fill(noise_.begin(), noise_.end(), 1.0F);
   have_first_ = false;
 }
 
-void AsymmetricNoisePowerTracker::update(const std::span<const float> power,
+void SpectralPostfilter::NoiseTracker::update(const std::span<const float> power,
                                          const bool allow_update) noexcept
 {
   update(power, allow_update, {}, 0.0F);
 }
 
-void AsymmetricNoisePowerTracker::update(const std::span<const float> power,
+void SpectralPostfilter::NoiseTracker::update(const std::span<const float> power,
                                          const bool allow_update,
                                          const std::span<const float> max_guard_power,
                                          const float protect_ratio) noexcept
@@ -152,17 +152,12 @@ void AsymmetricNoisePowerTracker::update(const std::span<const float> power,
   }
 }
 
-std::span<const float> AsymmetricNoisePowerTracker::noisePower() const noexcept
+std::span<const float> SpectralPostfilter::NoiseTracker::noisePower() const noexcept
 {
   return std::span<const float>(noise_.data(), n_bins_);
 }
 
-std::size_t AsymmetricNoisePowerTracker::persistentBytes() const noexcept
-{
-  return (smoothed_.size() + noise_.size() + median_scratch_.size()) * sizeof(float);
-}
-
-bool BoundedWienerGain::prepare(const std::size_t n_bins,
+bool SpectralPostfilter::WienerGain::prepare(const std::size_t n_bins,
                                 const double hop_hz,
                                 const float gain_floor_linear)
 {
@@ -180,14 +175,14 @@ bool BoundedWienerGain::prepare(const std::size_t n_bins,
   return true;
 }
 
-void BoundedWienerGain::reset() noexcept
+void SpectralPostfilter::WienerGain::reset() noexcept
 {
   std::fill(xi_.begin(), xi_.end(), 0.0F);
   std::fill(gain_.begin(), gain_.end(), gain_floor_);
   std::fill(prev_gain_.begin(), prev_gain_.end(), gain_floor_);
 }
 
-void BoundedWienerGain::compute(const std::span<const float> power,
+void SpectralPostfilter::WienerGain::compute(const std::span<const float> power,
                                 const std::span<const float> noise,
                                 const std::span<float> gain_out) noexcept
 {
@@ -224,11 +219,6 @@ void BoundedWienerGain::compute(const std::span<const float> power,
   {
     prev_gain_[k] = gain_out[k];
   }
-}
-
-std::size_t BoundedWienerGain::persistentBytes() const noexcept
-{
-  return (xi_.size() + gain_.size() + prev_gain_.size()) * sizeof(float);
 }
 
 bool SpectralPostfilter::prepare(const double sample_rate,
@@ -422,10 +412,4 @@ void SpectralPostfilter::applyStoredGains(const std::span<float> re,
   }
 }
 
-std::size_t SpectralPostfilter::persistentBytes() const noexcept
-{
-  return tracker_.persistentBytes() + wiener_.persistentBytes() +
-         ((power_.size() + gains_.size() + spatial_gain_.size() + max_guard_power_.size()) *
-          sizeof(float));
-}
 }  // namespace sonitude::dsp

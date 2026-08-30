@@ -63,7 +63,7 @@ ODAS (or mock) DOA  --non-blocking IPC-->  control thread
 | M0–M1 | Scaffold, typed config, direct ALSA probe and raw I/O                                |
 | M2    | RT primitives (SPSC, block pool), ASRC, passthrough                                  |
 | M3    | Per-channel calibration (polarity, gain, delay, DC), offline estimation              |
-| M4    | `IBeamformer`, STFT-domain MVDR with delay-and-sum fallback, steering ramp, offline WAV renderer |
+| M4    | `MvdrBeamformer` (STFT-domain MVDR with delay-and-sum fallback), steering ramp, offline WAV renderer |
 | M5    | Mock-first ODAS control, source association, failsafe steering publication           |
 | M6    | Conversation state machine, wrap-safe zones, scripted VAD                            |
 | M7    | One conservative suppression policy, explicit user selection, ambient floor          |
@@ -104,7 +104,7 @@ Fill when the user checks a veto above (newest first).
 
 | Date | ID  | Reason (user-approved override) |
 | ---- | --- | ------------------------------- |
-| 2026-08-30 | SCOPE-7 | User requested a default-off RP2350/CMSIS-DSP MVDR and OVD scaffold in PR #34; no host CMake coupling or production claim. |
+| 2026-08-30 | SCOPE-7 | User requested a default-off RP2350/CMSIS-DSP MVDR and OVD scaffold. Host PR #34 no longer carries that example; the snapshot remains on `feature/rp2350-experimental-mvdr` at the pre-extraction commit. |
 | 2026-08-30 | SCOPE-3 | Replace delay-and-sum with in-tree STFT-domain MVDR; neural DSP still not in this PR. |
 | 2026-08-12 | SCOPE-7 | Keep vendored Pico firmware snapshot as read-only reference; no host CMake coupling or host-side firmware edits. |
 
@@ -179,7 +179,7 @@ Per mic, per sample:
 
 ### Stage 3 — Beamformer (M4; implemented)
 
-Core **directional listening** DSP — **narrowband MVDR** (`MvdrBeamformer`; `DelaySumBeamformer` is an alias):
+Core **directional listening** DSP — **narrowband MVDR** (`MvdrBeamformer`):
 
 1. From mic geometry and speed of sound, form the far-field steering vector **d** (plus calibration delay) for look **u**.
 2. 128/32 STFT of all six channels; per bin solve distortionless MVDR (delay-and-sum fallback on DC/Nyquist, failed solve, or excess white-noise gain).
@@ -582,7 +582,7 @@ struct TelemetryCounters
 
 ### M4–M6 interfaces (implemented)
 
-- `IBeamformer` / `MvdrBeamformer` (`DelaySumBeamformer` alias) — STFT-domain MVDR with steering ramp
+- `MvdrBeamformer` — STFT-domain MVDR with delay-and-sum fallback and steering ramp
 - `IDoaProvider` — mock and ODAS socket adapters
 - `ConversationStateMachine` — zone-aware activation with hysteresis
 - Atomic **steering snapshot** via `ParamSnapshot` / control loop handoff

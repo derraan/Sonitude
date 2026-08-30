@@ -10,10 +10,6 @@ SuppressionBackend ParseSuppressionBackend(const std::string& name)
   {
     return SuppressionBackend::Conservative;
   }
-  if (name == "off")
-  {
-    return SuppressionBackend::Off;
-  }
   if (name == "spectral")
   {
     return SuppressionBackend::Spectral;
@@ -21,48 +17,32 @@ SuppressionBackend ParseSuppressionBackend(const std::string& name)
   throw std::runtime_error("Unknown suppression backend: " + name);
 }
 
-SuppressionBackend ResolveEnabledBackend(const bool enabled, const std::string& backend_name)
-{
-  if (!enabled)
-  {
-    return SuppressionBackend::Off;
-  }
-  return ParseSuppressionBackend(backend_name.empty() ? "conservative" : backend_name);
-}
-
 const char* SuppressionBackendName(const SuppressionBackend backend) noexcept
 {
-  switch (backend)
-  {
-    case SuppressionBackend::Off:
-      return "off";
-    case SuppressionBackend::Spectral:
-      return "spectral";
-    case SuppressionBackend::Conservative:
-    default:
-      return "conservative";
-  }
-}
-
-const char* SuppressionImplementationStatus(const SuppressionBackend backend) noexcept
-{
-  return backend == SuppressionBackend::Spectral ? "EXPERIMENTAL" : "";
+  return backend == SuppressionBackend::Spectral ? "spectral" : "conservative";
 }
 
 void SuppressionStage::configure(const SuppressionStageConfig& config)
 {
   ready_ = false;
+  enabled_ = config.enabled;
   backend_ = config.backend;
   if (config.sample_rate_hz == 0 || config.maximum_block_frames == 0)
   {
     throw std::runtime_error("SuppressionStage sample_rate_hz and maximum_block_frames must be non-zero");
   }
 
+  if (!enabled_)
+  {
+    ready_ = true;
+    return;
+  }
+
   if (backend_ == SuppressionBackend::Conservative)
   {
     conservative_.configure(config.conservative, config.sample_rate_hz);
   }
-  else if (backend_ == SuppressionBackend::Spectral)
+  else
   {
     SpectralPostfilterConfig spectral = config.spectral;
     spectral.enabled = true;
@@ -79,7 +59,7 @@ void SuppressionStage::configure(const SuppressionStageConfig& config)
 
 void SuppressionStage::reset() noexcept
 {
-  if (backend_ == SuppressionBackend::Spectral)
+  if (enabled_ && backend_ == SuppressionBackend::Spectral)
   {
     spectral_.reset();
   }
@@ -87,11 +67,15 @@ void SuppressionStage::reset() noexcept
 
 void SuppressionStage::setControl(const bool focus_active, const float confidence) noexcept
 {
+  if (!enabled_ || !ready_)
+  {
+    return;
+  }
   if (backend_ == SuppressionBackend::Conservative)
   {
     conservative_.setControl(focus_active, confidence);
   }
-  else if (backend_ == SuppressionBackend::Spectral)
+  else
   {
     spectral_.setControl(focus_active, confidence);
   }
@@ -99,7 +83,7 @@ void SuppressionStage::setControl(const bool focus_active, const float confidenc
 
 void SuppressionStage::setConfidenceThreshold(const float threshold) noexcept
 {
-  if (backend_ == SuppressionBackend::Spectral)
+  if (enabled_ && backend_ == SuppressionBackend::Spectral)
   {
     spectral_.setConfidenceThreshold(threshold);
   }
@@ -107,7 +91,7 @@ void SuppressionStage::setConfidenceThreshold(const float threshold) noexcept
 
 void SuppressionStage::setEstimatorHold(const bool hold) noexcept
 {
-  if (backend_ == SuppressionBackend::Spectral)
+  if (enabled_ && backend_ == SuppressionBackend::Spectral)
   {
     spectral_.setEstimatorHold(hold);
   }
@@ -115,7 +99,7 @@ void SuppressionStage::setEstimatorHold(const bool hold) noexcept
 
 void SuppressionStage::process(const std::span<float> mono)
 {
-  if (!ready_ || backend_ != SuppressionBackend::Conservative || mono.empty())
+  if (!ready_ || !enabled_ || backend_ != SuppressionBackend::Conservative || mono.empty())
   {
     return;
   }
@@ -124,7 +108,7 @@ void SuppressionStage::process(const std::span<float> mono)
 
 float SuppressionStage::currentGain() const noexcept
 {
-  if (!ready_ || backend_ == SuppressionBackend::Off)
+  if (!ready_ || !enabled_)
   {
     return 1.0F;
   }
@@ -133,5 +117,14 @@ float SuppressionStage::currentGain() const noexcept
     return conservative_.currentGain();
   }
   return spectral_.currentGain();
+}
+
+SpectralPostfilter* SuppressionStage::spectralFilter() noexcept
+{
+  if (!ready_ || !enabled_ || backend_ != SuppressionBackend::Spectral)
+  {
+    return nullptr;
+  }
+  return &spectral_;
 }
 }  // namespace sonitude::dsp

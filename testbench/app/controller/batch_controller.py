@@ -316,7 +316,6 @@ class BatchWorker(QThread):
                     else suppression_state.resolved_enabled
                 ),
                 "algorithmic_delay_samples": cpp_resolved.get("suppression_algorithmic_delay_samples"),
-                "implementation_status": cpp_resolved.get("suppression_implementation_status") or None,
                 "cpp_resolved": cpp_resolved or None,
             },
             "binaural": {
@@ -486,7 +485,6 @@ class BatchWorker(QThread):
                     else suppression_state.resolved_enabled
                 ),
                 "algorithmic_delay_samples": cpp_resolved.get("suppression_algorithmic_delay_samples"),
-                "implementation_status": cpp_resolved.get("suppression_implementation_status") or None,
                 "cpp_resolved": cpp_resolved or None,
             },
             "binaural": {

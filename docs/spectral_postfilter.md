@@ -139,7 +139,7 @@ Per hop, per bin (except DC/Nyquist, which stay delay-and-sum): recursive
 covariance with ~80 ms forgetting, diagonal loading, distortionless solve
 `w = R^{-1}d / (d^H R^{-1}d)`, white-noise-gain clamp back to delay-and-sum.
 Steering vector uses the same far-field + calibration delay law as the former
-time-domain beamformer. `DelaySumBeamformer` is a compatibility alias.
+time-domain beamformer.
 Covariance updates freeze during the steering crossfade.
 
 ### Guard-look contrast (spectral backend)
@@ -190,7 +190,7 @@ CMSIS-DSP FFT docs were not used in code; the replacement path is the
 | Key | Type | Units | Default | Range |
 | --- | --- | --- | --- | --- |
 | `suppression.enabled` | bool | — | false | — |
-| `suppression.backend` | string | — | `conservative` if omitted | `off` \| `conservative` \| `spectral` (not the shipping default) |
+| `suppression.backend` | string | — | `conservative` if omitted | `conservative` \| `spectral` |
 | `suppression.fade_ms` | float | ms | 120 | [1, 1000] (conservative only) |
 | `suppression.activity_threshold` | float | linear | 0.03 | [0, 1] |
 | `suppression.confidence_threshold` | float | — | 0.6 | [0, 1] |
@@ -198,23 +198,23 @@ CMSIS-DSP FFT docs were not used in code; the replacement path is the
 | `suppression.spectral.hop_size` | size | samples | 32 | 32 with 128, 64 with 256 |
 | `suppression.spectral.gain_floor_db` | float | dB | −12 | [−80, 0] |
 
-Resolve: if `enabled` is false, backend is **off**. Spectral adds no extra
-algorithmic delay beyond the MVDR 128/32 hop. Old YAML without `backend`
-remains conservative when enabled. Unknown backend strings fail validation
-(not remapped).
+Resolve: `enabled` is independent of `backend`. Disabled suppression is a
+bypass; `backend` still names the algorithm used when enabled. Spectral adds
+no extra algorithmic delay beyond the MVDR 128/32 hop. Old YAML without
+`backend` remains conservative. Unknown backend strings fail validation
+(not remapped). `off` is not a backend name.
 
-CLI: `--suppression-backend off|conservative|spectral` on wav_replay and
-stream_process. The testbench GUI exposes a capability-gated backend selector
-and passes it on recorded, preview, and real-time paths. Conservative live
-knobs (ambient floor, fade, activity, envelope) are disabled for spectral;
-focus and confidence remain active. Stream protocol v3 live conservative knobs
-are ignored when the spectral backend is selected, except confidence threshold.
+CLI: `--suppression auto|on|off` and `--suppression-backend conservative|spectral`
+on wav_replay and stream_process. The testbench GUI exposes a capability-gated
+backend selector. Conservative live knobs (ambient floor, fade, activity,
+envelope) are disabled for spectral; focus and confidence remain active. Stream
+protocol v3 live conservative knobs are ignored when the spectral backend is
+selected, except confidence threshold.
 
-Provenance (`sonitude_resolved`): backend requested/resolved, FFT, hop, gain
-floor dB, extra suppression delay samples (0 for the shared-hop spectral path),
-`implementation_status: EXPERIMENTAL` only when the resolved backend is spectral.
-`suppression_resolved` is true only when a processing backend is actually selected
-(not `off`).
+Provenance (`sonitude_resolved`): enable requested/resolved, backend
+requested/resolved, FFT, hop, gain floor dB, extra suppression delay samples
+(0 for the shared-hop spectral path). `suppression_resolved` is true only when
+suppression is enabled.
 
 ## Init / reset / invalid input / discontinuities
 
@@ -234,7 +234,7 @@ floor dB, extra suppression delay samples (0 for the shared-hop spectral path),
 | STFT reconstruction error | MEASURED (unit test) | `< 2e-4` abs after skip/tail |
 | Algorithmic delay 128/32 | MEASURED | 127 samples first-arrival |
 | Host block CPU | NOT MEASURED | Standalone `sonitude_spectral_bench` removed; host-only |
-| Init/persistent RAM | MEASURED | `persistentBytes()` on host |
+| Init/persistent RAM | NOT MEASURED in this refactor | Estimator arrays are private to `SpectralPostfilter` |
 | End-to-end latency | NOT MEASURED | No loopback/impulse rig in this PR |
 | Pico 2 W / RP2350 | NOT MEASURED | No target build or cycle counts |
 | STM32H7 | NOT MEASURED | No CMSIS-DSP port, no board |

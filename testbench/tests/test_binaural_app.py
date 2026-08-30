@@ -25,20 +25,29 @@ def test_parse_capabilities_json_lists_suppression_backends() -> None:
             "protocol_version": 2,
             "suppression": {
                 "modes": ["auto", "on", "off"],
-                "backends": ["off", "conservative", "spectral"],
-                "default_backend": "conservative",
-                "implementation_status": "EXPERIMENTAL",
+                "backends": ["conservative", "spectral"],
             },
             "binaural": {"available": False, "backends": ["mono_reference"]},
         }
     )
     assert caps.suppression.backend_supported("spectral")
-    assert caps.suppression.default_backend == "conservative"
-    assert caps.suppression.implementation_status == "EXPERIMENTAL"
+    assert caps.suppression.backends == ["conservative", "spectral"]
+    assert not caps.suppression.backend_supported("off")
+
+
+def test_parse_capabilities_json_drops_off_backend() -> None:
+    caps = parse_capabilities_json(
+        {
+            "protocol_version": 2,
+            "suppression": {"backends": ["off", "conservative", "spectral"]},
+            "binaural": {"available": False, "backends": ["mono_reference"]},
+        }
+    )
+    assert caps.suppression.backends == ["conservative", "spectral"]
 
 
 def test_preferred_suppression_backend_honors_yaml() -> None:
-    available = ["off", "conservative", "spectral"]
+    available = ["conservative", "spectral"]
     assert preferred_suppression_backend(available, "spectral") == "spectral"
     assert preferred_suppression_backend(available, None) == "conservative"
 

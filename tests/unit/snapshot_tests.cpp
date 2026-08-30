@@ -27,8 +27,6 @@ void TestSnapshotStress()
 {
   const SnapshotPayload initial{0, 0xA5A5A5A5A5A5A5A5ULL, 0x5A5A5A5A5A5A5A5AULL};
   sonitude::rt::SnapshotBuffer<SnapshotPayload> buffer(initial);
-  sonitude::rt::SnapshotPublisher<SnapshotPayload> writer(&buffer);
-  sonitude::rt::SnapshotReader<SnapshotPayload> reader(&buffer);
 
   constexpr std::uint64_t kIterations = 120000;
   std::atomic<bool> writer_done{false};
@@ -44,14 +42,14 @@ void TestSnapshotStress()
           i ^ 0xA5A5A5A5A5A5A5A5ULL,
           (i ^ 0xA5A5A5A5A5A5A5A5ULL) ^ 0xFFFFFFFFFFFFFFFFULL,
       };
-      writer.publish(payload);
+      buffer.publish(payload);
     }
     writer_done.store(true, std::memory_order_release);
   });
 
   while (!writer_done.load(std::memory_order_acquire))
   {
-    const SnapshotPayload payload = reader.acquire();
+    const SnapshotPayload payload = buffer.acquire();
     const std::uint64_t expected_b = payload.a ^ 0xFFFFFFFFFFFFFFFFULL;
     if (payload.b != expected_b)
     {
@@ -65,7 +63,7 @@ void TestSnapshotStress()
   }
 
   producer.join();
-  const SnapshotPayload final_payload = reader.acquire();
+  const SnapshotPayload final_payload = buffer.acquire();
   Require(!saw_torn.load(std::memory_order_acquire), "snapshot read was torn");
   Require(!saw_regression.load(std::memory_order_acquire), "snapshot generation regressed");
   Require(final_payload.generation == kIterations, "snapshot final generation mismatch");

@@ -79,41 +79,42 @@ void TestLowConfidenceBypassesSuppression()
 }
 }  // namespace
 
-void TestSuppressionStageOffIsExactCopy()
+void TestSuppressionStageDisabledIsExactCopy()
 {
   sonitude::dsp::SuppressionStage stage;
-  stage.configure({.backend = sonitude::dsp::SuppressionBackend::Off,
+  stage.configure({.enabled = false,
+                   .backend = sonitude::dsp::SuppressionBackend::Conservative,
                    .sample_rate_hz = 44100,
                    .maximum_block_frames = 64});
-  Require(stage.algorithmicDelaySamples() == 0, "off backend must not add spectral delay");
+  Require(stage.spectralFilter() == nullptr, "disabled suppression must not expose a spectral hop filter");
   auto mono = ConstantBlock(64, 0.37F);
   const auto original = mono;
   stage.process(mono);
-  Require(mono == original, "off backend must preserve samples exactly");
+  Require(mono == original, "disabled suppression must preserve samples exactly");
 }
 
-void TestConservativeStageHasNoSpectralDelay()
+void TestConservativeStageHasNoSpectralHopFilter()
 {
   sonitude::dsp::SuppressionStage stage;
-  stage.configure({.backend = sonitude::dsp::SuppressionBackend::Conservative,
+  stage.configure({.enabled = true,
+                   .backend = sonitude::dsp::SuppressionBackend::Conservative,
                    .sample_rate_hz = 1000,
                    .maximum_block_frames = 80,
                    .conservative = {.ambient_floor_linear = 0.25F,
                                     .fade_ms = 10.0F,
                                     .activity_threshold = 0.01F,
                                     .confidence_threshold = 0.6F}});
-  Require(stage.algorithmicDelaySamples() == 0, "conservative delay must remain 0");
   Require(stage.spectralFilter() == nullptr, "conservative must not expose a spectral hop filter");
 }
 
 void TestSpectralStageWiresSharedStftWithoutPcmProcess()
 {
   sonitude::dsp::SuppressionStage stage;
-  stage.configure({.backend = sonitude::dsp::SuppressionBackend::Spectral,
+  stage.configure({.enabled = true,
+                   .backend = sonitude::dsp::SuppressionBackend::Spectral,
                    .sample_rate_hz = 44100,
                    .maximum_block_frames = 64,
                    .spectral = {.enabled = true, .fft_size = 128, .hop_size = 32, .gain_floor_db = -12.0F}});
-  Require(stage.algorithmicDelaySamples() == 0, "spectral adds no extra delay beyond the MVDR STFT");
   Require(stage.spectralFilter() != nullptr, "spectral backend must expose the shared-hop filter");
   auto mono = ConstantBlock(64, 0.37F);
   const auto original = mono;
@@ -126,7 +127,7 @@ void RunSuppressorTests()
   TestFloorClampAndAttenuation();
   TestFallbackRampToUnity();
   TestLowConfidenceBypassesSuppression();
-  TestSuppressionStageOffIsExactCopy();
-  TestConservativeStageHasNoSpectralDelay();
+  TestSuppressionStageDisabledIsExactCopy();
+  TestConservativeStageHasNoSpectralHopFilter();
   TestSpectralStageWiresSharedStftWithoutPcmProcess();
 }

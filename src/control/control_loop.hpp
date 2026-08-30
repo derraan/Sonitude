@@ -21,14 +21,14 @@ class ControlLoop
 {
  public:
   ControlLoop(spatial::IDoaProvider* provider,
-              rt::SnapshotPublisher<SteeringSnapshot> publisher,
+              rt::SnapshotBuffer<SteeringSnapshot>& snapshots,
               ControlLoopConfig config,
               ConversationStateMachine* conversation = nullptr);
   void tick(std::uint64_t now_ns);
 
  private:
   spatial::IDoaProvider* provider_ = nullptr;
-  rt::SnapshotPublisher<SteeringSnapshot> publisher_;
+  rt::SnapshotBuffer<SteeringSnapshot>* snapshots_ = nullptr;
   ControlLoopConfig config_{};
   ConversationStateMachine* conversation_ = nullptr;
   spatial::SourceTracker tracker_{1'500'000'000ULL};

@@ -237,7 +237,7 @@ def test_compact_hrtf_binaural_is_stereo_and_not_lr_duplicate(
     )
 
 
-def test_spectral_backend_is_experimental_and_off_is_bit_exact(
+def test_spectral_backend_differs_and_disabled_is_bit_exact(
     six_channel_fixture: Path, tmp_path: Path, wav_replay_binary: Path
 ) -> None:
     events = [SteeringEvent(time_s=0.0, azimuth_deg=0.0, elevation_deg=0.0)]
@@ -269,19 +269,19 @@ def test_spectral_backend_is_experimental_and_off_is_bit_exact(
         binary_path=wav_replay_binary,
         disable_limiter=True,
     )
-    assert off.resolved.get("suppression_backend_resolved") == "off"
-    assert off.resolved.get("suppression_algorithmic_delay_samples") in (0, 0.0)
-    assert spectral.resolved.get("suppression_backend_resolved") == "spectral"
-    assert spectral.resolved.get("suppression_implementation_status") == "EXPERIMENTAL"
-    assert conservative.resolved.get("suppression_implementation_status") in ("", None)
     assert off.resolved.get("suppression_resolved") is False
-    assert off.resolved.get("suppression_implementation_status") in ("", None)
+    assert off.resolved.get("suppression_backend_resolved") == "conservative"
+    assert off.resolved.get("suppression_algorithmic_delay_samples") in (0, 0.0)
+    assert "suppression_implementation_status" not in (off.resolved or {})
+    assert spectral.resolved.get("suppression_backend_resolved") == "spectral"
+    assert "suppression_implementation_status" not in (spectral.resolved or {})
+    assert "suppression_implementation_status" not in (conservative.resolved or {})
     assert spectral.resolved.get("suppression_fft_size") == 128
     assert spectral.resolved.get("suppression_hop_size") == 32
     assert spectral.resolved.get("suppression_algorithmic_delay_samples") in (0, 0.0)
     beam_off, _ = audio_loader.load_wav(off.beamformed_wav)
     supp_off, _ = audio_loader.load_wav(off.suppressed_wav)
-    assert np.array_equal(beam_off, supp_off), "disabled backend must match the beamformed tap exactly"
+    assert np.array_equal(beam_off, supp_off), "disabled suppression must match the beamformed tap exactly"
     supp_spec, _ = audio_loader.load_wav(spectral.suppressed_wav)
     supp_cons, _ = audio_loader.load_wav(conservative.suppressed_wav)
     assert not np.allclose(supp_spec, supp_cons, atol=1e-6), (

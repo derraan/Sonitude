@@ -25,28 +25,26 @@ void TestControlLoopTracksAndFailsafe()
   sonitude::spatial::MockDoaProvider provider(std::move(events));
 
   sonitude::rt::SnapshotBuffer<sonitude::control::SteeringSnapshot> buffer({});
-  sonitude::rt::SnapshotPublisher<sonitude::control::SteeringSnapshot> writer(&buffer);
-  sonitude::rt::SnapshotReader<sonitude::control::SteeringSnapshot> reader(&buffer);
 
   sonitude::control::ControlLoop loop(
       &provider,
-      writer,
+      buffer,
       {.failsafe_timeout_ns = 300'000'000ULL, .ambient_floor_linear = 0.25F});
 
   loop.tick(100'000'000ULL);
-  auto s = reader.acquire();
+  auto s = buffer.acquire();
   Require(!s.failsafe, "control loop should steer when observations are present");
 
   provider.setFrozen(true);
   loop.tick(450'000'000ULL);
-  s = reader.acquire();
+  s = buffer.acquire();
   Require(s.failsafe, "control loop should switch to failsafe after freeze timeout");
   Require(s.ambient_mix >= 0.25F, "failsafe should use configured ambient floor");
 
   provider.setFrozen(false);
   provider.setNowNs(600'000'000ULL);
   loop.tick(600'000'000ULL);
-  s = reader.acquire();
+  s = buffer.acquire();
   Require(!s.failsafe, "control loop should recover from failsafe when provider resumes");
 }
 }  // namespace

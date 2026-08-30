@@ -8,51 +8,6 @@
 
 namespace sonitude::dsp
 {
-class AsymmetricNoisePowerTracker
-{
- public:
-  bool prepare(std::size_t n_bins, double hop_hz);
-  void reset() noexcept;
-  void update(std::span<const float> power, bool allow_update) noexcept;
-  void update(std::span<const float> power,
-              bool allow_update,
-              std::span<const float> max_guard_power,
-              float protect_ratio) noexcept;
-  [[nodiscard]] std::span<const float> noisePower() const noexcept;
-  [[nodiscard]] bool initialized() const noexcept { return have_first_; }
-  [[nodiscard]] std::size_t persistentBytes() const noexcept;
-
- private:
-  std::size_t n_bins_ = 0;
-  float smooth_coeff_ = 0.5F;
-  float rise_coeff_ = 0.01F;
-  std::vector<float> smoothed_{};
-  std::vector<float> noise_{};
-  std::vector<float> median_scratch_{};
-  bool have_first_ = false;
-};
-
-class BoundedWienerGain
-{
- public:
-  bool prepare(std::size_t n_bins, double hop_hz, float gain_floor_linear);
-  void reset() noexcept;
-  void compute(std::span<const float> power,
-               std::span<const float> noise,
-               std::span<float> gain_out) noexcept;
-  [[nodiscard]] float gainFloor() const noexcept { return gain_floor_; }
-  [[nodiscard]] std::size_t persistentBytes() const noexcept;
-
- private:
-  std::size_t n_bins_ = 0;
-  float gain_floor_ = 0.25F;
-  float dd_coeff_ = 0.9F;
-  float time_coeff_ = 0.5F;
-  std::vector<float> xi_{};
-  std::vector<float> gain_{};
-  std::vector<float> prev_gain_{};
-};
-
 struct SpectralPostfilterConfig
 {
   bool enabled = false;
@@ -82,9 +37,51 @@ class SpectralPostfilter
   void applyStoredGains(std::span<float> re, std::span<float> im) const noexcept;
 
   [[nodiscard]] float currentGain() const noexcept { return last_mean_gain_; }
-  [[nodiscard]] std::size_t persistentBytes() const noexcept;
 
  private:
+  class NoiseTracker
+  {
+   public:
+    bool prepare(std::size_t n_bins, double hop_hz);
+    void reset() noexcept;
+    void update(std::span<const float> power, bool allow_update) noexcept;
+    void update(std::span<const float> power,
+                bool allow_update,
+                std::span<const float> max_guard_power,
+                float protect_ratio) noexcept;
+    [[nodiscard]] std::span<const float> noisePower() const noexcept;
+    [[nodiscard]] bool initialized() const noexcept { return have_first_; }
+
+   private:
+    std::size_t n_bins_ = 0;
+    float smooth_coeff_ = 0.5F;
+    float rise_coeff_ = 0.01F;
+    std::vector<float> smoothed_{};
+    std::vector<float> noise_{};
+    std::vector<float> median_scratch_{};
+    bool have_first_ = false;
+  };
+
+  class WienerGain
+  {
+   public:
+    bool prepare(std::size_t n_bins, double hop_hz, float gain_floor_linear);
+    void reset() noexcept;
+    void compute(std::span<const float> power,
+                 std::span<const float> noise,
+                 std::span<float> gain_out) noexcept;
+    [[nodiscard]] float gainFloor() const noexcept { return gain_floor_; }
+
+   private:
+    std::size_t n_bins_ = 0;
+    float gain_floor_ = 0.25F;
+    float dd_coeff_ = 0.9F;
+    float time_coeff_ = 0.5F;
+    std::vector<float> xi_{};
+    std::vector<float> gain_{};
+    std::vector<float> prev_gain_{};
+  };
+
   bool ready_ = false;
   bool focus_active_ = true;
   bool have_spatial_ = false;
@@ -92,8 +89,8 @@ class SpectralPostfilter
   bool estimator_hold_ = false;
   double hop_hz_ = 0.0;
   SpectralPostfilterConfig config_{};
-  AsymmetricNoisePowerTracker tracker_{};
-  BoundedWienerGain wiener_{};
+  NoiseTracker tracker_{};
+  WienerGain wiener_{};
   std::vector<float> power_{};
   std::vector<float> gains_{};
   std::vector<float> spatial_gain_{};

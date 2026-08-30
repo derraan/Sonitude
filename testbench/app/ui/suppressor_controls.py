@@ -22,9 +22,8 @@ from app.storage.models import SuppressorRequest
 from app.ui.secondary_note import apply_secondary_note
 
 BACKEND_LABELS = {
-    "off": "off (pass-through)",
     "conservative": "conservative (broadband gate)",
-    "spectral": "spectral (experimental STFT Wiener)",
+    "spectral": "spectral (STFT Wiener)",
 }
 
 
@@ -237,7 +236,7 @@ class SuppressorControls(QWidget):
         caps = self._capabilities.suppression
         self._backend.clear()
         if not self._capabilities.queried or not caps.backends:
-            for name in ("off", "conservative"):
+            for name in ("conservative", "spectral"):
                 label = BACKEND_LABELS.get(name, name)
                 self._backend.addItem(label, userData=name)
             self._backend.setEnabled(False)
@@ -249,32 +248,28 @@ class SuppressorControls(QWidget):
 
         for name in caps.backends:
             label = BACKEND_LABELS.get(name, name)
-            if name == "spectral" and caps.implementation_status:
-                label = f"{label} [{caps.implementation_status}]"
             self._backend.addItem(label, userData=name)
 
         yaml_backend: str | None = None
         try:
             yaml_backend = read_runtime_config_summary(DEFAULT_CONFIG_PATH).suppression.backend
         except Exception:  # noqa: BLE001
-            yaml_backend = caps.default_backend
+            yaml_backend = None
 
-        chosen = preferred_suppression_backend(caps.backends, yaml_backend or caps.default_backend)
+        chosen = preferred_suppression_backend(caps.backends, yaml_backend)
         if chosen is not None:
             index = self._backend.findData(chosen)
             if index >= 0:
                 self._backend.setCurrentIndex(index)
 
         self._backend.setEnabled(True)
-        status = f" Status: {caps.implementation_status}." if caps.implementation_status else ""
         binary = (
             f" Binary: {self._capabilities.binary_path}."
             if self._capabilities.binary_path
             else ""
         )
-        extra = f" {caps.note}" if caps.note else ""
         self._note.setText(
-            f"Backend selection maps to CLI --suppression-backend.{status}{extra}{binary}"
+            f"Backend selection maps to CLI --suppression-backend.{binary}"
         )
 
     def _load_yaml_defaults(self) -> None:

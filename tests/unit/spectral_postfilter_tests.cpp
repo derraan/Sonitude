@@ -186,69 +186,6 @@ sonitude::app::CalibrationConfig TestCalibration()
   return c;
 }
 
-void TestTrackerIndependent()
-{
-  sonitude::dsp::AsymmetricNoisePowerTracker tracker;
-  Require(tracker.prepare(8, 1378.125), "tracker prepare");
-  std::vector<float> p(8, 0.04F);
-  tracker.update(p, true);
-  for (int hop = 0; hop < 200; ++hop)
-  {
-    tracker.update(p, true);
-  }
-  for (const float n : tracker.noisePower())
-  {
-    Require(std::fabs(n - 0.04F) < 0.01F, "tracker should sit on stationary power");
-  }
-  std::vector<float> high(8, 0.4F);
-  const float before = tracker.noisePower()[0];
-  tracker.update(high, false);
-  Require(tracker.noisePower()[0] <= before + 1.0e-6F, "frozen tracker must not rise");
-  for (int hop = 0; hop < 8; ++hop)
-  {
-    tracker.update(high, true);
-  }
-  Require(tracker.noisePower()[0] < 0.2F, "allowed rise must still be slow versus an 8-hop step");
-  tracker.reset();
-  std::vector<float> mid(8, 0.04F);
-  tracker.update(mid, true);
-  std::vector<float> low(8, 0.001F);
-  for (int hop = 0; hop < 200; ++hop)
-  {
-    tracker.update(low, true);
-  }
-  Require(tracker.noisePower()[0] < 0.008F, "minima must follow a sustained downward step");
-}
-
-void TestWienerIndependent()
-{
-  sonitude::dsp::BoundedWienerGain wiener;
-  Require(wiener.prepare(8, 1378.125, 0.25F), "wiener prepare");
-  std::vector<float> p(8, 1.0e-4F);
-  std::vector<float> n(8, 1.0e-2F);
-  std::vector<float> g(8, 0.0F);
-  for (int hop = 0; hop < 40; ++hop)
-  {
-    wiener.compute(p, n, g);
-  }
-  for (const float gk : g)
-  {
-    Require(gk >= 0.25F && gk <= 1.0F, "gain must stay in [floor, 1]");
-    Require(gk < 0.35F, "noise-dominated bins should sit near the floor");
-  }
-  std::fill(p.begin(), p.end(), 1.0F);
-  std::fill(n.begin(), n.end(), 1.0e-4F);
-  for (int hop = 0; hop < 80; ++hop)
-  {
-    wiener.compute(p, n, g);
-  }
-  for (const float gk : g)
-  {
-    Require(gk > 0.9F, "high a-posteriori SNR should open the Wiener gain");
-    Require(gk <= 1.0F, "no amplification");
-  }
-}
-
 void TestMalformedPrepare()
 {
   sonitude::dsp::SpectralPostfilter pf;
@@ -387,21 +324,6 @@ void TestChunkResetAllocDelay()
           "shared-STFT process must not allocate, delta=" + std::to_string(after - before));
 }
 
-void TestHoldFreezesNoise()
-{
-  sonitude::dsp::AsymmetricNoisePowerTracker tracker;
-  Require(tracker.prepare(4, 1000.0), "hold tracker");
-  std::vector<float> p(4, 0.02F);
-  tracker.update(p, true);
-  const float frozen = tracker.noisePower()[0];
-  std::fill(p.begin(), p.end(), 0.5F);
-  tracker.update(p, false);
-  Require(std::fabs(tracker.noisePower()[0] - frozen) < 1.0e-6F, "hold must freeze upward noise updates");
-  std::fill(p.begin(), p.end(), 0.001F);
-  tracker.update(p, false);
-  Require(std::fabs(tracker.noisePower()[0] - frozen) < 1.0e-6F, "hold must freeze downward snaps too");
-}
-
 void TestMixtureSnrWithNoiseLeadIn()
 {
   sonitude::dsp::SpectralPostfilter pf;
@@ -520,15 +442,6 @@ void TestConfidenceThresholdIsHonored()
   Require(ratio > 0.85, "below-threshold confidence must stay near unity, ratio=" + std::to_string(ratio));
 }
 
-void TestPersistentBytesCountsEstimator()
-{
-  sonitude::dsp::SpectralPostfilter pf;
-  Require(pf.prepare(44100.0, 64, {.enabled = true, .fft_size = 128, .hop_size = 32}), "bytes prepare");
-  const std::size_t n_bins = (128U / 2U) + 1U;
-  Require(pf.persistentBytes() >= (8U * n_bins * sizeof(float)),
-          "persistentBytes must include tracker and gain arrays");
-}
-
 void TestTwoTalkersGuardContrast()
 {
   constexpr std::uint32_t kFs = 44100;
@@ -554,7 +467,7 @@ void TestTwoTalkersGuardContrast()
   steering.steering_ramp_ms = 1.0F;
   const auto calibration = TestCalibration();
 
-  sonitude::dsp::DelaySumBeamformer raw;
+  sonitude::dsp::MvdrBeamformer raw;
   raw.configure(geometry, steering, calibration, kFs, 256);
   raw.setTarget({0.0F, 0.0F});
   std::vector<float> unfiltered(kFrames, 0.0F);
@@ -564,7 +477,7 @@ void TestTwoTalkersGuardContrast()
   Require(pf.prepare(static_cast<double>(kFs), 256, {.enabled = true, .gain_floor_db = -12.0F}),
           "two-talker prepare");
   pf.setControl(true, 1.0F);
-  sonitude::dsp::DelaySumBeamformer bf;
+  sonitude::dsp::MvdrBeamformer bf;
   bf.configure(geometry, steering, calibration, kFs, 256);
   bf.setTarget({0.0F, 0.0F});
   bf.setSpectralPostfilter(&pf);
@@ -590,19 +503,15 @@ void TestTwoTalkersGuardContrast()
 
 void RunSpectralPostfilterTests()
 {
-  TestTrackerIndependent();
-  TestWienerIndependent();
   TestMalformedPrepare();
   TestFiniteAndFloor();
   TestNoiseOnlyDoesNotOpen();
   TestCleanSineNegativeControl();
   TestChunkResetAllocDelay();
-  TestHoldFreezesNoise();
   TestMixtureSnrWithNoiseLeadIn();
   TestMixtureSnrSimultaneousStart();
   TestTonePresentFromStartup();
   TestFocusTransitionDoesNotLearnBypassAsNoise();
   TestConfidenceThresholdIsHonored();
-  TestPersistentBytesCountsEstimator();
   TestTwoTalkersGuardContrast();
 }

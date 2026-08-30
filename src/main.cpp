@@ -270,8 +270,6 @@ int main(int argc, char** argv)
     }
 
     sonitude::rt::SnapshotBuffer<sonitude::control::SteeringSnapshot> steering_buffer({});
-    sonitude::rt::SnapshotPublisher<sonitude::control::SteeringSnapshot> steering_writer(&steering_buffer);
-    sonitude::rt::SnapshotReader<sonitude::control::SteeringSnapshot> steering_reader(&steering_buffer);
 
     sonitude::control::ConversationStateMachine conversation(
         runtime_config.state_machine,
@@ -279,20 +277,21 @@ int main(int argc, char** argv)
         sonitude::control::ZoneMap(runtime_config.zones));
     sonitude::control::ControlLoop control_loop(
         provider.get(),
-        steering_writer,
+        steering_buffer,
         {.failsafe_timeout_ns =
              static_cast<std::uint64_t>(runtime_config.state_machine.release_hold_ms) * 1'000'000ULL,
          .ambient_floor_linear = runtime_config.steering.ambient_floor_linear},
         &conversation);
 
-    sonitude::dsp::DelaySumBeamformer beamformer;
+    sonitude::dsp::MvdrBeamformer beamformer;
     beamformer.configure(
         geometry, runtime_config.steering, calibration, dsp_sample_rate_hz, 4096);
     sonitude::dsp::SuppressionStage suppressor;
-    const auto suppression_backend = sonitude::dsp::ResolveEnabledBackend(
-        runtime_config.suppression.enabled, runtime_config.suppression.backend);
+    const auto suppression_backend =
+        sonitude::dsp::ParseSuppressionBackend(runtime_config.suppression.backend);
     suppressor.configure(
-        {.backend = suppression_backend,
+        {.enabled = runtime_config.suppression.enabled,
+         .backend = suppression_backend,
          .sample_rate_hz = dsp_sample_rate_hz,
          .maximum_block_frames = cap_worker.periodFrames(),
          .conservative = {.ambient_floor_linear = runtime_config.steering.ambient_floor_linear,
@@ -459,7 +458,7 @@ int main(int argc, char** argv)
       }
       else
       {
-        const auto snapshot = steering_reader.acquire();
+        const auto snapshot = steering_buffer.acquire();
         if (!have_target || std::fabs(snapshot.target.azimuth_deg - last_target.azimuth_deg) > 0.01F ||
             std::fabs(snapshot.target.elevation_deg - last_target.elevation_deg) > 0.01F)
         {
@@ -468,21 +467,15 @@ int main(int argc, char** argv)
           have_target = true;
         }
         std::fill(mono.begin(), mono.begin() + static_cast<std::ptrdiff_t>(frame_count), 0.0F);
-        if (suppression_backend != sonitude::dsp::SuppressionBackend::Off)
-        {
-          const bool focus_active = !snapshot.failsafe;
-          const float confidence = focus_active ? snapshot.confidence : 0.0F;
-          suppressor.setEstimatorHold(hold_estimator_after_xrun);
-          hold_estimator_after_xrun = false;
-          suppressor.setControl(focus_active, confidence);
-        }
+        const bool focus_active = !snapshot.failsafe;
+        const float confidence = focus_active ? snapshot.confidence : 0.0F;
+        suppressor.setEstimatorHold(hold_estimator_after_xrun);
+        hold_estimator_after_xrun = false;
+        suppressor.setControl(focus_active, confidence);
         beamformer.process(
             std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
             std::span<float>(mono.data(), frame_count));
-        if (suppression_backend == sonitude::dsp::SuppressionBackend::Conservative)
-        {
-          suppressor.process(std::span<float>(mono.data(), frame_count));
-        }
+        suppressor.process(std::span<float>(mono.data(), frame_count));
         limiter.process(std::span<float>(mono.data(), frame_count));
         counters.suppressor_gain_milli.store(
             static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),

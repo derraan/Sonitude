@@ -327,11 +327,10 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     throw std::runtime_error("suppression.confidence_threshold must be in [0, 1]");
   }
 
-  if (config.suppression.backend != "off" && config.suppression.backend != "conservative" &&
-      config.suppression.backend != "spectral")
+  if (config.suppression.backend != "conservative" && config.suppression.backend != "spectral")
   {
     throw std::runtime_error(
-        "suppression.backend must be off, conservative, or spectral (unknown value is not remapped)");
+        "suppression.backend must be conservative or spectral (unknown value is not remapped)");
   }
 
   const bool spectral_pair_ok =

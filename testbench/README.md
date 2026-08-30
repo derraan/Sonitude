@@ -17,7 +17,7 @@ PySide6 GUI  →  Controller (QThread)  →  subprocess  →  C++ CLI  →  soni
 | `sonitude_wav_replay` | Short-file batch: decoded 6-channel WAV + steering script → mono + diagnostic taps |
 | `sonitude_stream_process` | Live capture, long-file batch, and Recorded-tab live preview: protocol v2 stdin/stdout |
 
-The C++ chain is `CalibrationApplier → DelaySumBeamformer →
+The C++ chain is `CalibrationApplier → MvdrBeamformer →
 SuppressionStage (off | conservative | experimental spectral) → PeakLimiter`,
 plus optional `BinauralRenderer`. Spectral selection is YAML
 `suppression.backend` / CLI `--suppression-backend`; the GUI does not expose
@@ -184,7 +184,7 @@ an intermediate proxy score; that is why it must not gate pass/fail.
 
 ### Directional / Omni Blend (`directivity_blend_deg` / `width_deg`)
 
-`DelaySumBeamformer` has no native beamwidth. The test-bench control mixes
+`MvdrBeamformer` has no native beamwidth. The test-bench control mixes
 beamformed mono toward the six-microphone average (`0` = directional,
 `180` = omni mix). This is **not** measured HPBW or cone width.
 `sonitude_realtime` does not expose this blend.
@@ -287,7 +287,7 @@ testbench/app/
 ## What changed in the C++ CLI tools (test-bench only)
 
 These tools wrap `sonitude_core`. They do **not** change
-`DelaySumBeamformer` / `ConservativeSuppressor` / `PeakLimiter` classes.
+`MvdrBeamformer` / `ConservativeSuppressor` / `PeakLimiter` classes.
 
 `sonitude_wav_replay`:
 

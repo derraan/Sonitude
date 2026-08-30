@@ -12,19 +12,17 @@ namespace sonitude::dsp
 {
 enum class SuppressionBackend
 {
-  Off,
   Conservative,
   Spectral,
 };
 
 SuppressionBackend ParseSuppressionBackend(const std::string& name);
-SuppressionBackend ResolveEnabledBackend(bool enabled, const std::string& backend_name);
 const char* SuppressionBackendName(SuppressionBackend backend) noexcept;
-const char* SuppressionImplementationStatus(SuppressionBackend backend) noexcept;
 
 struct SuppressionStageConfig
 {
-  SuppressionBackend backend = SuppressionBackend::Off;
+  bool enabled = false;
+  SuppressionBackend backend = SuppressionBackend::Conservative;
   std::uint32_t sample_rate_hz = 0;
   std::size_t maximum_block_frames = 64;
   SuppressorConfig conservative{};
@@ -42,18 +40,14 @@ class SuppressionStage
   // Conservative: in-place PCM. Spectral: no-op; gains run inside the MVDR hop.
   void process(std::span<float> mono);
 
-  [[nodiscard]] SuppressionBackend backend() const noexcept { return backend_; }
-  [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept { return 0; }
   [[nodiscard]] float currentGain() const noexcept;
-  [[nodiscard]] bool ready() const noexcept { return ready_; }
-  [[nodiscard]] SpectralPostfilter* spectralFilter() noexcept
-  {
-    return (backend_ == SuppressionBackend::Spectral && ready_) ? &spectral_ : nullptr;
-  }
+  // Fusion wiring: nullptr unless enabled spectral backend is prepared.
+  [[nodiscard]] SpectralPostfilter* spectralFilter() noexcept;
 
  private:
+  bool enabled_ = false;
   bool ready_ = false;
-  SuppressionBackend backend_ = SuppressionBackend::Off;
+  SuppressionBackend backend_ = SuppressionBackend::Conservative;
   ConservativeSuppressor conservative_{};
   SpectralPostfilter spectral_{};
 };

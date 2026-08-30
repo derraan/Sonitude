@@ -16,30 +16,17 @@ namespace sonitude::dsp
 {
 class SpectralPostfilter;
 
-class IBeamformer
-{
- public:
-  virtual ~IBeamformer() = default;
-  virtual void configure(const app::GeometryConfig& geometry,
-                         const app::SteeringConfig& steering_config,
-                         const app::CalibrationConfig& calibration,
-                         std::uint32_t sample_rate_hz,
-                         std::size_t max_block_frames) = 0;
-  virtual void setTarget(audio::BeamformerSteering target) = 0;
-  virtual void process(std::span<const audio::MicFrame> input, std::span<float> mono_out) = 0;
-};
-
-class MvdrBeamformer final : public IBeamformer
+class MvdrBeamformer
 {
  public:
   void configure(const app::GeometryConfig& geometry,
                  const app::SteeringConfig& steering_config,
                  const app::CalibrationConfig& calibration,
                  std::uint32_t sample_rate_hz,
-                 std::size_t max_block_frames) override;
-  void setTarget(audio::BeamformerSteering target) override;
+                 std::size_t max_block_frames);
+  void setTarget(audio::BeamformerSteering target);
   void setSpectralPostfilter(SpectralPostfilter* filter) noexcept { spectral_filter_ = filter; }
-  void process(std::span<const audio::MicFrame> input, std::span<float> mono_out) override;
+  void process(std::span<const audio::MicFrame> input, std::span<float> mono_out);
   void resetStream() noexcept
   {
     if (crossfading_)
@@ -107,6 +94,4 @@ class MvdrBeamformer final : public IBeamformer
       cov_{};
   float cov_beta_ = 0.02F;
 };
-
-using DelaySumBeamformer = MvdrBeamformer;
 }  // namespace sonitude::dsp
