@@ -55,6 +55,7 @@ class BatchWorker(QThread):
         *,
         suppression: SuppressionMode | str = SuppressionMode.AUTO,
         enable_suppression: bool | None = None,
+        suppression_backend: str | None = None,
         disable_limiter: bool = False,
         output_container: str = "wav",
         binaural: BinauralRequest | None = None,
@@ -72,6 +73,7 @@ class BatchWorker(QThread):
         elif enable_suppression is False:
             mode = SuppressionMode.OFF
         self._suppression = mode
+        self._suppression_backend = suppression_backend
         self._disable_limiter = disable_limiter
         self._output_container = output_container.lower().lstrip(".")
         self._binaural = binaural or BinauralRequest()
@@ -140,6 +142,7 @@ class BatchWorker(QThread):
                 steering_events=self._steering_events,
                 output_dir=test.root,
                 suppression=self._suppression,
+                suppression_backend=self._suppression_backend,
                 disable_limiter=self._disable_limiter,
                 binaural=self._binaural,
                 expected_sample_rate_hz=config_summary.capture_sample_rate_hz,
@@ -180,8 +183,22 @@ class BatchWorker(QThread):
             subtype="PCM_16",
         )
 
+        cpp_resolved = batch_result.resolved or {}
+        suppression_delay = int(float(cpp_resolved.get("suppression_algorithmic_delay_samples") or 0))
+        beamformed_aligned, suppressed_aligned = residual.delay_align(
+            beamformed_mono, suppressed_mono, suppression_delay
+        )
+        processed_for_sii = processed_mono
+        if suppression_delay > 0 and suppression_delay < len(processed_mono):
+            _, processed_for_sii = residual.delay_align(
+                beamformed_mono, processed_mono, suppression_delay
+            )
+
         # Residuals: same-domain DSP taps only. Never use the ear-cup preview.
-        beamform_residual = residual.compute_stage_residual(beamformed_mono, suppressed_mono)
+        # Spectral STFT delay is removed from the beamformed reference first.
+        beamform_residual = residual.compute_stage_residual(
+            beamformed_mono, suppressed_mono, delay_samples=suppression_delay
+        )
         limiter_residual = residual.compute_stage_residual(suppressed_mono, processed_mono)
         export_pcm(test.residual_beamform_wav, downmix.mono_to_stereo(beamform_residual), sample_rate, container="wav", subtype="PCM_16")
         export_pcm(test.residual_limiter_wav, downmix.mono_to_stereo(limiter_residual), sample_rate, container="wav", subtype="PCM_16")
@@ -190,9 +207,9 @@ class BatchWorker(QThread):
             test.binaural_wav = batch_result.binaural_wav
 
         noise_metrics = noise_suppression.compute_noise_suppression_metrics(
-            beamformed_mono, suppressed_mono, sample_rate
+            beamformed_aligned, suppressed_aligned, sample_rate
         )
-        proxy_result = sii.compute_sii_before_after(beamformed_mono, processed_mono, sample_rate)
+        proxy_result = sii.compute_sii_before_after(beamformed_aligned, processed_for_sii, sample_rate)
         commanded_events = steering_error.parse_steering_script(test.steering_script)
 
         sweep_result = None
@@ -243,7 +260,6 @@ class BatchWorker(QThread):
                 "this file; only commanded direction is available."
             )
 
-        cpp_resolved = batch_result.resolved or {}
         metrics = {
             "noise_suppression": noise_metrics.as_dict(),
             "intelligibility_proxy": {
@@ -254,14 +270,18 @@ class BatchWorker(QThread):
             },
             "residual": {
                 "beamform_stage_energy_ratio_db": residual.residual_energy_ratio_db(
-                    beamformed_mono, suppressed_mono
+                    beamformed_mono, suppressed_mono, delay_samples=suppression_delay
                 ),
                 "limiter_stage_energy_ratio_db": residual.residual_energy_ratio_db(
                     suppressed_mono, processed_mono
                 ),
                 "listening_preview_excluded": True,
+                "alignment_delay_samples": suppression_delay,
             },
             "steering": steering_metrics,
+            "suppression_backend_requested": self._suppression_backend,
+            "suppression_backend_resolved": cpp_resolved.get("suppression_backend_resolved"),
+            "suppression_resolved": cpp_resolved.get("suppression_resolved"),
         }
 
         input_meta = validation.metadata.as_dict() if validation.metadata is not None else None
@@ -287,12 +307,15 @@ class BatchWorker(QThread):
             "steering": steering_metrics["commanded_events"],
             "suppression": {
                 "requested": suppression_state.requested.value,
+                "backend_requested": self._suppression_backend,
+                "backend_resolved": cpp_resolved.get("suppression_backend_resolved"),
                 "yaml_enabled": suppression_state.yaml_enabled,
                 "resolved_enabled": (
                     cpp_resolved.get("suppression_resolved")
                     if "suppression_resolved" in cpp_resolved
                     else suppression_state.resolved_enabled
                 ),
+                "algorithmic_delay_samples": cpp_resolved.get("suppression_algorithmic_delay_samples"),
                 "cpp_resolved": cpp_resolved or None,
             },
             "binaural": {
@@ -350,6 +373,7 @@ class BatchWorker(QThread):
                 steering_events=self._steering_events,
                 output_dir=test.root,
                 suppression=self._suppression,
+                suppression_backend=self._suppression_backend,
                 disable_limiter=self._disable_limiter,
                 binaural=self._binaural,
                 active_channel_map=config_summary.active_channel_map,
@@ -421,6 +445,9 @@ class BatchWorker(QThread):
             },
             "steering": steering_metrics,
             "pipeline": "stream_process",
+            "suppression_backend_requested": self._suppression_backend,
+            "suppression_backend_resolved": cpp_resolved.get("suppression_backend_resolved"),
+            "suppression_resolved": cpp_resolved.get("suppression_resolved"),
         }
         input_meta = validation.metadata.as_dict() if validation.metadata is not None else None
         if test.input_metadata_json is not None and input_meta is not None:
@@ -449,12 +476,15 @@ class BatchWorker(QThread):
             "steering": steering_metrics["commanded_events"],
             "suppression": {
                 "requested": suppression_state.requested.value,
+                "backend_requested": self._suppression_backend,
+                "backend_resolved": cpp_resolved.get("suppression_backend_resolved"),
                 "yaml_enabled": suppression_state.yaml_enabled,
                 "resolved_enabled": (
                     cpp_resolved.get("suppression_resolved")
                     if "suppression_resolved" in cpp_resolved
                     else suppression_state.resolved_enabled
                 ),
+                "algorithmic_delay_samples": cpp_resolved.get("suppression_algorithmic_delay_samples"),
                 "cpp_resolved": cpp_resolved or None,
             },
             "binaural": {

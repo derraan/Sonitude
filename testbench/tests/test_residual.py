@@ -45,3 +45,16 @@ def test_residual_energy_ratio_db_negative_when_suppressed() -> None:
     post = pre * 0.1  # suppressed heavily
     db = residual.residual_energy_ratio_db(pre, post)
     assert db < 0.0
+
+
+def test_delay_align_cancels_pure_delay() -> None:
+    rng = np.random.default_rng(2)
+    pre = rng.normal(0, 0.2, 2000)
+    delay = 127
+    post = np.concatenate([np.zeros(delay), pre[:-delay]])
+    aligned_pre, aligned_post = residual.delay_align(pre, post, delay)
+    assert np.allclose(aligned_pre, aligned_post)
+    misaligned = residual.residual_energy_ratio_db(pre, post, delay_samples=0)
+    aligned = residual.residual_energy_ratio_db(pre, post, delay_samples=delay)
+    assert misaligned > 0.0
+    assert aligned == float("-inf")

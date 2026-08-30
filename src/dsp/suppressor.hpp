@@ -16,23 +16,13 @@ struct SuppressorConfig
   float envelope_release_coeff = 0.01F;
 };
 
-class ISuppressor
+class ConservativeSuppressor
 {
  public:
-  virtual ~ISuppressor() = default;
-  virtual void configure(const SuppressorConfig& config, std::uint32_t sample_rate_hz) = 0;
-  virtual void setControl(bool focus_active, float confidence) = 0;
-  virtual void process(std::span<float> mono) = 0;
-  virtual float currentGain() const = 0;
-};
-
-class ConservativeSuppressor final : public ISuppressor
-{
- public:
-  void configure(const SuppressorConfig& config, std::uint32_t sample_rate_hz) override;
-  void setControl(bool focus_active, float confidence) override;
-  void process(std::span<float> mono) override;
-  float currentGain() const override { return current_gain_; }
+  void configure(const SuppressorConfig& config, std::uint32_t sample_rate_hz);
+  void setControl(bool focus_active, float confidence);
+  void process(std::span<float> mono);
+  float currentGain() const { return current_gain_; }
 
  private:
   SuppressorConfig config_{};

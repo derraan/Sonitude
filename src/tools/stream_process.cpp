@@ -53,6 +53,7 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -71,7 +72,7 @@
 #include "dsp/calibration_applier.hpp"
 #include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
-#include "dsp/suppressor.hpp"
+#include "dsp/suppression_stage.hpp"
 
 namespace
 {
@@ -120,6 +121,7 @@ void PrintUsage()
             << "  sonitude_stream_process --config <runtime_yaml>\n"
             << "                          [--sample-rate <hz>] [--max-block-frames <n>]\n"
             << "                          [--suppression auto|on|off]\n"
+            << "                          [--suppression-backend conservative|spectral]\n"
             << "                          [--enable-suppression] [--disable-suppression]\n"
             << "                          [--disable-limiter]\n"
             << "                          [--capabilities]\n";
@@ -129,7 +131,8 @@ void PrintCapabilities()
 {
   std::cout << "{"
             << "\"protocol_version\":3,"
-            << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"]},"
+            << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"],"
+               "\"backends\":[\"conservative\",\"spectral\"]},"
             << "\"taps\":[\"processed\"],"
             << "\"binaural\":{"
             << "\"available\":true,"
@@ -207,18 +210,19 @@ bool SameSuppressorParams(const LiveSuppressorParams& a, const LiveSuppressorPar
          NearlyEqual(a.envelope_release_coeff, b.envelope_release_coeff);
 }
 
-void ConfigureSuppressor(sonitude::dsp::ConservativeSuppressor& suppressor,
-                       const LiveSuppressorParams& params,
-                       const std::uint32_t sample_rate_hz)
+void ConfigureConservativeStage(sonitude::dsp::SuppressionStage& stage,
+                                const LiveSuppressorParams& params,
+                                const std::uint32_t sample_rate_hz,
+                                const std::size_t max_block_frames)
 {
-  suppressor.configure(
-      {.ambient_floor_linear = std::clamp(params.ambient_floor_linear, 0.0F, 1.0F),
-       .fade_ms = std::max(1.0F, params.fade_ms),
-       .activity_threshold = std::max(0.0F, params.activity_threshold),
-       .confidence_threshold = std::clamp(params.confidence_threshold, 0.0F, 1.0F),
-       .envelope_attack_coeff = params.envelope_attack_coeff,
-       .envelope_release_coeff = params.envelope_release_coeff},
-      sample_rate_hz);
+  stage.configure({.enabled = true,
+                   .backend = sonitude::dsp::SuppressionBackend::Conservative,
+                   .sample_rate_hz = sample_rate_hz,
+                   .maximum_block_frames = max_block_frames,
+                   .conservative = {.ambient_floor_linear = std::clamp(params.ambient_floor_linear, 0.0F, 1.0F),
+                                    .fade_ms = std::max(1.0F, params.fade_ms),
+                                    .activity_threshold = std::max(0.0F, params.activity_threshold),
+                                    .confidence_threshold = std::clamp(params.confidence_threshold, 0.0F, 1.0F)}});
 }
 
 std::string SiblingFile(const std::string& path, const std::string& filename)
@@ -382,6 +386,7 @@ int main(int argc, char** argv)
   std::uint32_t sample_rate_override = 0;
   std::size_t max_block_frames = 8192;
   SuppressionMode suppression_mode = SuppressionMode::Auto;
+  std::optional<std::string> suppression_backend_override;
   bool disable_limiter = false;
 
   for (int i = 1; i < argc; ++i)
@@ -402,6 +407,10 @@ int main(int argc, char** argv)
     else if (arg == "--suppression" && i + 1 < argc)
     {
       suppression_mode = ParseSuppressionMode(argv[++i]);
+    }
+    else if (arg == "--suppression-backend" && i + 1 < argc)
+    {
+      suppression_backend_override = argv[++i];
     }
     else if (arg == "--enable-suppression")
     {
@@ -457,11 +466,15 @@ int main(int argc, char** argv)
     sonitude::dsp::CalibrationApplier calibration_applier(
         calibration.channels, geometry_ids, sample_rate_hz, runtime.calibration_dc_block_hz);
 
-    sonitude::dsp::DelaySumBeamformer beamformer;
+    sonitude::dsp::MvdrBeamformer beamformer;
     beamformer.configure(geometry, runtime.steering, calibration, sample_rate_hz, max_block_frames);
 
     const bool suppression_enabled = ResolveSuppression(suppression_mode, runtime.suppression.enabled);
-    sonitude::dsp::ConservativeSuppressor suppressor;
+    const std::string backend_name =
+        suppression_backend_override.value_or(runtime.suppression.backend);
+    const auto suppression_backend =
+        sonitude::dsp::ParseSuppressionBackend(backend_name.empty() ? "conservative" : backend_name);
+    sonitude::dsp::SuppressionStage suppressor;
     bool have_live_suppressor_params = false;
     LiveSuppressorParams last_live_suppressor{};
     LiveSuppressorParams default_live_suppressor{
@@ -472,7 +485,20 @@ int main(int argc, char** argv)
         .envelope_attack_coeff = 0.35F,
         .envelope_release_coeff = 0.01F,
         .confidence = 1.0F};
-    ConfigureSuppressor(suppressor, default_live_suppressor, sample_rate_hz);
+    suppressor.configure({.enabled = suppression_enabled,
+                          .backend = suppression_backend,
+                          .sample_rate_hz = sample_rate_hz,
+                          .maximum_block_frames = max_block_frames,
+                          .conservative = {.ambient_floor_linear = default_live_suppressor.ambient_floor_linear,
+                                           .fade_ms = default_live_suppressor.fade_ms,
+                                           .activity_threshold = default_live_suppressor.activity_threshold,
+                                           .confidence_threshold = default_live_suppressor.confidence_threshold},
+                          .spectral = {.enabled = true,
+                                       .fft_size = runtime.suppression.spectral.fft_size,
+                                       .hop_size = runtime.suppression.spectral.hop_size,
+                                       .gain_floor_db = runtime.suppression.spectral.gain_floor_db,
+                                       .confidence_threshold = runtime.suppression.confidence_threshold}});
+    beamformer.setSpectralPostfilter(suppressor.spectralFilter());
     have_live_suppressor_params = true;
     last_live_suppressor = default_live_suppressor;
 
@@ -492,6 +518,13 @@ int main(int argc, char** argv)
                                 : (suppression_mode == SuppressionMode::Off ? "off" : "auto");
     std::cerr << "sonitude_resolved {\"protocol_version\":3,\"suppression_requested\":\"" << requested
               << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
+              << ",\"suppression_backend_requested\":\"" << backend_name << "\""
+              << ",\"suppression_backend_resolved\":\""
+              << sonitude::dsp::SuppressionBackendName(suppression_backend) << "\""
+              << ",\"suppression_fft_size\":" << runtime.suppression.spectral.fft_size
+              << ",\"suppression_hop_size\":" << runtime.suppression.spectral.hop_size
+              << ",\"suppression_gain_floor_db\":" << runtime.suppression.spectral.gain_floor_db
+              << ",\"suppression_algorithmic_delay_samples\":0"
               << ",\"limiter_disabled\":" << (disable_limiter ? "true" : "false")
               << ",\"binaural_backends\":" << AvailableBackendsJson(binaural_runtime) << "}\n";
     std::cerr << "sonitude_stream_process ready: sample_rate_hz=" << sample_rate_hz
@@ -636,6 +669,30 @@ int main(int argc, char** argv)
       }
 
       mono.assign(frame_count, 0.0F);
+      if (suppression_enabled)
+      {
+        const bool focus_active = (flags & kFlagSuppressionFocus) != 0;
+        const LiveSuppressorParams live{
+            .ambient_floor_linear = suppression_ambient_floor,
+            .fade_ms = suppression_fade_ms,
+            .activity_threshold = suppression_activity_threshold,
+            .confidence_threshold = suppression_confidence_threshold,
+            .envelope_attack_coeff = suppression_envelope_attack,
+            .envelope_release_coeff = suppression_envelope_release,
+            .confidence = std::clamp(suppression_confidence, 0.0F, 1.0F)};
+        if (suppression_backend == sonitude::dsp::SuppressionBackend::Conservative &&
+            (!have_live_suppressor_params || !SameSuppressorParams(live, last_live_suppressor)))
+        {
+          ConfigureConservativeStage(suppressor, live, sample_rate_hz, max_block_frames);
+          last_live_suppressor = live;
+          have_live_suppressor_params = true;
+        }
+        else if (suppression_backend == sonitude::dsp::SuppressionBackend::Spectral)
+        {
+          suppressor.setConfidenceThreshold(live.confidence_threshold);
+        }
+        suppressor.setControl(focus_active, focus_active ? live.confidence : 0.0F);
+      }
       beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
                          std::span<float>(mono.data(), frame_count));
 
@@ -658,22 +715,6 @@ int main(int argc, char** argv)
       std::uint32_t out_flags = 0;
       if (suppression_enabled)
       {
-        const bool focus_active = (flags & kFlagSuppressionFocus) != 0;
-        const LiveSuppressorParams live{
-            .ambient_floor_linear = suppression_ambient_floor,
-            .fade_ms = suppression_fade_ms,
-            .activity_threshold = suppression_activity_threshold,
-            .confidence_threshold = suppression_confidence_threshold,
-            .envelope_attack_coeff = suppression_envelope_attack,
-            .envelope_release_coeff = suppression_envelope_release,
-            .confidence = std::clamp(suppression_confidence, 0.0F, 1.0F)};
-        if (!have_live_suppressor_params || !SameSuppressorParams(live, last_live_suppressor))
-        {
-          ConfigureSuppressor(suppressor, live, sample_rate_hz);
-          last_live_suppressor = live;
-          have_live_suppressor_params = true;
-        }
-        suppressor.setControl(focus_active, focus_active ? live.confidence : 0.0F);
         suppressor.process(std::span<float>(mono.data(), frame_count));
         out_flags |= kOutSuppressionApplied;
       }

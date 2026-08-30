@@ -95,7 +95,7 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
 
 - Status: `in_progress`
 - Gate:
-  - deterministic fractional delay-and-sum implementation
+  - deterministic STFT-domain MVDR implementation (delay-and-sum fallback)
   - scripted steering WAV harness passes synthetic alignment checks
 - Evidence command template:
   - `ctest --test-dir build --output-on-failure`

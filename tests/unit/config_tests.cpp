@@ -19,6 +19,8 @@ void RunControlLoopTests();
 void RunZoneTests();
 void RunStateMachineTests();
 void RunSuppressorTests();
+void RunStftTests();
+void RunSpectralPostfilterTests();
 void RunBinauralTests();
 
 namespace
@@ -43,6 +45,8 @@ void TestRuntimeConfigValid()
   Require(config.active_channel_map.size() == sonitude::audio::kMicChannels,
           "valid runtime config did not load six channels");
   Require(config.suppression.fade_ms > 0.0F, "suppression config should parse from runtime YAML");
+  Require(config.suppression.backend == "conservative",
+          "omitted suppression.backend must default to conservative");
   Require(config.calibration_dc_block_hz > 0.0F, "calibration_dc_block_hz should parse from runtime YAML");
 }
 
@@ -59,6 +63,21 @@ void TestRuntimeConfigDuplicateChannelFails()
     threw = true;
   }
   Require(threw, "duplicate channel map should throw");
+}
+
+void TestRuntimeConfigUnknownSuppressionBackendFails()
+{
+  bool threw = false;
+  try
+  {
+    (void)sonitude::app::LoadRuntimeConfigFromFile(
+        FixturePath("tests/fixtures/runtime_invalid_suppression_backend.yaml"));
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "unknown suppression backend should throw");
 }
 
 void TestRuntimeConfigUnknownBinauralBackendFails()
@@ -260,6 +279,7 @@ int main()
     TestRuntimeConfigValid();
     TestRuntimeConfigDuplicateChannelFails();
     TestRuntimeConfigUnknownBinauralBackendFails();
+    TestRuntimeConfigUnknownSuppressionBackendFails();
     TestRuntimeAudioContract();
     TestRuntimeAudioContractHeadroom();
     TestGeometryValid();
@@ -271,6 +291,8 @@ int main()
     RunCalibrationTests();
     RunBeamformerTests();
     RunSuppressorTests();
+    RunStftTests();
+    RunSpectralPostfilterTests();
     RunLimiterTests();
     RunStereoLimiterTests();
     RunBinauralTests();

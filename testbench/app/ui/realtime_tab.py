@@ -142,8 +142,9 @@ class RealtimeTab(QWidget):
         self._steering.azimuthChanged.connect(self._on_steering_changed)
         self._steering.blendChanged.connect(self._on_blend_changed)
 
-        self._suppressor = SuppressorControls()
+        self._suppressor = SuppressorControls(self._capabilities)
         self._suppressor.changed.connect(self._push_suppressor)
+        self._suppressor.backendChanged.connect(self._on_suppression_backend_changed)
 
         self._binaural = BinauralControls(self._capabilities)
         self._binaural.changed.connect(self._push_binaural)
@@ -224,6 +225,10 @@ class RealtimeTab(QWidget):
         if self._worker is not None:
             self._worker.set_binaural(self._binaural.request())
 
+    def _on_suppression_backend_changed(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._on_restart()
+
     def _push_suppressor(self) -> None:
         if self._worker is not None:
             self._worker.set_suppressor(self._suppressor.request())
@@ -297,6 +302,7 @@ class RealtimeTab(QWidget):
             active_channel_map=config_summary.active_channel_map,
             block_size=self._block_size_spin.value(),
             suppression=self._suppressor.suppression_mode(),
+            suppression_backend=self._suppressor.suppression_backend(),
             queue_capacity=self._queue_capacity_spin.value(),
             binaural=self._binaural.request(),
             suppressor=self._suppressor.request(),

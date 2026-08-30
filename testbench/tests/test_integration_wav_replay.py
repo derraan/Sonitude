@@ -71,30 +71,69 @@ def test_suppression_actually_changes_the_output(
         events,
         tmp_path / "no_suppression",
         suppression="off",
+        disable_limiter=True,
         binary_path=wav_replay_binary,
     )
-    with_suppression = run_wav_replay(
+    with_spectral = run_wav_replay(
         six_channel_fixture,
         DEFAULT_CONFIG_PATH,
         events,
-        tmp_path / "with_suppression",
+        tmp_path / "with_spectral",
         suppression="on",
+        suppression_backend="spectral",
+        disable_limiter=True,
         binary_path=wav_replay_binary,
     )
 
     assert without_suppression.suppression_requested == "off"
-    assert with_suppression.suppression_requested == "on"
+    assert with_spectral.suppression_requested == "on"
     assert without_suppression.resolved.get("suppression_resolved") is False
-    assert with_suppression.resolved.get("suppression_resolved") is True
-
-    beamformed_a, _ = audio_loader.load_wav(without_suppression.beamformed_wav)
-    beamformed_b, _ = audio_loader.load_wav(with_suppression.beamformed_wav)
-    np.testing.assert_allclose(beamformed_a, beamformed_b, atol=1e-6)
+    assert with_spectral.resolved.get("suppression_resolved") is True
+    assert with_spectral.resolved.get("suppression_backend_resolved") == "spectral"
+    assert with_spectral.resolved.get("suppression_algorithmic_delay_samples") in (0, 0.0)
 
     suppressed_without, _ = audio_loader.load_wav(without_suppression.suppressed_wav)
-    suppressed_with, _ = audio_loader.load_wav(with_suppression.suppressed_wav)
+    suppressed_with, _ = audio_loader.load_wav(with_spectral.suppressed_wav)
     assert not np.allclose(suppressed_without, suppressed_with, atol=1e-6), (
-        "enabling suppression should change the post-suppression tap relative to suppression disabled"
+        "shared-STFT spectral NS should change the audible output relative to suppression off"
+    )
+    beamformed_with, _ = audio_loader.load_wav(with_spectral.beamformed_wav)
+    np.testing.assert_allclose(
+        beamformed_with,
+        suppressed_with,
+        atol=1e-6,
+        err_msg="spectral gains run in the MVDR hop, so beamformed and suppressed taps match",
+    )
+
+
+def test_conservative_suppression_is_a_separate_pcm_stage(
+    six_channel_fixture: Path, tmp_path: Path, wav_replay_binary: Path
+) -> None:
+    events = [SteeringEvent(time_s=0.0, azimuth_deg=0.0, elevation_deg=0.0)]
+    without_suppression = run_wav_replay(
+        six_channel_fixture,
+        DEFAULT_CONFIG_PATH,
+        events,
+        tmp_path / "no_suppression",
+        suppression="off",
+        binary_path=wav_replay_binary,
+    )
+    with_conservative = run_wav_replay(
+        six_channel_fixture,
+        DEFAULT_CONFIG_PATH,
+        events,
+        tmp_path / "with_conservative",
+        suppression="on",
+        suppression_backend="conservative",
+        binary_path=wav_replay_binary,
+    )
+    beamformed_a, _ = audio_loader.load_wav(without_suppression.beamformed_wav)
+    beamformed_b, _ = audio_loader.load_wav(with_conservative.beamformed_wav)
+    np.testing.assert_allclose(beamformed_a, beamformed_b, atol=1e-6)
+    suppressed_without, _ = audio_loader.load_wav(without_suppression.suppressed_wav)
+    suppressed_with, _ = audio_loader.load_wav(with_conservative.suppressed_wav)
+    assert not np.allclose(suppressed_without, suppressed_with, atol=1e-6), (
+        "conservative remains a PCM stage after the MVDR STFT"
     )
 
 
@@ -195,4 +234,56 @@ def test_compact_hrtf_binaural_is_stereo_and_not_lr_duplicate(
     assert stereo.shape[1] == 2
     assert not np.allclose(stereo[:, 0], stereo[:, 1], atol=1e-6), (
         "compact_hrtf must not be an L=R duplicate of directional mono"
+    )
+
+
+def test_spectral_backend_differs_and_disabled_is_bit_exact(
+    six_channel_fixture: Path, tmp_path: Path, wav_replay_binary: Path
+) -> None:
+    events = [SteeringEvent(time_s=0.0, azimuth_deg=0.0, elevation_deg=0.0)]
+    off = run_wav_replay(
+        six_channel_fixture,
+        DEFAULT_CONFIG_PATH,
+        events,
+        tmp_path / "off",
+        suppression="off",
+        binary_path=wav_replay_binary,
+    )
+    spectral = run_wav_replay(
+        six_channel_fixture,
+        DEFAULT_CONFIG_PATH,
+        events,
+        tmp_path / "spectral",
+        suppression="on",
+        suppression_backend="spectral",
+        binary_path=wav_replay_binary,
+        disable_limiter=True,
+    )
+    conservative = run_wav_replay(
+        six_channel_fixture,
+        DEFAULT_CONFIG_PATH,
+        events,
+        tmp_path / "cons",
+        suppression="on",
+        suppression_backend="conservative",
+        binary_path=wav_replay_binary,
+        disable_limiter=True,
+    )
+    assert off.resolved.get("suppression_resolved") is False
+    assert off.resolved.get("suppression_backend_resolved") == "conservative"
+    assert off.resolved.get("suppression_algorithmic_delay_samples") in (0, 0.0)
+    assert "suppression_implementation_status" not in (off.resolved or {})
+    assert spectral.resolved.get("suppression_backend_resolved") == "spectral"
+    assert "suppression_implementation_status" not in (spectral.resolved or {})
+    assert "suppression_implementation_status" not in (conservative.resolved or {})
+    assert spectral.resolved.get("suppression_fft_size") == 128
+    assert spectral.resolved.get("suppression_hop_size") == 32
+    assert spectral.resolved.get("suppression_algorithmic_delay_samples") in (0, 0.0)
+    beam_off, _ = audio_loader.load_wav(off.beamformed_wav)
+    supp_off, _ = audio_loader.load_wav(off.suppressed_wav)
+    assert np.array_equal(beam_off, supp_off), "disabled suppression must match the beamformed tap exactly"
+    supp_spec, _ = audio_loader.load_wav(spectral.suppressed_wav)
+    supp_cons, _ = audio_loader.load_wav(conservative.suppressed_wav)
+    assert not np.allclose(supp_spec, supp_cons, atol=1e-6), (
+        "spectral and conservative backends must not be identical when both are on"
     )

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "dsp/suppression_stage.hpp"
 #include "dsp/suppressor.hpp"
 
 namespace
@@ -78,9 +79,55 @@ void TestLowConfidenceBypassesSuppression()
 }
 }  // namespace
 
+void TestSuppressionStageDisabledIsExactCopy()
+{
+  sonitude::dsp::SuppressionStage stage;
+  stage.configure({.enabled = false,
+                   .backend = sonitude::dsp::SuppressionBackend::Conservative,
+                   .sample_rate_hz = 44100,
+                   .maximum_block_frames = 64});
+  Require(stage.spectralFilter() == nullptr, "disabled suppression must not expose a spectral hop filter");
+  auto mono = ConstantBlock(64, 0.37F);
+  const auto original = mono;
+  stage.process(mono);
+  Require(mono == original, "disabled suppression must preserve samples exactly");
+}
+
+void TestConservativeStageHasNoSpectralHopFilter()
+{
+  sonitude::dsp::SuppressionStage stage;
+  stage.configure({.enabled = true,
+                   .backend = sonitude::dsp::SuppressionBackend::Conservative,
+                   .sample_rate_hz = 1000,
+                   .maximum_block_frames = 80,
+                   .conservative = {.ambient_floor_linear = 0.25F,
+                                    .fade_ms = 10.0F,
+                                    .activity_threshold = 0.01F,
+                                    .confidence_threshold = 0.6F}});
+  Require(stage.spectralFilter() == nullptr, "conservative must not expose a spectral hop filter");
+}
+
+void TestSpectralStageWiresSharedStftWithoutPcmProcess()
+{
+  sonitude::dsp::SuppressionStage stage;
+  stage.configure({.enabled = true,
+                   .backend = sonitude::dsp::SuppressionBackend::Spectral,
+                   .sample_rate_hz = 44100,
+                   .maximum_block_frames = 64,
+                   .spectral = {.enabled = true, .fft_size = 128, .hop_size = 32, .gain_floor_db = -12.0F}});
+  Require(stage.spectralFilter() != nullptr, "spectral backend must expose the shared-hop filter");
+  auto mono = ConstantBlock(64, 0.37F);
+  const auto original = mono;
+  stage.process(mono);
+  Require(mono == original, "spectral stage must not process PCM; the MVDR hop owns the gains");
+}
+
 void RunSuppressorTests()
 {
   TestFloorClampAndAttenuation();
   TestFallbackRampToUnity();
   TestLowConfidenceBypassesSuppression();
+  TestSuppressionStageDisabledIsExactCopy();
+  TestConservativeStageHasNoSpectralHopFilter();
+  TestSpectralStageWiresSharedStftWithoutPcmProcess();
 }

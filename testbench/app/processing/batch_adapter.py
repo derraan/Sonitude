@@ -160,6 +160,7 @@ def run_wav_replay(
     output_dir: str | Path,
     *,
     suppression: SuppressionMode | str = SuppressionMode.AUTO,
+    suppression_backend: str | None = None,
     enable_suppression: bool | None = None,
     disable_limiter: bool = False,
     binaural: BinauralRequest | None = None,
@@ -210,6 +211,8 @@ def run_wav_replay(
         "--output-suppressed", str(suppressed_wav),
         *cli_args_for(mode),
     ]
+    if suppression_backend:
+        command += ["--suppression-backend", suppression_backend]
     if disable_limiter:
         command.append("--disable-limiter")
     command += binaural_cli_args(
@@ -257,6 +260,7 @@ def run_stream_batch(
     output_dir: str | Path,
     *,
     suppression: SuppressionMode | str = SuppressionMode.AUTO,
+    suppression_backend: str | None = None,
     disable_limiter: bool = False,
     binaural: BinauralRequest | None = None,
     active_channel_map: list[int] | None = None,
@@ -293,6 +297,7 @@ def run_stream_batch(
         sample_rate_hz=metadata.sample_rate_hz,
         max_block_frames=block_frames,
         suppression=mode,
+        suppression_backend=suppression_backend,
         disable_limiter=disable_limiter,
         binary_path=binary,
         build_dir=build_dir,

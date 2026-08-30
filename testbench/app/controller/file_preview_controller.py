@@ -41,6 +41,7 @@ class FilePreviewWorker(QThread):
         active_channel_map: list[int] | None = None,
         block_size: int = 1024,
         suppression: SuppressionMode | str = SuppressionMode.AUTO,
+        suppression_backend: str | None = None,
         binaural: BinauralRequest | None = None,
         suppressor: SuppressorRequest | None = None,
         parent=None,
@@ -51,6 +52,7 @@ class FilePreviewWorker(QThread):
         self._sample_rate_hz = sample_rate_hz
         self._block_size = block_size
         self._suppression = parse_suppression_mode(suppression)
+        self._suppression_backend = suppression_backend
         self._active_channel_map = list(active_channel_map) if active_channel_map else [0, 1, 2, 3, 4, 5]
         self._lock = threading.Lock()
         self._binaural = binaural or binaural_request_from_config(config_path)
@@ -132,6 +134,7 @@ class FilePreviewWorker(QThread):
                 sample_rate_hz=self._sample_rate_hz,
                 max_block_frames=max(8192, self._block_size * 4),
                 suppression=self._suppression,
+                suppression_backend=self._suppression_backend,
             )
             output_stream = sd.OutputStream(
                 channels=2,

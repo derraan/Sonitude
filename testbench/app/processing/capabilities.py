@@ -13,6 +13,15 @@ from app.processing.sonitude_binary_locator import find_binary
 
 KNOWN_BINAURAL_BACKENDS = ("array_downmix", "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference")
 PREFERRED_BINAURAL_BACKENDS = ("array_downmix", "compact_hrtf", "itd_ild", "full_hrtf_reference", "mono_reference")
+PREFERRED_SUPPRESSION_BACKENDS = ("conservative", "spectral")
+
+
+@dataclass
+class SuppressionCapabilities:
+    backends: list[str] = field(default_factory=lambda: ["conservative", "spectral"])
+
+    def backend_supported(self, name: str) -> bool:
+        return name in self.backends
 
 
 @dataclass
@@ -32,6 +41,7 @@ class BinauralCapabilities:
 class ToolCapabilities:
     protocol_version: int = PROTOCOL_VERSION
     suppression_modes: list[str] = field(default_factory=lambda: ["auto", "on", "off"])
+    suppression: SuppressionCapabilities = field(default_factory=SuppressionCapabilities)
     taps: list[str] = field(default_factory=lambda: ["beamformed", "suppressed", "processed"])
     binaural: BinauralCapabilities = field(default_factory=BinauralCapabilities)
     queried: bool = False
@@ -42,6 +52,9 @@ class ToolCapabilities:
         return {
             "protocol_version": self.protocol_version,
             "suppression_modes": self.suppression_modes,
+            "suppression": {
+                "backends": self.suppression.backends,
+            },
             "taps": self.taps,
             "binaural": {
                 "available": self.binaural.available,
@@ -54,12 +67,25 @@ class ToolCapabilities:
         }
 
 
+def preferred_suppression_backend(
+    available: list[str],
+    yaml_backend: str | None = None,
+) -> str | None:
+    """Pick the GUI default from YAML when supported, else the first preferred backend."""
+    if yaml_backend and yaml_backend in available:
+        return yaml_backend
+    for name in PREFERRED_SUPPRESSION_BACKENDS:
+        if name in available:
+            return name
+    return available[0] if available else None
+
+
 def preferred_binaural_backend(
     available: list[str],
     yaml_backend: str | None = None,
 ) -> str | None:
-    """Pick the GUI default. Prefer a real HRTF/ITD backend over L=R bypass."""
-    if yaml_backend and yaml_backend != "mono_reference" and yaml_backend in available:
+    """Pick the GUI default from YAML when supported, else the preferred backend."""
+    if yaml_backend and yaml_backend in available:
         return yaml_backend
     for name in PREFERRED_BINAURAL_BACKENDS:
         if name in available:
@@ -68,6 +94,18 @@ def preferred_binaural_backend(
 
 
 def parse_capabilities_json(payload: dict) -> ToolCapabilities:
+    suppression_raw = payload.get("suppression", {})
+    if isinstance(suppression_raw, dict):
+        suppression_modes = list(suppression_raw.get("modes", ["auto", "on", "off"]))
+        suppression_backends = [
+            name
+            for name in suppression_raw.get("backends", ["conservative", "spectral"])
+            if name != "off"
+        ]
+    else:
+        suppression_modes = list(payload.get("suppression_modes", ["auto", "on", "off"]))
+        suppression_backends = ["conservative", "spectral"]
+
     binaural_raw = payload.get("binaural", {})
     backends = list(binaural_raw.get("backends", ["mono_reference"]))
     unavailable = list(
@@ -78,9 +116,10 @@ def parse_capabilities_json(payload: dict) -> ToolCapabilities:
     )
     return ToolCapabilities(
         protocol_version=int(payload.get("protocol_version", PROTOCOL_VERSION)),
-        suppression_modes=list(payload.get("suppression", {}).get("modes", ["auto", "on", "off"]))
-        if isinstance(payload.get("suppression"), dict)
-        else list(payload.get("suppression_modes", ["auto", "on", "off"])),
+        suppression_modes=suppression_modes,
+        suppression=SuppressionCapabilities(
+            backends=suppression_backends,
+        ),
         taps=list(payload.get("taps", ["beamformed", "suppressed", "processed"])),
         binaural=BinauralCapabilities(
             available=bool(binaural_raw.get("available", False)),

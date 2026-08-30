@@ -55,12 +55,21 @@ struct SteeringConfig
   float ambient_floor_linear = 0.25F;
 };
 
+struct SpectralSuppressionConfig
+{
+  std::size_t fft_size = 128;
+  std::size_t hop_size = 32;
+  float gain_floor_db = -12.0F;
+};
+
 struct SuppressionConfig
 {
   bool enabled = false;
+  std::string backend = "conservative";
   float fade_ms = 120.0F;
   float activity_threshold = 0.03F;
   float confidence_threshold = 0.6F;
+  SpectralSuppressionConfig spectral{};
 };
 
 struct StateMachineConfig

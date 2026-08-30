@@ -42,9 +42,14 @@ Pico USB ALSA capture (6 active channels)
 Audio path target order:
 
 ```text
-steering snapshot -> delay-and-sum beamformer -> conservative suppression policy
+steering snapshot -> STFT-domain MVDR (optional same-hop spectral NS) -> conservative PCM if selected
 -> binaural renderer -> linked stereo limiter -> ASRC/drift control -> ALSA playback
 ```
+
+The experimental spectral postfilter (`docs/spectral_postfilter.md`) shares the
+MVDR 128/32 hop. It is an alternative to the conservative PCM suppressor, off by
+default, and does not claim M8 latency or MCU fit.
+**SCOPE-3 is user-vetoed for in-tree STFT-domain MVDR** (2026-08-30). Neural DSP remains unused.
 
 Direction convention (authoritative for steering and binaural rendering;
 helpers in `src/spatial/head_frame.hpp`):
@@ -398,7 +403,7 @@ flowchart TB
 
 ### M4 beamformer — openMHA-aligned design
 
-The in-tree `IBeamformer` (M4) follows the openMHA delay-and-sum convention:
+The in-tree `MvdrBeamformer` (M4) follows the openMHA delay-and-sum convention for its fallback path:
 
 1. **Far-field plane-wave delays** from mic positions (YAML geometry) and steering direction **u**, using the same speed-of-sound parameter as config (`343 m/s` default).
 2. **Per-channel fractional delay** — 8-tap windowed-sinc FIR (Sonitude choice for Pi NEON); openMHA uses equivalent delay lines in the DS plugin.
@@ -472,7 +477,7 @@ This satisfies reproducibility goals of the openMHA platform [1] while keeping o
 | --------- | ---------------------------- |
 | **SCOPE-1** (no JACK) | Blocks hosting `mha` with `MHAIOJack` in the live path; offline `MHAIOFile` only |
 | **SCOPE-2** (ODAS control-only) | No openMHA+ODAS hybrid audio chain |
-| **SCOPE-3** (no MVDR/neural) | DS + conservative suppressor only; MVDR/ADM/DNN openMHA configs are reference-only |
+| **SCOPE-3** (MVDR in-tree; no neural) | In-tree STFT MVDR is the beamformer; openMHA MVDR/ADM/DNN configs stay reference-only |
 | **SCOPE-7** (reference-only firmware vendoring) | openMHA remains out-of-tree and out of the Sonitude build graph (`libopenmha` not linked) |
 
 **If SCOPE-1 is vetoed:** a sidecar `mha` on JACK could process a tap — still incompatible with direct `hw:` latency claims unless remeasured (M8).

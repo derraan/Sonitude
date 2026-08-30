@@ -10,6 +10,7 @@ struct SteeringSnapshot
 {
   audio::BeamformerSteering target{};
   float ambient_mix = 0.25F;
+  float confidence = 0.0F;
   std::uint64_t generation = 0;
   bool failsafe = true;
 };

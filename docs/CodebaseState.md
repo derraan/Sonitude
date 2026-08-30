@@ -2,23 +2,25 @@
 
 Unified tracker for Sonitude core: **global scope, guardrails, user veto checkboxes**, **DSP signal path**, directory layout, milestone reality, key interfaces, config schema, tests, conventions, ODAS posture, and CMake wiring. Treat this document as the living snapshot; `docs/milestones.md` **remains authoritative for milestone gates**. Unchecked scope vetoes are binding on Cursor; checked vetoes explicitly authorize otherwise-prohibited work.
 
-Last updated: 2026-08-29.
+Last updated: 2026-08-30.
 
 ### Implementation status snapshot (M4–M7)
 
 ```text
-capture -> calibration -> beamformer -> suppressor -> limiter -> mono-to-stereo -> ASRC -> playback
+capture -> calibration -> STFT MVDR target (+ internal guard spectra)
+  -> optional same-hop spectral NS, else conservative PCM / off
+  -> limiter -> binaural/ASRC -> playback
 ```
 
 | Stage | Milestone | Current status | Notes |
 | --- | --- | --- | --- |
 | Stage 2 | M3 calibration | in_progress | `CalibrationApplier` live in runtime; HW sweep evidence still pending |
-| Stage 3 | M4 beamformer | in_progress | Fractional delay-and-sum, steering ramp, and WAV replay implemented |
-| Stage 4 | M7 suppression/limiter | in_progress | Conservative suppressor + peak limiter integrated in beamform mode |
+| Stage 3 | M4 beamformer | in_progress | STFT-domain MVDR (128/32), delay-and-sum fallback, steering crossfade. SCOPE-3 vetoed for MVDR. |
+| Stage 4 | M7 suppression/limiter | in_progress | Conservative default. Spectral NS shares the MVDR 128/32 hop (guard spectra stay in the frequency domain). Experimental; not the shipping voice suppressor. |
 
 | Block | Status |
 | --- | --- |
-| Delay-and-sum beamformer | Implemented |
+| STFT-domain MVDR beamformer | Implemented (experimental; delay-and-sum fallback) |
 | Suppression v1 (conservative, floor-clamped) | Implemented |
 | Limiter v1 (peak limiter) | Implemented |
 | ODAS control adapter + mock provider | Implemented |
@@ -31,7 +33,7 @@ capture -> calibration -> beamformer -> suppressor -> limiter -> mono-to-stereo 
 
 ## 1. Global project scope
 
-Sonitude is a **staged Raspberry Pi 5 real-time audio proof-of-concept** for a six-microphone head-worn array. The v1 objective is **deterministic directional listening**: a custom low-latency **time-domain delay-and-sum beamformer** on the audio path, with **ODAS-driven (or mock) control** for steering, zones, and conversation state. Work lives in this repository only; sibling projects (Pico firmware, Sound Bubble neural code, HRTF tooling, source-localization experiments) stay in their own repos — reuse documented contracts and algorithmic ideas, do not vendor or modify them.
+Sonitude is a **staged Raspberry Pi 5 real-time audio proof-of-concept** for a six-microphone head-worn array. The v1 objective is **deterministic directional listening**: an in-tree **STFT-domain MVDR beamformer** on the audio path (delay-and-sum fallback), with **ODAS-driven (or mock) control** for steering, zones, and conversation state. Work lives in this repository only; sibling projects (Pico firmware, Sound Bubble neural code, HRTF tooling, source-localization experiments) stay in their own repos — reuse documented contracts and algorithmic ideas, do not vendor or modify them.
 
 ### Target runtime path
 
@@ -61,7 +63,7 @@ ODAS (or mock) DOA  --non-blocking IPC-->  control thread
 | M0–M1 | Scaffold, typed config, direct ALSA probe and raw I/O                                |
 | M2    | RT primitives (SPSC, block pool), ASRC, passthrough                                  |
 | M3    | Per-channel calibration (polarity, gain, delay, DC), offline estimation              |
-| M4    | `IBeamformer`, fractional delay-and-sum, steering ramp, offline WAV renderer         |
+| M4    | `MvdrBeamformer` (STFT-domain MVDR with delay-and-sum fallback), steering ramp, offline WAV renderer |
 | M5    | Mock-first ODAS control, source association, failsafe steering publication           |
 | M6    | Conversation state machine, wrap-safe zones, scripted VAD                            |
 | M7    | One conservative suppression policy, explicit user selection, ambient floor          |
@@ -86,11 +88,11 @@ Default v1 baseline rules. **Unchecked veto = guardrail active** — Cursor must
 | ----- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | - [ ] | **SCOPE-1** | **No desktop audio servers in the critical path** (PipeWire, PulseAudio, JACK).                                                                | Adds buffering, routing, and latency variance; breaks the direct-ALSA RT contract.                    |
 | - [ ] | **SCOPE-2** | **No ODAS audio processing in the critical path** — ODAS is **control-only** (DOA/tracking → steering). All PCM beamforming stays in Sonitude. | Keeps audio latency and ownership on the RT path; ODAS loss must not stop audio.                      |
-| - [ ] | **SCOPE-3** | **No MVDR / LCMV / GSS / neural DSP** in v1 baseline milestones.                                                                               | v1 is delay-and-sum plus one conservative suppressor; advanced algorithms are out of staged delivery. |
+| - [x] | **SCOPE-3** | **No MVDR / LCMV / GSS / neural DSP** in v1 baseline milestones.                                                                               | Vetoed 2026-08-30 for in-tree MVDR. Neural / GSS remain unused. |
 | - [ ] | **SCOPE-4** | **No unmeasured end-to-end latency claims.** Period arithmetic and config defaults are not product latency.                                    | Only M8 impulse/loopback measurement may support latency statements.                                  |
 | - [ ] | **SCOPE-5** | **No distance-estimation or strong automatic nulling claims.** At most one selected suppressor in v1.                                          | Avoids unsupported product statements and scope creep into M7+ behavior without gates.                |
 | - [ ] | **SCOPE-6** | **No milestone marked complete without its observable gate** (evidence in `docs/milestones.md`).                                               | Staged delivery integrity; no “implemented” without tests/evidence.                                   |
-| - [x] | **SCOPE-7** | **Reference-only Pico firmware vendoring is permitted**; host build integration and host-side firmware edits remain out of scope.                 | Keeps host app repo focused while preserving a reproducible firmware contract snapshot.                 |
+| - [x] | **SCOPE-7** | **Pico firmware is reference-only unless the user explicitly authorizes an isolated firmware experiment**; host build coupling remains out of scope. | Keeps host delivery focused while allowing evidence-gated, default-off embedded prototypes. |
 
 
 
@@ -102,6 +104,8 @@ Fill when the user checks a veto above (newest first).
 
 | Date | ID  | Reason (user-approved override) |
 | ---- | --- | ------------------------------- |
+| 2026-08-30 | SCOPE-7 | User requested a default-off RP2350/CMSIS-DSP MVDR and OVD scaffold. Host PR #34 no longer carries that example; the snapshot remains on `feature/rp2350-experimental-mvdr` at the pre-extraction commit. |
+| 2026-08-30 | SCOPE-3 | Replace delay-and-sum with in-tree STFT-domain MVDR; neural DSP still not in this PR. |
 | 2026-08-12 | SCOPE-7 | Keep vendored Pico firmware snapshot as read-only reference; no host CMake coupling or host-side firmware edits. |
 
 
@@ -138,7 +142,7 @@ Sonitude splits processing into a **real-time audio path** (PCM in → processed
 flowchart LR
     Pico["Pico 6-mic UAC"] -->|"interleaved PCM"| Extract["Channel extract"]
     Extract -->|"MicFrame x6"| Cal["CalibrationApplier"]
-    Cal --> BF["Delay-and-sum beamformer"]
+    Cal --> BF["STFT MVDR beamformer"]
     Control["ODAS / state machine"] -.->|"steering snapshot"| BF
     BF -->|"mono"| Dup["Duplicate L/R"]
     Dup --> ASRC["Resampler + PI controller"]
@@ -171,27 +175,25 @@ Per mic, per sample:
 3. **Gain** — multiply by `gain_linear`
 4. **DC blocker** — one-pole high-pass with `calibration_dc_block_hz` (default 20 Hz)
 
-`delay_samples` from calibration YAML is **not** applied in `CalibrationApplier` today. The beamformer (M4) applies per-channel delay (calibration + steering) in one fractional delay line per channel.
+`delay_samples` from calibration YAML is **not** applied in `CalibrationApplier` today. The beamformer (M4) applies per-channel delay (calibration + steering) as the MVDR steering-vector phase.
 
 ### Stage 3 — Beamformer (M4; implemented)
 
-Core **directional listening** DSP — **delay-and-sum**:
+Core **directional listening** DSP — **narrowband MVDR** (`MvdrBeamformer`):
 
-1. From mic geometry (metres) and speed of sound, compute **far-field delays** for steering direction **u** (azimuth + elevation).
-2. Delay each channel so all mics **align in phase** for sources from **u**.
-3. **Sum** with equal weights **1/6** → one **mono** sample.
+1. From mic geometry and speed of sound, form the far-field steering vector **d** (plus calibration delay) for look **u**.
+2. 128/32 STFT of all six channels; per bin solve distortionless MVDR (delay-and-sum fallback on DC/Nyquist, failed solve, or excess white-noise gain).
+3. Inverse STFT → audible **mono**. Three extra looks (+90°, −90°, 180°) are formed the same way for spectral contrast only.
 
-On-target speech adds coherently; off-axis energy is partially rejected (exact contrast depends on array aperture and frequency).
-
-- **Fractional delays:** 8-tap windowed-sinc FIR per channel; base delay keeps all effective delays positive across steering range.
-- **Click-free steering:** dual-beam **crossfade** over `steering_ramp_ms` (default 150 ms) when target changes — old and new delay sets rendered in parallel and blended.
-- **Control handoff:** non-RT thread publishes a **steering snapshot**; audio thread reads it only (no sockets/JSON on RT path).
+- **Algorithmic delay:** 127 samples (128/32 first-arrival). Spectral NS shares this hop.
+- **Click-free steering:** dual-look **crossfade** over `steering_ramp_ms`; covariance frozen during the fade.
+- **Control handoff:** non-RT thread publishes a **steering snapshot**; audio thread reads it only.
 
 
 
 ### Stage 4 — Suppression and limiter (M7; implemented)
 
-Conservative **distractor suppression** after beamforming, with explicit user selection and an **ambient floor**, followed by a peak limiter. v1 avoids MVDR/nulling and neural processing (**SCOPE-3**).
+Conservative **distractor suppression** after beamforming, with explicit user selection and an **ambient floor**, followed by a peak limiter. In-tree **MVDR** is in the beamformer (**SCOPE-3** vetoed). Neural DSP is still unused.
 
 ### Stage 5 — Mono → stereo
 
@@ -233,8 +235,8 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 | PCM format convert           | Implemented (`src/audio/format_convert.hpp`) |
 | 6-ch extract                 | Implemented                                  |
 | Calibration (pol/gain/DC/HP) | Implemented                                  |
-| Calibration delay            | Implemented (beamformer fractional delay line) |
-| Delay-and-sum beamformer     | Implemented (M4)                             |
+| Calibration delay            | Implemented (MVDR steering-vector phase)     |
+| STFT-domain MVDR beamformer  | Implemented (M4; delay-and-sum fallback)     |
 | Binaural renderer / HRTF tables | Implemented (portable tools; not yet in `sonitude_realtime`) |
 | Stereo limiter (linked)      | Implemented (`StereoPeakLimiter`)            |
 | Suppression / limiter        | Implemented (M7)                             |
@@ -363,7 +365,7 @@ From `docs/milestones.md`:
 | **M1 ALSA**          | `in_progress` | Probe/workers/tools built; Pi hardware evidence pending |
 | **M2 RT primitives** | `in_progress` | SPSC, pool, ASRC, resampler, passthrough; soak pending  |
 | **M3 Calibration**   | `in_progress` | Loader/applier/writer/WAV/tools/tests; HW sweep pending |
-| **M4 Beamformer**    | `in_progress` | Fractional delay-and-sum, steering ramp, WAV replay; gate evidence pending |
+| **M4 Beamformer**    | `in_progress` | STFT-domain MVDR, steering ramp, WAV replay; gate evidence pending |
 | **M5 ODAS control**  | `in_progress` | Mock provider, ODAS parser, source tracker; live ODAS soak pending |
 | **M6 State machine** | `in_progress` | Conversation SM, zones, control loop; scripted VAD harness pending |
 | **M7 Suppression**   | `in_progress` | Conservative suppressor + peak limiter in beamform mode |
@@ -580,7 +582,7 @@ struct TelemetryCounters
 
 ### M4–M6 interfaces (implemented)
 
-- `IBeamformer` / `DelayAndSumBeamformer` — fractional delay-and-sum with steering ramp
+- `MvdrBeamformer` — STFT-domain MVDR with delay-and-sum fallback and steering ramp
 - `IDoaProvider` — mock and ODAS socket adapters
 - `ConversationStateMachine` — zone-aware activation with hysteresis
 - Atomic **steering snapshot** via `ParamSnapshot` / control loop handoff

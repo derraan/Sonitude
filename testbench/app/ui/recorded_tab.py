@@ -153,7 +153,7 @@ class RecordedDataTab(QWidget):
 
         self._steering = SteeringControls("Beamformer steering (delay-and-sum)")
 
-        self._suppressor = SuppressorControls()
+        self._suppressor = SuppressorControls(self._capabilities)
 
         export_box = QGroupBox("Final result export")
         self._export_combo = QComboBox()
@@ -268,6 +268,7 @@ class RecordedDataTab(QWidget):
         self._steering.azimuthChanged.connect(self._push_live_params)
         self._steering.blendChanged.connect(lambda _w: self._push_live_params())
         self._suppressor.changed.connect(self._push_live_params)
+        self._suppressor.backendChanged.connect(self._on_suppression_backend_changed)
         self._binaural.changed.connect(self._push_live_params)
         self.visualization_panel = VisualizationPanel()
         self.visualization_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -400,6 +401,7 @@ class RecordedDataTab(QWidget):
             self._config_path,
             steering_events,
             suppression=self._suppressor.suppression_mode(),
+            suppression_backend=self._suppressor.suppression_backend(),
             output_container=self._export_combo.currentData() or "wav",
             binaural=self._binaural.request(),
             steering_test_expected_azimuth_deg=expected_azimuth,
@@ -436,7 +438,10 @@ class RecordedDataTab(QWidget):
             if binaural_index >= 0:
                 self._stage_combo.setCurrentIndex(binaural_index)
         self._results_combo.setCurrentText(test_id)
-        self._status_label.setText(f"Finished: {Path(input_path).name} -> {test_id}")
+        backend = result["metrics"].get("suppression_backend_resolved") or "yaml"
+        self._status_label.setText(
+            f"Finished: {Path(input_path).name} -> {test_id} (backend {backend})"
+        )
 
     def _on_file_failed(self, input_path: str, error: str) -> None:
         name = Path(input_path).name
@@ -460,6 +465,11 @@ class RecordedDataTab(QWidget):
         if row < 0 or row >= len(self._selected_paths):
             return None
         return self._selected_paths[row]
+
+    def _on_suppression_backend_changed(self) -> None:
+        if self._preview is not None and self._preview.isRunning():
+            self._on_live_stop()
+            self._on_live_play()
 
     def _push_live_params(self, *_args) -> None:
         if self._preview is None or not self._preview.isRunning():
@@ -496,6 +506,7 @@ class RecordedDataTab(QWidget):
             config.capture_sample_rate_hz,
             active_channel_map=config.active_channel_map,
             suppression=self._suppressor.suppression_mode(),
+            suppression_backend=self._suppressor.suppression_backend(),
             binaural=self._binaural.request(),
             suppressor=self._suppressor.request(),
         )

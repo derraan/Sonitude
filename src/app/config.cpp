@@ -122,6 +122,26 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
   config.suppression.activity_threshold = RequireScalar<float>(suppression, "activity_threshold");
   config.suppression.confidence_threshold =
       RequireScalar<float>(suppression, "confidence_threshold");
+  if (suppression["backend"])
+  {
+    config.suppression.backend = RequireScalar<std::string>(suppression, "backend");
+  }
+  if (suppression["spectral"])
+  {
+    const YAML::Node spectral = suppression["spectral"];
+    if (spectral["fft_size"])
+    {
+      config.suppression.spectral.fft_size = RequireScalar<std::size_t>(spectral, "fft_size");
+    }
+    if (spectral["hop_size"])
+    {
+      config.suppression.spectral.hop_size = RequireScalar<std::size_t>(spectral, "hop_size");
+    }
+    if (spectral["gain_floor_db"])
+    {
+      config.suppression.spectral.gain_floor_db = RequireScalar<float>(spectral, "gain_floor_db");
+    }
+  }
 
   const YAML::Node sm = root["state_machine"];
   config.state_machine.activation_hold_ms = RequireScalar<std::uint32_t>(sm, "activation_hold_ms");
@@ -305,6 +325,25 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
       config.suppression.confidence_threshold > 1.0F)
   {
     throw std::runtime_error("suppression.confidence_threshold must be in [0, 1]");
+  }
+
+  if (config.suppression.backend != "conservative" && config.suppression.backend != "spectral")
+  {
+    throw std::runtime_error(
+        "suppression.backend must be conservative or spectral (unknown value is not remapped)");
+  }
+
+  const bool spectral_pair_ok =
+      (config.suppression.spectral.fft_size == 128 && config.suppression.spectral.hop_size == 32) ||
+      (config.suppression.spectral.fft_size == 256 && config.suppression.spectral.hop_size == 64);
+  if (config.suppression.backend == "spectral" && !spectral_pair_ok)
+  {
+    throw std::runtime_error("suppression.spectral fft/hop must be 128/32 or 256/64");
+  }
+  if (config.suppression.spectral.gain_floor_db > 0.0F ||
+      config.suppression.spectral.gain_floor_db < -80.0F)
+  {
+    throw std::runtime_error("suppression.spectral.gain_floor_db must be in [-80, 0]");
   }
 
   if (config.state_machine.activation_hold_ms == 0 || config.state_machine.confirmation_hold_ms == 0)

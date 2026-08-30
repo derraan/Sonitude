@@ -31,6 +31,7 @@ class BinauralConfigSummary:
 @dataclass
 class SuppressionConfigSummary:
     enabled: bool = False
+    backend: str = "conservative"
     fade_ms: float = 120.0
     activity_threshold: float = 0.03
     confidence_threshold: float = 0.6
@@ -70,6 +71,7 @@ def _read_suppression_summary(raw: dict) -> SuppressionConfigSummary:
     steering = raw.get("steering") or {}
     return SuppressionConfigSummary(
         enabled=bool(section.get("enabled", False)),
+        backend=str(section.get("backend", "conservative")),
         fade_ms=float(section.get("fade_ms", 120.0)),
         activity_threshold=float(section.get("activity_threshold", 0.03)),
         confidence_threshold=float(section.get("confidence_threshold", 0.6)),
