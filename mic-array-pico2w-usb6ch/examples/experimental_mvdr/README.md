@@ -22,7 +22,7 @@ cmake --build build-pico-mvdr --target experimental_mvdr_pico2w
 - fixed-size, allocation-free fast-path storage after initialization;
 - CMSIS complex multiply for applying MVDR weights;
 - complex 6x6 covariance represented correctly as a real 12x12 system before `arm_mat_inverse_f32`;
-- relative diagonal loading and covariance adaptation, both disabled until measured parameters are supplied;
+- relative diagonal loading and covariance adaptation, both disabled until measured parameters are supplied; covariance updates each hop while matrix solves are cadence-limited (32 hops by default);
 - shared double-buffer mailboxes with FIFO generation tokens instead of sending matrices through the small hardware FIFO;
 - smoothed fast-OVD gain logic, disabled until the correct front/rear channel pair, ratio distribution, and policy gain are measured;
 - the existing PIO/I2S driver's DMA ping-pong capture path. DSP runs outside its interrupt handler.

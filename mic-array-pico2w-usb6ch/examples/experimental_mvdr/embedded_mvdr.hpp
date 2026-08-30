@@ -71,6 +71,7 @@ struct SlowPathConfig {
   float covariance_alpha = 0.0F;       // 0 < alpha <= 1, derived from a time constant.
   float diagonal_load_relative = 0.0F; // Fraction of mean bin power, not an absolute load.
   float minimum_bin_power = 1.0e-12F;
+  std::uint32_t weight_update_interval_hops = 32; // Never invert every audio hop by default.
 };
 
 struct RuntimeCounters {
@@ -140,6 +141,7 @@ class SlowPath {
   WeightSet weights_{};
   std::array<std::array<std::array<Complex, kMicrophones>, kMicrophones>, kBins> covariance_{};
   std::uint32_t snapshot_generation_ = 0;
+  std::uint32_t hops_since_weight_update_ = 0;
   RuntimeCounters counters_{};
 };
 

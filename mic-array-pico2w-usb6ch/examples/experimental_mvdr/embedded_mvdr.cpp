@@ -139,7 +139,8 @@ bool SlowPath::init(DoubleBufferMailbox<Spectrum>* snapshots,
   if (snapshots == nullptr || weights == nullptr) return false;
   if (config.adaptation_enabled && (!(config.covariance_alpha > 0.0F && config.covariance_alpha <= 1.0F) ||
                                     !(config.diagonal_load_relative > 0.0F) ||
-                                    !(config.minimum_bin_power > 0.0F))) return false;
+                                    !(config.minimum_bin_power > 0.0F) ||
+                                    config.weight_update_interval_hops == 0U)) return false;
   snapshots_mailbox_ = snapshots;
   weights_mailbox_ = weights;
   config_ = config;
@@ -168,6 +169,8 @@ bool SlowPath::poll() noexcept {
         r.re += a * (outer.re - r.re);
         r.im += a * (outer.im - r.im);
       }
+  if (++hops_since_weight_update_ < config_.weight_update_interval_hops) return true;
+  hops_since_weight_update_ = 0;
   return updateWeights();
 }
 
