@@ -32,7 +32,7 @@ steering:
 
 suppression:
   enabled: false
-  backend: spectral
+  backend: conservative
   fade_ms: 120.0
   activity_threshold: 0.03
   confidence_threshold: 0.6
