@@ -75,7 +75,7 @@ telemetry:
 
 binaural:
   enabled: true
-  backend: array_downmix
+  backend: mono_reference
   direction:
     follow_steering: false
     azimuth_deg: 0.0
