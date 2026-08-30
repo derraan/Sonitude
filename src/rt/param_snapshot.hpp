@@ -3,6 +3,8 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 namespace sonitude::rt
@@ -12,42 +14,59 @@ class SnapshotBuffer
 {
  public:
   static_assert(std::is_trivially_copyable_v<T>, "RT snapshots must be trivially copyable");
+  static_assert(std::atomic<std::uint32_t>::is_always_lock_free,
+                "RT snapshots require lock-free 32-bit atomics");
 
-  explicit SnapshotBuffer(const T& initial) : last_(initial) {}
+  explicit SnapshotBuffer(const T& initial) { StoreWords(initial); }
 
   void publish(const T& value)
   {
-    const std::size_t write = write_.load(std::memory_order_relaxed);
-    const std::size_t next = (write + 1U) % kSlots;
-    if (next == read_.load(std::memory_order_acquire))
-    {
-      return;  // Keep the last complete snapshot rather than overwrite reader-owned data.
-    }
-    slots_[write] = value;
-    write_.store(next, std::memory_order_release);
+    const std::uint32_t seq = sequence_.load(std::memory_order_relaxed);
+    sequence_.store(seq + 1U, std::memory_order_release);
+    StoreWords(value);
+    sequence_.store(seq + 2U, std::memory_order_release);
   }
 
   T acquire() const
   {
-    std::size_t read = read_.load(std::memory_order_relaxed);
-    const std::size_t write = write_.load(std::memory_order_acquire);
-    T value = last_;
-    while (read != write)
+    for (;;)
     {
-      value = slots_[read];
-      read = (read + 1U) % kSlots;
+      const std::uint32_t before = sequence_.load(std::memory_order_acquire);
+      if ((before & 1U) != 0U)
+      {
+        continue;
+      }
+      WordArray words{};
+      for (std::size_t i = 0; i < kWords; ++i)
+      {
+        words[i] = payload_[i].load(std::memory_order_relaxed);
+      }
+      const std::uint32_t after = sequence_.load(std::memory_order_acquire);
+      if (before == after)
+      {
+        T value{};
+        std::memcpy(&value, words.data(), sizeof(T));
+        return value;
+      }
     }
-    last_ = value;
-    read_.store(read, std::memory_order_release);
-    return value;
   }
 
  private:
-  static constexpr std::size_t kSlots = 4;
-  std::array<T, kSlots> slots_{};
-  std::atomic<std::size_t> write_{0};
-  mutable std::atomic<std::size_t> read_{0};
-  mutable T last_{};
+  static constexpr std::size_t kWords = (sizeof(T) + sizeof(std::uint32_t) - 1U) / sizeof(std::uint32_t);
+  using WordArray = std::array<std::uint32_t, kWords>;
+
+  void StoreWords(const T& value)
+  {
+    WordArray words{};
+    std::memcpy(words.data(), &value, sizeof(T));
+    for (std::size_t i = 0; i < kWords; ++i)
+    {
+      payload_[i].store(words[i], std::memory_order_relaxed);
+    }
+  }
+
+  std::atomic<std::uint32_t> sequence_{0};
+  std::array<std::atomic<std::uint32_t>, kWords> payload_{};
 };
 
 template <typename T>
