@@ -13,43 +13,41 @@ class SnapshotBuffer
  public:
   static_assert(std::is_trivially_copyable_v<T>, "RT snapshots must be trivially copyable");
 
-  explicit SnapshotBuffer(const T& initial) : slots_{initial, initial, initial} {}
+  explicit SnapshotBuffer(const T& initial) : last_(initial) {}
 
   void publish(const T& value)
   {
-    const std::size_t published = published_.load(std::memory_order_acquire);
-    const std::size_t reading = reading_.load(std::memory_order_acquire);
-    std::size_t slot = 0;
-    while (slot == published || slot == reading)
+    const std::size_t write = write_.load(std::memory_order_relaxed);
+    const std::size_t next = (write + 1U) % kSlots;
+    if (next == read_.load(std::memory_order_acquire))
     {
-      ++slot;
+      return;  // Keep the last complete snapshot rather than overwrite reader-owned data.
     }
-    slots_[slot] = value;
-    published_.store(slot, std::memory_order_release);
+    slots_[write] = value;
+    write_.store(next, std::memory_order_release);
   }
 
   T acquire() const
   {
-    for (;;)
+    std::size_t read = read_.load(std::memory_order_relaxed);
+    const std::size_t write = write_.load(std::memory_order_acquire);
+    T value = last_;
+    while (read != write)
     {
-      const std::size_t slot = published_.load(std::memory_order_acquire);
-      reading_.store(slot, std::memory_order_release);
-      if (published_.load(std::memory_order_acquire) != slot)
-      {
-        reading_.store(kNotReading, std::memory_order_release);
-        continue;
-      }
-      const T value = slots_[slot];
-      reading_.store(kNotReading, std::memory_order_release);
-      return value;
+      value = slots_[read];
+      read = (read + 1U) % kSlots;
     }
+    last_ = value;
+    read_.store(read, std::memory_order_release);
+    return value;
   }
 
  private:
-  static constexpr std::size_t kNotReading = 3;
-  std::array<T, 3> slots_{};
-  std::atomic<std::size_t> published_{0};
-  mutable std::atomic<std::size_t> reading_{kNotReading};
+  static constexpr std::size_t kSlots = 4;
+  std::array<T, kSlots> slots_{};
+  std::atomic<std::size_t> write_{0};
+  mutable std::atomic<std::size_t> read_{0};
+  mutable T last_{};
 };
 
 template <typename T>
