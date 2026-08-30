@@ -429,7 +429,7 @@ void SpectralPostfilter::ProcessSpectrum(float* const re, float* const im, const
     {
       g = g_sp;
     }
-    g = std::clamp(g, 0.0F, 1.0F);
+    g = std::clamp(g, wiener_.gainFloor(), 1.0F);
     gains_[k] = g;
     re[k] *= g;
     im[k] *= g;
