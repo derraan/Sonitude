@@ -365,7 +365,8 @@ int main(int argc, char** argv)
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
     std::vector<sonitude::audio::MicFrame> calibrated_frames(period_frames);
     std::vector<float> mono(period_frames, 0.0F);
-    std::array<std::vector<float>, sonitude::dsp::kGuardLooks> guard_looks;
+    std::array<std::vector<float>, sonitude::dsp::kGuardLooks> guard_looks{
+        std::vector<float>(period_frames), std::vector<float>(period_frames), std::vector<float>(period_frames)};
     std::vector<float> binaural_left(period_frames, 0.0F);
     std::vector<float> binaural_right(period_frames, 0.0F);
     std::vector<sonitude::dsp::StereoSample> stereo(period_frames);
@@ -501,26 +502,16 @@ int main(int argc, char** argv)
             std::memory_order_relaxed);
         if (binaural_renderer_ready)
         {
-          if (binaural_backend == sonitude::dsp::BinauralBackend::ArrayDownmix)
-          {
-            binaural_renderer.processArray(
-                std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
-                std::span<float>(binaural_left.data(), frame_count),
-                std::span<float>(binaural_right.data(), frame_count));
-          }
-          else
-          {
-            const sonitude::audio::BeamformerSteering binaural_dir =
-                runtime_config.binaural.direction.follow_steering
-                    ? snapshot.target
-                    : sonitude::audio::BeamformerSteering{
-                          runtime_config.binaural.direction.azimuth_deg,
-                          runtime_config.binaural.direction.elevation_deg};
-            binaural_renderer.setDirection(binaural_dir);
-            binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
-                                      std::span<float>(binaural_left.data(), frame_count),
-                                      std::span<float>(binaural_right.data(), frame_count));
-          }
+          const sonitude::audio::BeamformerSteering binaural_dir =
+              runtime_config.binaural.direction.follow_steering
+                  ? snapshot.target
+                  : sonitude::audio::BeamformerSteering{
+                        runtime_config.binaural.direction.azimuth_deg,
+                        runtime_config.binaural.direction.elevation_deg};
+          binaural_renderer.setDirection(binaural_dir);
+          binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
+                                    std::span<float>(binaural_left.data(), frame_count),
+                                    std::span<float>(binaural_right.data(), frame_count));
           stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
                                  std::span<float>(binaural_right.data(), frame_count));
           for (std::size_t i = 0; i < frame_count; ++i)
