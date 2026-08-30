@@ -1,5 +1,6 @@
 #include "control/control_loop.hpp"
 
+#include <algorithm>
 #include <optional>
 
 #include "spatial/mock_doa_provider.hpp"
@@ -79,6 +80,7 @@ void ControlLoop::tick(const std::uint64_t now_ns)
     next.generation = generation_;
   }
 
+  next.confidence = active.has_value() ? std::clamp(active->confidence, 0.0F, 1.0F) : 0.0F;
   last_snapshot_ = next;
   publisher_.publish(next);
 }
