@@ -436,6 +436,12 @@ int main(int argc, char** argv)
       std::size_t frame_count = 0;
       if (!cap_worker.readBlock(std::span<sonitude::audio::MicFrame>(mic_frames), &frame_count))
       {
+        beamformer.resetStream();
+        suppressor.reset();
+        if (binaural_renderer_ready)
+        {
+          binaural_renderer.reset();
+        }
         hold_estimator_after_xrun = true;
         continue;
       }
