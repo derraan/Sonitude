@@ -264,16 +264,6 @@ target_link_libraries(
 )
 
 add_executable(
-  sonitude_spectral_bench
-  src/tools/spectral_bench.cpp
-)
-target_link_libraries(
-  sonitude_spectral_bench
-  PRIVATE
-    sonitude_core
-)
-
-add_executable(
   sonitude_binaural_bench
   src/tools/binaural_bench.cpp
 )
@@ -328,10 +318,6 @@ if(SONITUDE_BUILD_TESTS)
   add_test(
     NAME sonitude_unit_tests
     COMMAND sonitude_unit_tests
-  )
-  add_test(
-    NAME sonitude_spectral_bench
-    COMMAND sonitude_spectral_bench
   )
 
   if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
