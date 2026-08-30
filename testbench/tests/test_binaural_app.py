@@ -12,9 +12,9 @@ from app.processing.capabilities import (
 from app.storage.models import BinauralRequest
 
 
-def test_preferred_backend_skips_mono_reference_when_hrtf_exists() -> None:
+def test_preferred_backend_honors_supported_yaml_choice() -> None:
     available = ["array_downmix", "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference"]
-    assert preferred_binaural_backend(available, "mono_reference") == "array_downmix"
+    assert preferred_binaural_backend(available, "mono_reference") == "mono_reference"
     assert preferred_binaural_backend(available, "itd_ild") == "itd_ild"
     assert preferred_binaural_backend(["array_downmix", "mono_reference"], None) == "array_downmix"
 
@@ -40,12 +40,12 @@ def test_parse_capabilities_json_lists_suppression_backends() -> None:
 def test_preferred_suppression_backend_honors_yaml() -> None:
     available = ["off", "conservative", "spectral"]
     assert preferred_suppression_backend(available, "spectral") == "spectral"
-    assert preferred_suppression_backend(available, None) == "spectral"
+    assert preferred_suppression_backend(available, None) == "conservative"
 
 
 def test_config_reader_exposes_suppression_backend() -> None:
     summary = read_runtime_config_summary(DEFAULT_CONFIG_PATH)
-    assert summary.suppression.backend == "spectral"
+    assert summary.suppression.backend == "conservative"
 
 
 def test_parse_capabilities_json_lists_hrtf_backends() -> None:
