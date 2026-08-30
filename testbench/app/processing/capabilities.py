@@ -91,8 +91,8 @@ def preferred_binaural_backend(
     available: list[str],
     yaml_backend: str | None = None,
 ) -> str | None:
-    """Pick the GUI default. Prefer a real HRTF/ITD backend over L=R bypass."""
-    if yaml_backend and yaml_backend != "mono_reference" and yaml_backend in available:
+    """Pick the GUI default from YAML when supported, else the preferred backend."""
+    if yaml_backend and yaml_backend in available:
         return yaml_backend
     for name in PREFERRED_BINAURAL_BACKENDS:
         if name in available:
