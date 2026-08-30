@@ -1,20 +1,13 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <span>
 #include <vector>
 
 #include "dsp/spatial_looks.hpp"
-#include "dsp/streaming_stft.hpp"
 
 namespace sonitude::dsp
 {
-// Asymmetric per-bin noise-power tracker. Not Martin's minima statistics, not
-// Cohen MCRA/IMCRA: no sliding minimum, no bias correction, no SPP.
-// Bins that sit well above the cross-frequency median are treated as tonal and
-// are not absorbed into λ. allow_update=false freezes smoothed power and λ,
-// including first-frame initialization.
 class AsymmetricNoisePowerTracker
 {
  public:
@@ -26,8 +19,6 @@ class AsymmetricNoisePowerTracker
               std::span<const float> max_guard_power,
               float protect_ratio) noexcept;
   [[nodiscard]] std::span<const float> noisePower() const noexcept;
-  [[nodiscard]] std::span<const float> smoothedPower() const noexcept;
-  [[nodiscard]] std::size_t binCount() const noexcept { return n_bins_; }
   [[nodiscard]] bool initialized() const noexcept { return have_first_; }
   [[nodiscard]] std::size_t persistentBytes() const noexcept;
 
@@ -41,9 +32,6 @@ class AsymmetricNoisePowerTracker
   bool have_first_ = false;
 };
 
-// Bounded Wiener G = xi/(1+xi). The recursive term is G_prev² * γ_current, a
-// host heuristic, not Ephraim–Malah decision-directed a priori SNR (which
-// recurses on the previous posterior). Gains clamped to [gain_floor, 1].
 class BoundedWienerGain
 {
  public:
@@ -52,7 +40,6 @@ class BoundedWienerGain
   void compute(std::span<const float> power,
                std::span<const float> noise,
                std::span<float> gain_out) noexcept;
-  [[nodiscard]] float meanGain() const noexcept { return mean_gain_; }
   [[nodiscard]] float gainFloor() const noexcept { return gain_floor_; }
   [[nodiscard]] std::size_t persistentBytes() const noexcept;
 
@@ -61,7 +48,6 @@ class BoundedWienerGain
   float gain_floor_ = 0.25F;
   float dd_coeff_ = 0.9F;
   float time_coeff_ = 0.5F;
-  float mean_gain_ = 1.0F;
   std::vector<float> xi_{};
   std::vector<float> gain_{};
   std::vector<float> prev_gain_{};
@@ -76,6 +62,8 @@ struct SpectralPostfilterConfig
   float confidence_threshold = 0.6F;
 };
 
+// Spectral gain stage for the MVDR 128/32 STFT. This class does not perform
+// FFT, inverse FFT, or overlap-add. The beamformer owns the only transform.
 class SpectralPostfilter
 {
  public:
@@ -86,53 +74,27 @@ class SpectralPostfilter
   void setControl(bool focus_active, float confidence) noexcept;
   void setConfidenceThreshold(float threshold) noexcept;
   void setEstimatorHold(bool hold) noexcept;
-  void process(std::span<const float> input, std::span<float> output) noexcept;
-  void process(std::span<const float> target,
-               std::span<float> output,
-               GuardLookConstSpans guards) noexcept;
+  void processSpectrum(std::span<float> re,
+                       std::span<float> im,
+                       GuardSpectrumConstSpans guards = {}) noexcept;
 
-  [[nodiscard]] bool ready() const noexcept { return ready_; }
-  [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept;
-  [[nodiscard]] std::size_t fftSize() const noexcept { return stft_.fftSize(); }
-  [[nodiscard]] std::size_t hopSize() const noexcept { return stft_.hopSize(); }
-  [[nodiscard]] float gainFloorDb() const noexcept { return config_.gain_floor_db; }
+  [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept { return 0; }
   [[nodiscard]] float currentGain() const noexcept { return last_mean_gain_; }
   [[nodiscard]] std::size_t persistentBytes() const noexcept;
-  [[nodiscard]] std::size_t calculatedLookaheadSamples() const noexcept
-  {
-    return stft_.calculatedLookaheadSamples();
-  }
-
-  AsymmetricNoisePowerTracker& noiseTracker() noexcept { return tracker_; }
-  BoundedWienerGain& gainRule() noexcept { return wiener_; }
 
  private:
-  struct GuardHopContext
-  {
-    SpectralPostfilter* self = nullptr;
-    std::size_t index = 0;
-  };
-
-  static void OnHop(void* context, float* re, float* im, std::size_t fft_size) noexcept;
-  static void OnGuardHop(void* context, float* re, float* im, std::size_t fft_size) noexcept;
-  void StoreGuardPower(std::size_t index, const float* re, const float* im, std::size_t fft_size) noexcept;
-  void ProcessSpectrum(float* re, float* im, std::size_t fft_size) noexcept;
-
   bool ready_ = false;
   bool focus_active_ = true;
   bool have_spatial_ = false;
   float confidence_ = 1.0F;
   bool estimator_hold_ = false;
+  double hop_hz_ = 0.0;
   SpectralPostfilterConfig config_{};
-  StreamingStft stft_{};
-  std::array<StreamingStft, kGuardLooks> guard_stft_{};
-  std::array<GuardHopContext, kGuardLooks> guard_ctx_{};
   AsymmetricNoisePowerTracker tracker_{};
   BoundedWienerGain wiener_{};
   std::vector<float> power_{};
   std::vector<float> gains_{};
   std::vector<float> spatial_gain_{};
-  std::array<std::vector<float>, kGuardLooks> guard_power_{};
   std::vector<float> max_guard_power_{};
   float last_mean_gain_ = 1.0F;
   float apply_mix_ = 1.0F;
