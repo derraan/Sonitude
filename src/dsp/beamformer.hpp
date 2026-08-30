@@ -43,6 +43,22 @@ class MvdrBeamformer final : public IBeamformer
   void process(std::span<const audio::MicFrame> input,
                std::span<float> target_out,
                GuardLookSpans guards);
+  void resetStream() noexcept
+  {
+    if (crossfading_)
+    {
+      current_delays_ = pending_delays_;
+    }
+    pending_delays_ = current_delays_;
+    for (auto& stft : mic_stft_) stft.reset();
+    target_stft_.reset();
+    pending_stft_.reset();
+    for (auto& stft : guard_stft_) stft.reset();
+    for (auto& bin : cov_) bin = {};
+    crossfading_ = false;
+    emit_guards_ = false;
+    fade_cursor_ = 0;
+  }
   [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept;
 
  private:
