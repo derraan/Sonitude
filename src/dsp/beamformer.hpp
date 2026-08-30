@@ -43,6 +43,7 @@ class MvdrBeamformer final : public IBeamformer
   void process(std::span<const audio::MicFrame> input,
                std::span<float> target_out,
                GuardLookSpans guards);
+  void resetStream() noexcept;
   [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept;
 
  private:
