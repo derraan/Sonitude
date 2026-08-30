@@ -8,11 +8,11 @@
 namespace sonitude::control
 {
 ControlLoop::ControlLoop(spatial::IDoaProvider* provider,
-                         rt::SnapshotBuffer<SteeringSnapshot>* snapshots,
+                         rt::SnapshotPublisher<SteeringSnapshot> publisher,
                          const ControlLoopConfig config,
                          ConversationStateMachine* conversation)
     : provider_(provider),
-      snapshots_(snapshots),
+      publisher_(publisher),
       config_(config),
       conversation_(conversation),
       tracker_(config.failsafe_timeout_ns),
@@ -22,7 +22,7 @@ ControlLoop::ControlLoop(spatial::IDoaProvider* provider,
   last_snapshot_.ambient_mix = config_.ambient_floor_linear;
   last_snapshot_.failsafe = true;
   last_snapshot_.generation = generation_;
-  snapshots_->publish(last_snapshot_);
+  publisher_.publish(last_snapshot_);
 }
 
 void ControlLoop::tick(const std::uint64_t now_ns)
@@ -82,6 +82,6 @@ void ControlLoop::tick(const std::uint64_t now_ns)
 
   next.confidence = active.has_value() ? std::clamp(active->confidence, 0.0F, 1.0F) : 0.0F;
   last_snapshot_ = next;
-  snapshots_->publish(next);
+  publisher_.publish(next);
 }
 }  // namespace sonitude::control
