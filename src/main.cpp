@@ -488,7 +488,7 @@ int main(int argc, char** argv)
         if (suppression_backend != sonitude::dsp::SuppressionBackend::Off)
         {
           const bool focus_active = !snapshot.failsafe;
-          const float confidence = focus_active ? 1.0F : 0.0F;
+          const float confidence = focus_active ? snapshot.confidence : 0.0F;
           suppressor.setEstimatorHold(hold_estimator_after_xrun);
           hold_estimator_after_xrun = false;
           suppressor.setControl(focus_active, confidence);
