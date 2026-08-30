@@ -68,6 +68,7 @@ class MvdrBeamformer final : public IBeamformer
   std::size_t ramp_samples_ = 1;
   std::size_t fade_cursor_ = 0;
   bool crossfading_ = false;
+  bool emit_guards_ = false;
 
   app::SteeringConfig steering_config_{};
   audio::BeamformerSteering current_target_{};
