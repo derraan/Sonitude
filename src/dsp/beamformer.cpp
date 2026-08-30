@@ -281,6 +281,7 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   pending_delays_ = current_delays_;
   updateGuardDelays();
   crossfading_ = false;
+  emit_guards_ = false;
   fade_cursor_ = 0;
   configured_ = true;
 }
@@ -459,13 +460,23 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
   }
 
   FormLookSpectrum(current_delays_, y_re_, y_im_);
-  FormLookSpectrum(pending_delays_, pending_y_re_, pending_y_im_);
   target_stft_.overlapAddSpectrum(y_re_.data(), y_im_.data());
-  pending_stft_.overlapAddSpectrum(pending_y_re_.data(), pending_y_im_.data());
-  for (std::size_t g = 0; g < kGuardLooks; ++g)
+  if (crossfading_)
   {
-    FormLookSpectrum(guard_delays_[g], guard_y_re_[g], guard_y_im_[g]);
-    guard_stft_[g].overlapAddSpectrum(guard_y_re_[g].data(), guard_y_im_[g].data());
+    FormLookSpectrum(pending_delays_, pending_y_re_, pending_y_im_);
+    pending_stft_.overlapAddSpectrum(pending_y_re_.data(), pending_y_im_.data());
+  }
+  else
+  {
+    pending_stft_.overlapAddSpectrum(y_re_.data(), y_im_.data());
+  }
+  if (emit_guards_)
+  {
+    for (std::size_t g = 0; g < kGuardLooks; ++g)
+    {
+      FormLookSpectrum(guard_delays_[g], guard_y_re_[g], guard_y_im_[g]);
+      guard_stft_[g].overlapAddSpectrum(guard_y_re_[g].data(), guard_y_im_[g].data());
+    }
   }
 }
 
@@ -488,7 +499,7 @@ void MvdrBeamformer::process(const std::span<const audio::MicFrame> input,
     throw std::runtime_error("mono_out span too small for input");
   }
 
-  const bool write_guards = !guards[0].empty();
+  emit_guards_ = !guards[0].empty();
   for (std::size_t i = 0; i < input.size(); ++i)
   {
     for (std::size_t ch = 0; ch < audio::kMicChannels; ++ch)
@@ -512,9 +523,10 @@ void MvdrBeamformer::process(const std::span<const audio::MicFrame> input,
         crossfading_ = false;
         fade_cursor_ = 0;
         current_delays_ = pending_delays_;
+        std::swap(target_stft_, pending_stft_);
       }
     }
-    if (write_guards)
+    if (emit_guards_)
     {
       for (std::size_t g = 0; g < kGuardLooks; ++g)
       {
@@ -523,13 +535,6 @@ void MvdrBeamformer::process(const std::span<const audio::MicFrame> input,
         {
           guards[g][i] = gy;
         }
-      }
-    }
-    else
-    {
-      for (std::size_t g = 0; g < kGuardLooks; ++g)
-      {
-        (void)guard_stft_[g].pop();
       }
     }
   }
