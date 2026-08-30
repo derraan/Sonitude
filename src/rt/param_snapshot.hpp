@@ -52,8 +52,7 @@ class SnapshotBuffer
   }
 
  private:
-  static constexpr std::size_t kWords =
-      (sizeof(T) + sizeof(std::uint32_t) - 1U) / sizeof(std::uint32_t);
+  static constexpr std::size_t kWords = (sizeof(T) + sizeof(std::uint32_t) - 1U) / sizeof(std::uint32_t);
   using WordArray = std::array<std::uint32_t, kWords>;
 
   void StoreWords(const T& value)
@@ -68,5 +67,27 @@ class SnapshotBuffer
 
   std::atomic<std::uint32_t> sequence_{0};
   std::array<std::atomic<std::uint32_t>, kWords> payload_{};
+};
+
+template <typename T>
+class SnapshotPublisher
+{
+ public:
+  explicit SnapshotPublisher(SnapshotBuffer<T>* buffer) : buffer_(buffer) {}
+  void publish(const T& value) { buffer_->publish(value); }
+
+ private:
+  SnapshotBuffer<T>* buffer_ = nullptr;
+};
+
+template <typename T>
+class SnapshotReader
+{
+ public:
+  explicit SnapshotReader(const SnapshotBuffer<T>* buffer) : buffer_(buffer) {}
+  T acquire() const { return buffer_->acquire(); }
+
+ private:
+  const SnapshotBuffer<T>* buffer_ = nullptr;
 };
 }  // namespace sonitude::rt
