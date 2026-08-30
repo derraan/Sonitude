@@ -14,6 +14,8 @@
 
 namespace sonitude::dsp
 {
+class SpectralPostfilter;
+
 class IBeamformer
 {
  public:
@@ -27,9 +29,6 @@ class IBeamformer
   virtual void process(std::span<const audio::MicFrame> input, std::span<float> mono_out) = 0;
 };
 
-// Narrowband MVDR in the shared 128/32 STFT. Steering vector is the same
-// far-field + calibration delay law previously used by delay-and-sum.
-// Equal-weight delay-and-sum is the fallback when the covariance solve fails.
 class MvdrBeamformer final : public IBeamformer
 {
  public:
@@ -39,6 +38,7 @@ class MvdrBeamformer final : public IBeamformer
                  std::uint32_t sample_rate_hz,
                  std::size_t max_block_frames) override;
   void setTarget(audio::BeamformerSteering target) override;
+  void setSpectralPostfilter(SpectralPostfilter* filter) noexcept { spectral_filter_ = filter; }
   void process(std::span<const audio::MicFrame> input, std::span<float> mono_out) override;
   void process(std::span<const audio::MicFrame> input,
                std::span<float> target_out,
@@ -85,6 +85,7 @@ class MvdrBeamformer final : public IBeamformer
   std::size_t fade_cursor_ = 0;
   bool crossfading_ = false;
   bool emit_guards_ = false;
+  SpectralPostfilter* spectral_filter_ = nullptr;
 
   app::SteeringConfig steering_config_{};
   audio::BeamformerSteering current_target_{};
@@ -109,7 +110,6 @@ class MvdrBeamformer final : public IBeamformer
   std::array<std::vector<float>, kGuardLooks> guard_y_re_{};
   std::array<std::vector<float>, kGuardLooks> guard_y_im_{};
 
-  // R[bin][row][col] packed as {re, im}.
   std::vector<std::array<std::array<std::array<float, 2>, audio::kMicChannels>, audio::kMicChannels>>
       cov_{};
   float cov_beta_ = 0.02F;
