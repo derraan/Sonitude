@@ -31,6 +31,8 @@ from app.audio_io.device_manager import InputDeviceInfo, list_input_devices
 from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.realtime_controller import RealtimeWorker
 from app.processing.capabilities import query_tool_capabilities
+from app.storage.models import SuppressorRequest
+from app.ui.beamformer_controls import BeamformerControls
 from app.ui.binaural_controls import BinauralControls
 from app.ui.layout_persist import KEY_REALTIME_H, REALTIME_H_DEFAULT, restore_splitter, save_splitter
 from app.ui.level_meter import DbfsMeter
@@ -138,9 +140,12 @@ class RealtimeTab(QWidget):
         preamp_layout.addWidget(self._preamp_slider)
         device_form.addRow("Input gain:", preamp_row)
 
-        self._steering = SteeringControls("Beamformer steering (delay-and-sum)")
+        self._steering = SteeringControls("Beamformer steering (MVDR)")
         self._steering.azimuthChanged.connect(self._on_steering_changed)
         self._steering.blendChanged.connect(self._on_blend_changed)
+
+        self._beamformer = BeamformerControls()
+        self._beamformer.changed.connect(self._push_suppressor)
 
         self._suppressor = SuppressorControls(self._capabilities)
         self._suppressor.changed.connect(self._push_suppressor)
@@ -164,6 +169,7 @@ class RealtimeTab(QWidget):
         config_layout = QVBoxLayout(config_inner)
         config_layout.addWidget(device_box)
         config_layout.addWidget(self._steering)
+        config_layout.addWidget(self._beamformer)
         config_layout.addWidget(self._suppressor)
         config_layout.addWidget(self._binaural)
         config_layout.addWidget(meters_box)
@@ -229,9 +235,14 @@ class RealtimeTab(QWidget):
         if self._worker is not None and self._worker.isRunning():
             self._on_restart()
 
+    def _live_dsp_request(self) -> SuppressorRequest:
+        request = self._suppressor.request()
+        self._beamformer.apply_to_request(request)
+        return request
+
     def _push_suppressor(self) -> None:
         if self._worker is not None:
-            self._worker.set_suppressor(self._suppressor.request())
+            self._worker.set_suppressor(self._live_dsp_request())
 
     def _on_preamp_changed(self, value: int) -> None:
         self._preamp_label.setText(f"Preamp boost {value} dB")
@@ -305,7 +316,7 @@ class RealtimeTab(QWidget):
             suppression_backend=self._suppressor.suppression_backend(),
             queue_capacity=self._queue_capacity_spin.value(),
             binaural=self._binaural.request(),
-            suppressor=self._suppressor.request(),
+            suppressor=self._live_dsp_request(),
         )
         worker.set_steering(self._steering.commanded_azimuth_deg(), 0.0, self._steering.width_deg())
         worker.set_preamp_db(float(self._preamp_slider.value()))

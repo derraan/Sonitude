@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import yaml
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
@@ -115,6 +116,61 @@ class SuppressorControls(QWidget):
             "How quickly the envelope falls. Lower = slower decay, less chatter between words."
         )
 
+        self._spectral_gain_floor = QDoubleSpinBox()
+        self._spectral_gain_floor.setRange(-80.0, 0.0)
+        self._spectral_gain_floor.setSingleStep(1.0)
+        self._spectral_gain_floor.setDecimals(1)
+        self._spectral_gain_floor.setSuffix(" dB")
+        self._spectral_gain_floor.setValue(-12.0)
+        self._spectral_gain_floor.setToolTip(
+            "Minimum Wiener gain per bin. Lower (more negative) = deeper noise attenuation."
+        )
+
+        self._spectral_protect = QDoubleSpinBox()
+        self._spectral_protect.setRange(1.0, 16.0)
+        self._spectral_protect.setSingleStep(0.5)
+        self._spectral_protect.setDecimals(1)
+        self._spectral_protect.setValue(4.0)
+        self._spectral_protect.setToolTip(
+            "Target/guard power ratio for speech protection. Lower = more bins treated as noise."
+        )
+
+        self._spectral_overestimate = QDoubleSpinBox()
+        self._spectral_overestimate.setRange(1.0, 8.0)
+        self._spectral_overestimate.setSingleStep(0.25)
+        self._spectral_overestimate.setDecimals(2)
+        self._spectral_overestimate.setValue(2.0)
+        self._spectral_overestimate.setToolTip(
+            "Noise power multiplier in the Wiener denominator. Higher = more aggressive suppression."
+        )
+
+        self._spectral_tonal = QDoubleSpinBox()
+        self._spectral_tonal.setRange(2.0, 16.0)
+        self._spectral_tonal.setSingleStep(0.5)
+        self._spectral_tonal.setDecimals(1)
+        self._spectral_tonal.setValue(6.0)
+        self._spectral_tonal.setToolTip(
+            "Bins above median×this are treated as tonal and skipped for noise learning."
+        )
+
+        self._spectral_noise_rise = QDoubleSpinBox()
+        self._spectral_noise_rise.setRange(50.0, 4000.0)
+        self._spectral_noise_rise.setSingleStep(50.0)
+        self._spectral_noise_rise.setDecimals(0)
+        self._spectral_noise_rise.setSuffix(" ms")
+        self._spectral_noise_rise.setValue(480.0)
+        self._spectral_noise_rise.setToolTip(
+            "How quickly the noise floor rises when level increases. Lower = faster noise tracking."
+        )
+
+        self._spectral_widgets = (
+            self._spectral_gain_floor,
+            self._spectral_protect,
+            self._spectral_overestimate,
+            self._spectral_tonal,
+            self._spectral_noise_rise,
+        )
+
         self._conservative_note = QLabel("")
         apply_secondary_note(self._conservative_note)
         self._note = QLabel("")
@@ -136,9 +192,20 @@ class SuppressorControls(QWidget):
         form.addRow("Envelope attack:", self._env_attack)
         form.addRow("Envelope release:", self._env_release)
 
+        self._spectral_box = QGroupBox("Spectral noise suppression tuning")
+        spectral_form = QFormLayout(self._spectral_box)
+        spectral_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        spectral_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        spectral_form.addRow("Gain floor:", self._spectral_gain_floor)
+        spectral_form.addRow("Speech protect ratio:", self._spectral_protect)
+        spectral_form.addRow("Noise overestimate:", self._spectral_overestimate)
+        spectral_form.addRow("Tonal guard:", self._spectral_tonal)
+        spectral_form.addRow("Noise adapt time:", self._spectral_noise_rise)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(box)
+        layout.addWidget(self._spectral_box)
         layout.addWidget(self._conservative_note)
         layout.addWidget(self._note)
 
@@ -157,6 +224,7 @@ class SuppressorControls(QWidget):
             self._confidence,
             self._env_attack,
             self._env_release,
+            *self._spectral_widgets,
         ):
             if isinstance(widget, QComboBox):
                 widget.currentIndexChanged.connect(lambda _i: self.changed.emit())
@@ -182,6 +250,11 @@ class SuppressorControls(QWidget):
             envelope_release_coeff=self._env_release.value(),
             confidence=self._confidence.value(),
             focus_active=bool(self._focus.currentData()),
+            spectral_gain_floor_db=self._spectral_gain_floor.value(),
+            spectral_protect_ratio=self._spectral_protect.value(),
+            spectral_noise_overestimate=self._spectral_overestimate.value(),
+            spectral_tonal_ratio=self._spectral_tonal.value(),
+            spectral_noise_rise_ms=self._spectral_noise_rise.value(),
         )
 
     def _on_backend_changed(self, _index: int) -> None:
@@ -218,6 +291,10 @@ class SuppressorControls(QWidget):
         ):
             widget.setEnabled(enabled and conservative)
         self._ambient_floor_db.setEnabled(enabled and conservative)
+        spectral_enabled = enabled and spectral
+        self._spectral_box.setEnabled(spectral_enabled)
+        for widget in self._spectral_widgets:
+            widget.setEnabled(spectral_enabled)
         if conservative:
             self._conservative_note.setText(
                 "Broadband gain gate on beamformed mono: when focus is active and gates pass, "
@@ -225,9 +302,8 @@ class SuppressorControls(QWidget):
             )
         elif spectral:
             self._conservative_note.setText(
-                "Spectral backend uses focus, live confidence, and the confidence threshold. "
-                "Ambient floor, fade, activity, and envelope knobs are conservative-only and "
-                "are ignored. FFT/hop/gain floor come from YAML suppression.spectral.*."
+                "Spectral backend: tune noise detection and Wiener depth below. "
+                "Focus, live confidence, and confidence threshold gate when learning runs."
             )
         else:
             self._conservative_note.setText("Backend off — beamformed mono passes through unchanged.")
@@ -284,5 +360,10 @@ class SuppressorControls(QWidget):
             self._confidence_threshold.setValue(s.confidence_threshold)
             self._env_attack.setValue(s.envelope_attack_coeff)
             self._env_release.setValue(s.envelope_release_coeff)
+            with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as handle:
+                raw = yaml.safe_load(handle) or {}
+            spectral = (raw.get("suppression") or {}).get("spectral") or {}
+            if isinstance(spectral, dict):
+                self._spectral_gain_floor.setValue(float(spectral.get("gain_floor_db", -12.0)))
         except Exception:  # noqa: BLE001 - keep built-in defaults
             pass

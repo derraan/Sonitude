@@ -10,11 +10,20 @@
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
 #include "dsp/spatial_looks.hpp"
+#include "dsp/steering_lut.hpp"
 #include "dsp/streaming_stft.hpp"
 
 namespace sonitude::dsp
 {
+class HrtfTable;
 class SpectralPostfilter;
+
+struct MvdrTuningParams
+{
+  float diag_load = 0.08F;
+  float max_white_noise_gain = 4.0F;
+  float cov_tau_sec = 0.080F;
+};
 
 class MvdrBeamformer
 {
@@ -23,24 +32,17 @@ class MvdrBeamformer
                  const app::SteeringConfig& steering_config,
                  const app::CalibrationConfig& calibration,
                  std::uint32_t sample_rate_hz,
-                 std::size_t max_block_frames);
+                 std::size_t max_block_frames,
+                 const HrtfTable* kemar_table = nullptr);
   void setTarget(audio::BeamformerSteering target);
+  void setTuning(const MvdrTuningParams& tuning) noexcept;
   void setSpectralPostfilter(SpectralPostfilter* filter) noexcept { spectral_filter_ = filter; }
   void process(std::span<const audio::MicFrame> input, std::span<float> mono_out);
-  void resetStream() noexcept
-  {
-    if (crossfading_)
-    {
-      current_delays_ = pending_delays_;
-    }
-    pending_delays_ = current_delays_;
-    for (auto& stft : mic_stft_) stft.reset();
-    target_stft_.reset();
-    pending_stft_.reset();
-    for (auto& bin : cov_) bin = {};
-    crossfading_ = false;
-    fade_cursor_ = 0;
-  }
+  void processStereo(std::span<const audio::MicFrame> input,
+                     std::span<float> left_out,
+                     std::span<float> right_out);
+  [[nodiscard]] bool binauralOutputEnabled() const noexcept { return binaural_output_; }
+  void resetStream() noexcept;
   [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept;
 
  private:
@@ -53,20 +55,27 @@ class MvdrBeamformer
     std::size_t channel = 0;
   };
 
-  DelayArray computeRelativeDelays(audio::BeamformerSteering target) const;
+  DelayArray computeRelativeDelays(audio::BeamformerSteering target,
+                                   std::size_t reference_mic_index) const;
+  DelayArray computeBinauralDelays(audio::BeamformerSteering target, bool left_ear) const;
   void updateGuardDelays();
   static void OnMicHop(void* context, float* re, float* im, std::size_t fft_size) noexcept;
   void StoreMicSpectrum(std::size_t channel, const float* re, const float* im, std::size_t fft_size) noexcept;
   void FormLooksAndSynthesize(std::size_t fft_size) noexcept;
   void FormLookSpectrum(const DelayArray& delays, std::vector<float>& y_re, std::vector<float>& y_im) const noexcept;
   void ApplyHermitian(std::vector<float>& y_re, std::vector<float>& y_im, std::size_t fft_size) const noexcept;
+  float PopMono();
+  float PopEar(bool left_channel);
 
   bool configured_ = false;
+  bool binaural_output_ = false;
+  bool near_field_ = true;
   std::uint32_t sample_rate_hz_ = 0;
   std::size_t ramp_samples_ = 1;
   std::size_t fade_cursor_ = 0;
   bool crossfading_ = false;
   SpectralPostfilter* spectral_filter_ = nullptr;
+  KemarSteeringLut steering_model_{};
 
   app::SteeringConfig steering_config_{};
   audio::BeamformerSteering current_target_{};
@@ -74,12 +83,20 @@ class MvdrBeamformer
   DelayArray calibration_delays_{};
   DelayArray current_delays_{};
   DelayArray pending_delays_{};
+  DelayArray current_left_delays_{};
+  DelayArray pending_left_delays_{};
+  DelayArray current_right_delays_{};
+  DelayArray pending_right_delays_{};
   std::array<DelayArray, kGuardLooks> guard_delays_{};
 
   std::array<StreamingStft, audio::kMicChannels> mic_stft_{};
   std::array<MicHopContext, audio::kMicChannels> mic_ctx_{};
   StreamingStft target_stft_{};
   StreamingStft pending_stft_{};
+  StreamingStft left_target_stft_{};
+  StreamingStft left_pending_stft_{};
+  StreamingStft right_target_stft_{};
+  StreamingStft right_pending_stft_{};
 
   std::array<std::vector<float>, audio::kMicChannels> x_re_{};
   std::array<std::vector<float>, audio::kMicChannels> x_im_{};
@@ -87,11 +104,20 @@ class MvdrBeamformer
   std::vector<float> y_im_{};
   std::vector<float> pending_y_re_{};
   std::vector<float> pending_y_im_{};
+  std::vector<float> left_y_re_{};
+  std::vector<float> left_y_im_{};
+  std::vector<float> right_y_re_{};
+  std::vector<float> right_y_im_{};
+  std::vector<float> pending_left_y_re_{};
+  std::vector<float> pending_left_y_im_{};
+  std::vector<float> pending_right_y_re_{};
+  std::vector<float> pending_right_y_im_{};
   std::array<std::vector<float>, kGuardLooks> guard_y_re_{};
   std::array<std::vector<float>, kGuardLooks> guard_y_im_{};
 
   std::vector<std::array<std::array<std::array<float, 2>, audio::kMicChannels>, audio::kMicChannels>>
       cov_{};
+  MvdrTuningParams tuning_{};
   float cov_beta_ = 0.02F;
 };
 }  // namespace sonitude::dsp

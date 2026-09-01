@@ -283,9 +283,28 @@ int main(int argc, char** argv)
          .ambient_floor_linear = runtime_config.steering.ambient_floor_linear},
         &conversation);
 
+    std::string steering_table_path = runtime_config.steering.kemar_lut.table_path;
+    if (steering_table_path.empty())
+    {
+      steering_table_path = runtime_config.binaural.profile.table_path;
+    }
+    std::unique_ptr<sonitude::dsp::HrtfTable> steering_hrtf;
+    if (runtime_config.steering.kemar_lut.enabled)
+    {
+      steering_hrtf = TryLoadHrtfTable(steering_table_path);
+      if (steering_hrtf == nullptr || steering_hrtf->empty())
+      {
+        throw std::runtime_error("KEMAR steering LUT enabled but HRTF table could not be loaded");
+      }
+    }
+
     sonitude::dsp::MvdrBeamformer beamformer;
-    beamformer.configure(
-        geometry, runtime_config.steering, calibration, dsp_sample_rate_hz, 4096);
+    beamformer.configure(geometry,
+                         runtime_config.steering,
+                         calibration,
+                         dsp_sample_rate_hz,
+                         4096,
+                         steering_hrtf.get());
     sonitude::dsp::SuppressionStage suppressor;
     const auto suppression_backend =
         sonitude::dsp::ParseSuppressionBackend(runtime_config.suppression.backend);
@@ -310,7 +329,8 @@ int main(int argc, char** argv)
     constexpr std::size_t kPlaybackRingSlots = 16;
     const std::size_t period_frames = cap_worker.periodFrames();
 
-    const bool binaural_enabled = runtime_config.binaural.enabled;
+    const bool binaural_mvdr = runtime_config.steering.binaural_output;
+    const bool binaural_enabled = runtime_config.binaural.enabled && !binaural_mvdr;
     const auto binaural_backend = ParseBinauralBackend(runtime_config.binaural.backend);
     std::unique_ptr<sonitude::dsp::HrtfTable> compact_hrtf;
     std::unique_ptr<sonitude::dsp::HrtfTable> reference_hrtf;
@@ -336,29 +356,23 @@ int main(int argc, char** argv)
            binaural_backend == sonitude::dsp::BinauralBackend::FullHrtfReference) &&
           (table == nullptr || table->empty()))
       {
-        std::cerr << "realtime: binaural backend requires HRTF table; falling back to mono L=R\n";
+        throw std::runtime_error("binaural backend requires HRTF table");
       }
-      else
-      {
-        try
-        {
-          binaural_renderer.configure({.sample_rate_hz = dsp_sample_rate_hz,
-                                       .backend = binaural_backend,
-                                       .transition_ms = runtime_config.binaural.transition.duration_ms,
-                                       .max_block_frames = period_frames,
-                                       .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
-                                                   .max_ild_db = runtime_config.binaural.model.max_ild_db},
-                                       .table = table,
-                                       .array_downmix = ArrayDownmixForGeometry(geometry)});
-          stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
-          binaural_renderer_ready = true;
-          std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
-        }
-        catch (const std::exception& ex)
-        {
-          std::cerr << "realtime: binaural configure failed: " << ex.what() << '\n';
-        }
-      }
+      binaural_renderer.configure({.sample_rate_hz = dsp_sample_rate_hz,
+                                   .backend = binaural_backend,
+                                   .transition_ms = runtime_config.binaural.transition.duration_ms,
+                                   .max_block_frames = period_frames,
+                                   .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
+                                               .max_ild_db = runtime_config.binaural.model.max_ild_db},
+                                   .table = table,
+                                   .array_downmix = ArrayDownmixForGeometry(geometry)});
+      binaural_renderer_ready = true;
+      std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
+    }
+    if (binaural_mvdr)
+    {
+      stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
+      std::cout << "Binaural MVDR output enabled (near-field + KEMAR steering LUT)\n";
     }
 
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
@@ -472,26 +486,23 @@ int main(int argc, char** argv)
         suppressor.setEstimatorHold(hold_estimator_after_xrun);
         hold_estimator_after_xrun = false;
         suppressor.setControl(focus_active, confidence);
-        beamformer.process(
-            std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
-            std::span<float>(mono.data(), frame_count));
-        suppressor.process(std::span<float>(mono.data(), frame_count));
-        limiter.process(std::span<float>(mono.data(), frame_count));
-        counters.suppressor_gain_milli.store(
-            static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),
-            std::memory_order_relaxed);
-        if (binaural_renderer_ready)
+        if (binaural_mvdr)
         {
-          const sonitude::audio::BeamformerSteering binaural_dir =
-              runtime_config.binaural.direction.follow_steering
-                  ? snapshot.target
-                  : sonitude::audio::BeamformerSteering{
-                        runtime_config.binaural.direction.azimuth_deg,
-                        runtime_config.binaural.direction.elevation_deg};
-          binaural_renderer.setDirection(binaural_dir);
-          binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
-                                    std::span<float>(binaural_left.data(), frame_count),
-                                    std::span<float>(binaural_right.data(), frame_count));
+          beamformer.processStereo(
+              std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+              std::span<float>(binaural_left.data(), frame_count),
+              std::span<float>(binaural_right.data(), frame_count));
+          for (std::size_t i = 0; i < frame_count; ++i)
+          {
+            mono[i] = 0.5F * (binaural_left[i] + binaural_right[i]);
+          }
+          suppressor.process(std::span<float>(mono.data(), frame_count));
+          const float gain = suppressor.currentGain();
+          for (std::size_t i = 0; i < frame_count; ++i)
+          {
+            binaural_left[i] *= gain;
+            binaural_right[i] *= gain;
+          }
           stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
                                  std::span<float>(binaural_right.data(), frame_count));
           for (std::size_t i = 0; i < frame_count; ++i)
@@ -502,12 +513,39 @@ int main(int argc, char** argv)
         }
         else
         {
-          for (std::size_t i = 0; i < frame_count; ++i)
+          beamformer.process(
+              std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+              std::span<float>(mono.data(), frame_count));
+          suppressor.process(std::span<float>(mono.data(), frame_count));
+          limiter.process(std::span<float>(mono.data(), frame_count));
+          if (binaural_renderer_ready)
           {
-            stereo[i].left = mono[i];
-            stereo[i].right = mono[i];
+            const sonitude::audio::BeamformerSteering binaural_dir =
+                runtime_config.binaural.direction.follow_steering
+                    ? snapshot.target
+                    : sonitude::audio::BeamformerSteering{
+                          runtime_config.binaural.direction.azimuth_deg,
+                          runtime_config.binaural.direction.elevation_deg};
+            binaural_renderer.setDirection(binaural_dir);
+            binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
+                                      std::span<float>(binaural_left.data(), frame_count),
+                                      std::span<float>(binaural_right.data(), frame_count));
+            stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
+                                   std::span<float>(binaural_right.data(), frame_count));
+            for (std::size_t i = 0; i < frame_count; ++i)
+            {
+              stereo[i].left = binaural_left[i];
+              stereo[i].right = binaural_right[i];
+            }
+          }
+          else
+          {
+            throw std::runtime_error("mono L=R playback path is disabled; enable steering.binaural_output");
           }
         }
+        counters.suppressor_gain_milli.store(
+            static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),
+            std::memory_order_relaxed);
       }
 
       std::copy(stereo.begin(),

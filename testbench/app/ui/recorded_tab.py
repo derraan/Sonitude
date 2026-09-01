@@ -4,8 +4,9 @@ run the existing algorithm via BatchWorker, and inspect results."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,13 +29,14 @@ from PySide6.QtWidgets import (
 )
 
 from app.audio_io import audio_loader
-from app.audio_io.stream_io import load_file_overview
+from app.audio_io.stream_io import FileOverview, load_file_overviews_parallel
 from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.batch_controller import BatchWorker
 from app.controller.file_preview_controller import FilePreviewWorker
 from app.processing.capabilities import query_tool_capabilities
-from app.storage.models import SteeringEvent
+from app.storage.models import SteeringEvent, SuppressorRequest
 from app.storage.result_store import ResultStore
+from app.ui.beamformer_controls import BeamformerControls
 from app.ui.binaural_controls import BinauralControls
 from app.ui.layout_persist import (
     KEY_RECORDED_H,
@@ -100,6 +102,23 @@ def _scroll_area(inner: QWidget) -> QScrollArea:
     return area
 
 
+class _PlotOverviewWorker(QThread):
+    loaded = Signal(int, object)
+
+    def __init__(
+        self,
+        generation: int,
+        specs: dict[str, tuple[Path, dict[str, Any]]],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._generation = generation
+        self._specs = specs
+
+    def run(self) -> None:
+        self.loaded.emit(self._generation, load_file_overviews_parallel(self._specs))
+
+
 class RecordedDataTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -112,6 +131,8 @@ class RecordedDataTab(QWidget):
         self._last_metrics: dict[str, dict] = {}
         self._capabilities = query_tool_capabilities("sonitude_stream_process")
         self._plot_cache: dict = {}
+        self._plot_load_generation = 0
+        self._plot_overview_worker: _PlotOverviewWorker | None = None
         self._layout_restored = False
         self._preview: FilePreviewWorker | None = None
 
@@ -151,7 +172,9 @@ class RecordedDataTab(QWidget):
         input_layout.addWidget(metadata_box)
         input_layout.addWidget(self._validation_label)
 
-        self._steering = SteeringControls("Beamformer steering (delay-and-sum)")
+        self._steering = SteeringControls("Beamformer steering (MVDR)")
+
+        self._beamformer = BeamformerControls()
 
         self._suppressor = SuppressorControls(self._capabilities)
 
@@ -192,6 +215,7 @@ class RecordedDataTab(QWidget):
         config_inner = QWidget()
         config_layout = QVBoxLayout(config_inner)
         config_layout.addWidget(self._steering)
+        config_layout.addWidget(self._beamformer)
         config_layout.addWidget(self._live_dsp)
         config_layout.addWidget(self._suppressor)
         config_layout.addWidget(export_box)
@@ -267,6 +291,7 @@ class RecordedDataTab(QWidget):
         self.playback_panel.boostChanged.connect(self._on_live_boost)
         self._steering.azimuthChanged.connect(self._push_live_params)
         self._steering.blendChanged.connect(lambda _w: self._push_live_params())
+        self._beamformer.changed.connect(self._push_live_params)
         self._suppressor.changed.connect(self._push_live_params)
         self._suppressor.backendChanged.connect(self._on_suppression_backend_changed)
         self._binaural.changed.connect(self._push_live_params)
@@ -471,12 +496,17 @@ class RecordedDataTab(QWidget):
             self._on_live_stop()
             self._on_live_play()
 
+    def _live_dsp_request(self) -> SuppressorRequest:
+        request = self._suppressor.request()
+        self._beamformer.apply_to_request(request)
+        return request
+
     def _push_live_params(self, *_args) -> None:
         if self._preview is None or not self._preview.isRunning():
             return
         self._preview.set_steering(self._steering.commanded_azimuth_deg(), 0.0, self._steering.width_deg())
         self._preview.set_binaural(self._binaural.request())
-        self._preview.set_suppressor(self._suppressor.request())
+        self._preview.set_suppressor(self._live_dsp_request())
 
     def _on_live_volume(self, volume: float) -> None:
         if self._preview is not None:
@@ -508,7 +538,7 @@ class RecordedDataTab(QWidget):
             suppression=self._suppressor.suppression_mode(),
             suppression_backend=self._suppressor.suppression_backend(),
             binaural=self._binaural.request(),
-            suppressor=self._suppressor.request(),
+            suppressor=self._live_dsp_request(),
         )
         worker.set_steering(self._steering.commanded_azimuth_deg(), 0.0, self._steering.width_deg())
         worker.set_volume(self.playback_panel.volume())
@@ -580,39 +610,55 @@ class RecordedDataTab(QWidget):
         sweep = metrics.get("steering", {}).get("objective_sweep_test")
         self._steering.set_estimated_azimuth_deg(sweep["measured_peak_azimuth_deg"] if sweep else None)
 
-        try:
-            overview = load_file_overview(processed_path)
-            raw_overview = load_file_overview(raw_path, n_spec=0) if raw_path.exists() else None
-            residual_overview = load_file_overview(residual_path, n_spec=0) if residual_path.exists() else None
-            duration_s = overview.duration_s
-            sample_rate = overview.sample_rate_hz
-            self._plot_cache = {
-                "sample_rate": sample_rate,
-                "raw": None if raw_overview is None else raw_overview.waveform,
-                "processed": overview.waveform,
-                "residual": None if residual_overview is None else residual_overview.waveform,
-                "duration_s": duration_s,
-            }
-            self.visualization_panel.plot_waveforms(
-                sample_rate,
-                raw=self._plot_cache["raw"],
-                processed=overview.waveform,
-                residual=self._plot_cache["residual"],
-                emphasize=self.playback_panel.listen_source(),
-                duration_s=duration_s,
-            )
-            self.visualization_panel.plot_spectrogram(
-                overview.waveform,
-                sample_rate,
-                duration_s=duration_s,
-                freqs=overview.spectrogram_freqs,
-                spectrogram_db=overview.spectrogram_db,
-            )
-            self.visualization_panel.plot_levels(
-                overview.waveform,
-                sample_rate,
-                duration_s=duration_s,
-                rms_dbfs=overview.rms_dbfs,
-            )
-        except Exception:  # noqa: BLE001
+        specs: dict[str, tuple[Path, dict[str, Any]]] = {"processed": (processed_path, {})}
+        if raw_path.exists():
+            specs["raw"] = (raw_path, {"n_spec": 0})
+        if residual_path.exists():
+            specs["residual"] = (residual_path, {"n_spec": 0})
+
+        self._plot_load_generation += 1
+        generation = self._plot_load_generation
+        worker = _PlotOverviewWorker(generation, specs, parent=self)
+        worker.loaded.connect(self._on_plot_overviews_loaded)
+        self._plot_overview_worker = worker
+        worker.start()
+
+    def _on_plot_overviews_loaded(self, generation: int, overviews: dict[str, FileOverview]) -> None:
+        if generation != self._plot_load_generation:
+            return
+        overview = overviews.get("processed")
+        if overview is None:
             self._plot_cache = {}
+            return
+        raw_overview = overviews.get("raw")
+        residual_overview = overviews.get("residual")
+        duration_s = overview.duration_s
+        sample_rate = overview.sample_rate_hz
+        self._plot_cache = {
+            "sample_rate": sample_rate,
+            "raw": None if raw_overview is None else raw_overview.waveform,
+            "processed": overview.waveform,
+            "residual": None if residual_overview is None else residual_overview.waveform,
+            "duration_s": duration_s,
+        }
+        self.visualization_panel.plot_waveforms(
+            sample_rate,
+            raw=self._plot_cache["raw"],
+            processed=overview.waveform,
+            residual=self._plot_cache["residual"],
+            emphasize=self.playback_panel.listen_source(),
+            duration_s=duration_s,
+        )
+        self.visualization_panel.plot_spectrogram(
+            overview.waveform,
+            sample_rate,
+            duration_s=duration_s,
+            freqs=overview.spectrogram_freqs,
+            spectrogram_db=overview.spectrogram_db,
+        )
+        self.visualization_panel.plot_levels(
+            overview.waveform,
+            sample_rate,
+            duration_s=duration_s,
+            rms_dbfs=overview.rms_dbfs,
+        )

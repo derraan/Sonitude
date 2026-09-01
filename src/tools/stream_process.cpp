@@ -2,11 +2,11 @@
 // calibration -> beamformer -> suppressor -> limiter chain, plus optional
 // binaural rendering.
 //
-// Protocol v3 (little-endian). See testbench/app/processing/protocol.py.
+// Protocol v4 (little-endian). See testbench/app/processing/protocol.py.
 //
-// Input header (76 bytes):
+// Input header (108 bytes):
 //   u32 magic              = 0x32424253 ("SBB2")
-//   u16 protocol_version   = 3
+//   u16 protocol_version   = 4
 //   u16 message_type       = AUDIO_BLOCK(1) | SHUTDOWN(2)
 //   u32 sequence
 //   u32 frame_count
@@ -26,11 +26,19 @@
 //   f32 suppression_envelope_attack_coeff
 //   f32 suppression_envelope_release_coeff
 //   f32 suppression_confidence
+//   f32 spectral_gain_floor_db
+//   f32 spectral_protect_ratio
+//   f32 spectral_noise_overestimate
+//   f32 spectral_tonal_ratio
+//   f32 spectral_noise_rise_ms
+//   f32 mvdr_max_wn_gain
+//   f32 mvdr_cov_tau_ms
+//   f32 mvdr_diag_load
 //   f32 pcm[frame_count * 6]    // only if payload_length > 0
 //
 // Output header (24 bytes):
 //   u32 magic              = 0x324F4253 ("SBO2")
-//   u16 protocol_version   = 3
+//   u16 protocol_version   = 4
 //   u16 message_type
 //   u32 sequence           // echoes the request
 //   u32 frame_count
@@ -78,7 +86,7 @@ namespace
 {
 constexpr std::uint32_t kInputMagic = 0x32424253U;
 constexpr std::uint32_t kOutputMagic = 0x324F4253U;
-constexpr std::uint16_t kProtocolVersion = 3;
+constexpr std::uint16_t kProtocolVersion = 4;
 constexpr std::uint16_t kMsgAudioBlock = 1;
 constexpr std::uint16_t kMsgShutdown = 2;
 constexpr std::uint16_t kMsgError = 3;
@@ -130,7 +138,7 @@ void PrintUsage()
 void PrintCapabilities()
 {
   std::cout << "{"
-            << "\"protocol_version\":3,"
+            << "\"protocol_version\":4,"
             << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"],"
                "\"backends\":[\"conservative\",\"spectral\"]},"
             << "\"taps\":[\"processed\"],"
@@ -193,6 +201,12 @@ struct LiveSuppressorParams
   float envelope_attack_coeff = 0.35F;
   float envelope_release_coeff = 0.01F;
   float confidence = 1.0F;
+};
+
+struct LiveDspTuningParams
+{
+  sonitude::dsp::SpectralTuningParams spectral{};
+  sonitude::dsp::MvdrTuningParams mvdr{};
 };
 
 bool NearlyEqual(const float a, const float b, const float epsilon = 1.0e-4F)
@@ -466,8 +480,32 @@ int main(int argc, char** argv)
     sonitude::dsp::CalibrationApplier calibration_applier(
         calibration.channels, geometry_ids, sample_rate_hz, runtime.calibration_dc_block_hz);
 
+    std::string steering_table_path = runtime.steering.kemar_lut.table_path;
+    if (steering_table_path.empty())
+    {
+      steering_table_path = runtime.binaural.profile.table_path;
+    }
+    std::unique_ptr<sonitude::dsp::HrtfTable> steering_hrtf;
+    if (runtime.steering.kemar_lut.enabled)
+    {
+      if (steering_table_path.empty())
+      {
+        throw std::runtime_error("steering.kemar_lut requires table_path");
+      }
+      steering_hrtf = TryLoadHrtfTable(steering_table_path);
+      if (steering_hrtf == nullptr || steering_hrtf->empty())
+      {
+        throw std::runtime_error("KEMAR steering LUT table could not be loaded");
+      }
+    }
+
     sonitude::dsp::MvdrBeamformer beamformer;
-    beamformer.configure(geometry, runtime.steering, calibration, sample_rate_hz, max_block_frames);
+    beamformer.configure(geometry,
+                         runtime.steering,
+                         calibration,
+                         sample_rate_hz,
+                         max_block_frames,
+                         steering_hrtf.get());
 
     const bool suppression_enabled = ResolveSuppression(suppression_mode, runtime.suppression.enabled);
     const std::string backend_name =
@@ -578,6 +616,14 @@ int main(int argc, char** argv)
       float suppression_envelope_attack = 0.35F;
       float suppression_envelope_release = 0.01F;
       float suppression_confidence = 1.0F;
+      float spectral_gain_floor_db = -12.0F;
+      float spectral_protect_ratio = 4.0F;
+      float spectral_noise_overestimate = 2.0F;
+      float spectral_tonal_ratio = 6.0F;
+      float spectral_noise_rise_ms = 480.0F;
+      float mvdr_max_wn_gain = 4.0F;
+      float mvdr_cov_tau_ms = 80.0F;
+      float mvdr_diag_load = 0.08F;
       if (!ReadExact(std::cin, &version, sizeof(version)) ||
           !ReadExact(std::cin, &message_type, sizeof(message_type)) ||
           !ReadExact(std::cin, &sequence, sizeof(sequence)) ||
@@ -597,7 +643,15 @@ int main(int argc, char** argv)
           !ReadExact(std::cin, &suppression_confidence_threshold, sizeof(suppression_confidence_threshold)) ||
           !ReadExact(std::cin, &suppression_envelope_attack, sizeof(suppression_envelope_attack)) ||
           !ReadExact(std::cin, &suppression_envelope_release, sizeof(suppression_envelope_release)) ||
-          !ReadExact(std::cin, &suppression_confidence, sizeof(suppression_confidence)))
+          !ReadExact(std::cin, &suppression_confidence, sizeof(suppression_confidence)) ||
+          !ReadExact(std::cin, &spectral_gain_floor_db, sizeof(spectral_gain_floor_db)) ||
+          !ReadExact(std::cin, &spectral_protect_ratio, sizeof(spectral_protect_ratio)) ||
+          !ReadExact(std::cin, &spectral_noise_overestimate, sizeof(spectral_noise_overestimate)) ||
+          !ReadExact(std::cin, &spectral_tonal_ratio, sizeof(spectral_tonal_ratio)) ||
+          !ReadExact(std::cin, &spectral_noise_rise_ms, sizeof(spectral_noise_rise_ms)) ||
+          !ReadExact(std::cin, &mvdr_max_wn_gain, sizeof(mvdr_max_wn_gain)) ||
+          !ReadExact(std::cin, &mvdr_cov_tau_ms, sizeof(mvdr_cov_tau_ms)) ||
+          !ReadExact(std::cin, &mvdr_diag_load, sizeof(mvdr_diag_load)))
       {
         std::cerr << "stream_process: truncated header, aborting\n";
         return 1;
@@ -668,6 +722,24 @@ int main(int argc, char** argv)
         have_target = true;
       }
 
+      const LiveDspTuningParams live_tuning{
+          .spectral = {.gain_floor_db = spectral_gain_floor_db,
+                       .protect_ratio = spectral_protect_ratio,
+                       .noise_overestimate = spectral_noise_overestimate,
+                       .tonal_median_ratio = spectral_tonal_ratio,
+                       .noise_rise_sec = std::max(1.0F, spectral_noise_rise_ms) * 0.001F},
+          .mvdr = {.diag_load = mvdr_diag_load,
+                   .max_white_noise_gain = mvdr_max_wn_gain,
+                   .cov_tau_sec = std::max(1.0F, mvdr_cov_tau_ms) * 0.001F}};
+      beamformer.setTuning(live_tuning.mvdr);
+      if (suppression_enabled && suppression_backend == sonitude::dsp::SuppressionBackend::Spectral)
+      {
+        if (auto* spectral = suppressor.spectralFilter())
+        {
+          spectral->setTuning(live_tuning.spectral);
+        }
+      }
+
       mono.assign(frame_count, 0.0F);
       if (suppression_enabled)
       {
@@ -693,8 +765,23 @@ int main(int argc, char** argv)
         }
         suppressor.setControl(focus_active, focus_active ? live.confidence : 0.0F);
       }
-      beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
-                         std::span<float>(mono.data(), frame_count));
+      const bool binaural_mvdr = runtime.steering.binaural_output;
+      if (binaural_mvdr)
+      {
+        beamformer.processStereo(
+            std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+            std::span<float>(left.data(), frame_count),
+            std::span<float>(right.data(), frame_count));
+        for (std::size_t i = 0; i < frame_count; ++i)
+        {
+          mono[i] = 0.5F * (left[i] + right[i]);
+        }
+      }
+      else
+      {
+        beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+                           std::span<float>(mono.data(), frame_count));
+      }
 
       const float clamped_blend = std::clamp(blend_deg, 0.0F, kMaxBlendDeg);
       if (clamped_blend > 0.0F)
@@ -720,7 +807,8 @@ int main(int argc, char** argv)
       }
 
       const bool protocol_binaural = (flags & kFlagBinauralEnabled) != 0;
-      const bool binaural_active = protocol_binaural || runtime.binaural.enabled;
+      const bool binaural_active =
+          !binaural_mvdr && (protocol_binaural || runtime.binaural.enabled);
       const bool follow_steering =
           protocol_binaural ? ((flags & kFlagBinauralFollowSteering) != 0)
                             : runtime.binaural.direction.follow_steering;
@@ -775,8 +863,11 @@ int main(int argc, char** argv)
         }
       }
 
-      left.assign(frame_count, 0.0F);
-      right.assign(frame_count, 0.0F);
+      if (!binaural_mvdr)
+      {
+        left.assign(frame_count, 0.0F);
+        right.assign(frame_count, 0.0F);
+      }
       if (binaural_active && !unavailable)
       {
         if (backend == sonitude::dsp::BinauralBackend::ArrayDownmix)
@@ -817,26 +908,30 @@ int main(int argc, char** argv)
           out_flags |= kOutMonoReference;
         }
       }
-      else
+      else if (binaural_mvdr)
       {
-        if (!disable_limiter)
-        {
-          limiter.process(std::span<float>(mono.data(), frame_count));
-        }
+        const float gain = suppressor.currentGain();
         for (std::size_t i = 0; i < frame_count; ++i)
         {
-          left[i] = mono[i];
-          right[i] = mono[i];
+          left[i] *= gain;
+          right[i] *= gain;
         }
-        out_flags |= kOutMonoReference;
-        if (unavailable)
+        if (!disable_limiter)
         {
-          out_flags |= kOutBinauralUnavailable;
+          if (!binaural_runtime.stereo_limiter_configured)
+          {
+            binaural_runtime.stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F},
+                                                      sample_rate_hz);
+            binaural_runtime.stereo_limiter_configured = true;
+          }
+          binaural_runtime.stereo_limiter.process(std::span<float>(left.data(), frame_count),
+                                                  std::span<float>(right.data(), frame_count));
         }
-        if (binaural_active)
-        {
-          out_flags |= kOutBinauralApplied;
-        }
+        out_flags |= kOutBinauralApplied;
+      }
+      else
+      {
+        throw std::runtime_error("mono L=R output path is disabled; enable steering.binaural_output");
       }
 
       output_pcm.assign(frame_count * 2, 0.0F);

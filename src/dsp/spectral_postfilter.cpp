@@ -10,12 +10,8 @@ namespace
 {
 constexpr float kEps = 1.0e-20F;
 constexpr float kMaxXi = 1.0e6F;
-constexpr float kNoiseOverestimate = 2.0F;
-constexpr float kTonalMedianRatio = 6.0F;
 constexpr float kSpatialBias = 1.0F;
-constexpr float kProtectRatio = 4.0F;
 constexpr float kTauPsdSmoothSec = 0.032F;
-constexpr float kTauNoiseRiseSec = 0.48F;
 constexpr float kTauDecisionDirectedSec = 0.048F;
 constexpr float kTauGainSec = 0.016F;
 constexpr float kTauBypassSec = 0.016F;
@@ -63,12 +59,16 @@ bool SpectralPostfilter::NoiseTracker::prepare(const std::size_t n_bins, const d
   }
   n_bins_ = n_bins;
   smooth_coeff_ = CoeffFromTau(kTauPsdSmoothSec, hop_hz);
-  rise_coeff_ = 1.0F - CoeffFromTau(kTauNoiseRiseSec, hop_hz);
   smoothed_.assign(n_bins, 0.0F);
   noise_.assign(n_bins, 1.0F);
   median_scratch_.assign(n_bins, 0.0F);
   have_first_ = false;
   return true;
+}
+
+void SpectralPostfilter::NoiseTracker::setNoiseRiseSec(const float tau_sec, const double hop_hz)
+{
+  rise_coeff_ = 1.0F - CoeffFromTau(std::max(tau_sec, 1.0e-3F), hop_hz);
 }
 
 void SpectralPostfilter::NoiseTracker::reset() noexcept
@@ -81,13 +81,14 @@ void SpectralPostfilter::NoiseTracker::reset() noexcept
 void SpectralPostfilter::NoiseTracker::update(const std::span<const float> power,
                                          const bool allow_update) noexcept
 {
-  update(power, allow_update, {}, 0.0F);
+  update(power, allow_update, {}, 0.0F, 6.0F);
 }
 
 void SpectralPostfilter::NoiseTracker::update(const std::span<const float> power,
                                          const bool allow_update,
                                          const std::span<const float> max_guard_power,
-                                         const float protect_ratio) noexcept
+                                         const float protect_ratio,
+                                         const float tonal_median_ratio) noexcept
 {
   const std::size_t n = std::min(n_bins_, power.size());
   if (!allow_update)
@@ -133,7 +134,7 @@ void SpectralPostfilter::NoiseTracker::update(const std::span<const float> power
     median_scratch_[k] = smoothed_[k];
   }
   const float med = MedianOf(median_scratch_, n);
-  const float tonal_floor = med * kTonalMedianRatio;
+  const float tonal_floor = med * std::max(tonal_median_ratio, 1.0F);
   for (std::size_t k = 0; k < n; ++k)
   {
     if (protected_bin(k) || smoothed_[k] > tonal_floor)
@@ -182,6 +183,11 @@ void SpectralPostfilter::WienerGain::reset() noexcept
   std::fill(prev_gain_.begin(), prev_gain_.end(), gain_floor_);
 }
 
+void SpectralPostfilter::WienerGain::setNoiseOverestimate(const float factor) noexcept
+{
+  noise_overestimate_ = std::max(factor, 1.0F);
+}
+
 void SpectralPostfilter::WienerGain::compute(const std::span<const float> power,
                                 const std::span<const float> noise,
                                 const std::span<float> gain_out) noexcept
@@ -190,7 +196,7 @@ void SpectralPostfilter::WienerGain::compute(const std::span<const float> power,
   for (std::size_t k = 0; k < n; ++k)
   {
     const float p = std::max(Sanitize(power[k]), kEps);
-    const float lambda = std::max(Sanitize(noise[k]) * kNoiseOverestimate, kEps);
+    const float lambda = std::max(Sanitize(noise[k]) * noise_overestimate_, kEps);
     const float snr_post = p / lambda;
     const float instant = std::max(snr_post - 1.0F, 0.0F);
     const float dd = prev_gain_[k] * prev_gain_[k] * snr_post;
@@ -236,13 +242,16 @@ bool SpectralPostfilter::prepare(const double sample_rate,
 
   config_ = config;
   config_.confidence_threshold = std::clamp(config.confidence_threshold, 0.0F, 1.0F);
+  tuning_.gain_floor_db = std::clamp(config_.gain_floor_db, -80.0F, 0.0F);
   hop_hz_ = sample_rate / static_cast<double>(config_.hop_size);
   const std::size_t n_bins = (config_.fft_size / 2U) + 1U;
-  const float floor_lin = std::clamp(DbToLinear(config_.gain_floor_db), 0.0F, 1.0F);
+  const float floor_lin = std::clamp(DbToLinear(tuning_.gain_floor_db), 0.0F, 1.0F);
   if (!tracker_.prepare(n_bins, hop_hz_) || !wiener_.prepare(n_bins, hop_hz_, floor_lin))
   {
     return false;
   }
+  tracker_.setNoiseRiseSec(tuning_.noise_rise_sec, hop_hz_);
+  wiener_.setNoiseOverestimate(tuning_.noise_overestimate);
 
   power_.assign(n_bins, 0.0F);
   gains_.assign(n_bins, 1.0F);
@@ -282,6 +291,22 @@ void SpectralPostfilter::setControl(const bool focus_active, const float confide
 void SpectralPostfilter::setConfidenceThreshold(const float threshold) noexcept
 {
   config_.confidence_threshold = std::clamp(threshold, 0.0F, 1.0F);
+}
+
+void SpectralPostfilter::setTuning(const SpectralTuningParams& tuning) noexcept
+{
+  tuning_.gain_floor_db = std::clamp(tuning.gain_floor_db, -80.0F, 0.0F);
+  tuning_.protect_ratio = std::clamp(tuning.protect_ratio, 1.0F, 16.0F);
+  tuning_.noise_overestimate = std::clamp(tuning.noise_overestimate, 1.0F, 8.0F);
+  tuning_.tonal_median_ratio = std::clamp(tuning.tonal_median_ratio, 2.0F, 16.0F);
+  tuning_.noise_rise_sec = std::clamp(tuning.noise_rise_sec, 0.05F, 4.0F);
+  if (ready_)
+  {
+    const float floor_lin = std::clamp(DbToLinear(tuning_.gain_floor_db), 0.0F, 1.0F);
+    wiener_.prepare(power_.size(), hop_hz_, floor_lin);
+    tracker_.setNoiseRiseSec(tuning_.noise_rise_sec, hop_hz_);
+    wiener_.setNoiseOverestimate(tuning_.noise_overestimate);
+  }
 }
 
 void SpectralPostfilter::setEstimatorHold(const bool hold) noexcept
@@ -327,7 +352,8 @@ void SpectralPostfilter::processSpectrum(const std::span<float> re,
   const bool allow_noise = focused && !estimator_hold_;
   if (have_spatial_)
   {
-    tracker_.update(power_, allow_noise, max_guard_power_, kProtectRatio);
+    tracker_.update(power_, allow_noise, max_guard_power_, tuning_.protect_ratio,
+                    tuning_.tonal_median_ratio);
   }
   else
   {
@@ -356,7 +382,7 @@ void SpectralPostfilter::processSpectrum(const std::span<float> re,
     if (have_spatial_)
     {
       const float ratio = power_[k] / std::max(max_guard_power_[k], kEps);
-      protected_bin = ratio > kProtectRatio;
+      protected_bin = ratio > tuning_.protect_ratio;
       const float instant = ratio / (ratio + kSpatialBias);
       spatial_gain_[k] = (spatial_coeff_ * spatial_gain_[k]) +
                          ((1.0F - spatial_coeff_) * instant);

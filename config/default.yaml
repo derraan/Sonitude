@@ -29,6 +29,14 @@ steering:
   reference_mic_index: 2
   steering_ramp_ms: 150.0
   ambient_floor_linear: 0.25
+  model: near_field
+  source_distance_m: 0.45
+  binaural_output: true
+  left_ear_mic_index: 0
+  right_ear_mic_index: 5
+  kemar_lut:
+    enabled: true
+    table_path: "../data/hrtf/generic_sadie2_d2/compact_32.shrf"
 
 suppression:
   enabled: false
@@ -75,9 +83,9 @@ telemetry:
 
 binaural:
   enabled: true
-  backend: mono_reference
+  backend: compact_hrtf
   direction:
-    follow_steering: false
+    follow_steering: true
     azimuth_deg: 0.0
     elevation_deg: 0.0
   transition:

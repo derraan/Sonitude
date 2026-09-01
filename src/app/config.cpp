@@ -115,6 +115,39 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
       RequireScalar<std::size_t>(steering, "reference_mic_index");
   config.steering.steering_ramp_ms = RequireScalar<float>(steering, "steering_ramp_ms");
   config.steering.ambient_floor_linear = RequireScalar<float>(steering, "ambient_floor_linear");
+  if (steering["model"])
+  {
+    config.steering.model = RequireScalar<std::string>(steering, "model");
+  }
+  if (steering["source_distance_m"])
+  {
+    config.steering.source_distance_m = RequireScalar<float>(steering, "source_distance_m");
+  }
+  if (steering["binaural_output"])
+  {
+    config.steering.binaural_output = RequireScalar<bool>(steering, "binaural_output");
+  }
+  if (steering["left_ear_mic_index"])
+  {
+    config.steering.left_ear_mic_index = RequireScalar<std::size_t>(steering, "left_ear_mic_index");
+  }
+  if (steering["right_ear_mic_index"])
+  {
+    config.steering.right_ear_mic_index = RequireScalar<std::size_t>(steering, "right_ear_mic_index");
+  }
+  if (steering["kemar_lut"])
+  {
+    const YAML::Node kemar = steering["kemar_lut"];
+    if (kemar["enabled"])
+    {
+      config.steering.kemar_lut.enabled = kemar["enabled"].as<bool>();
+    }
+    if (kemar["table_path"])
+    {
+      config.steering.kemar_lut.table_path =
+          ResolvePath(path, RequireScalar<std::string>(kemar, "table_path"));
+    }
+  }
 
   const YAML::Node suppression = root["suppression"];
   config.suppression.enabled = RequireScalar<bool>(suppression, "enabled");
@@ -309,6 +342,23 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   if (config.steering.ambient_floor_linear < 0.0F || config.steering.ambient_floor_linear > 1.0F)
   {
     throw std::runtime_error("ambient_floor_linear must be in [0, 1]");
+  }
+  if (config.steering.model != "near_field" && config.steering.model != "far_field")
+  {
+    throw std::runtime_error("steering.model must be near_field or far_field");
+  }
+  if (config.steering.source_distance_m <= 0.0F || config.steering.source_distance_m > 5.0F)
+  {
+    throw std::runtime_error("steering.source_distance_m is outside engineering guardrails");
+  }
+  if (config.steering.left_ear_mic_index >= 6 || config.steering.right_ear_mic_index >= 6)
+  {
+    throw std::runtime_error("steering ear mic index out of range");
+  }
+  if (config.steering.kemar_lut.enabled && config.steering.kemar_lut.table_path.empty() &&
+      config.binaural.profile.table_path.empty())
+  {
+    throw std::runtime_error("steering.kemar_lut requires table_path or binaural.profile.table_path");
   }
 
   if (config.suppression.fade_ms < 1.0F || config.suppression.fade_ms > 1000.0F)

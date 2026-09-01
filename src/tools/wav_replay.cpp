@@ -412,9 +412,28 @@ int main(int argc, char** argv)
         std::span<sonitude::audio::MicFrame>(calibrated.data(), calibrated.size()));
 
     const auto events = LoadSteeringScript(script_path, input_wav.sample_rate_hz);
+    std::string steering_table_path = runtime.steering.kemar_lut.table_path;
+    if (steering_table_path.empty())
+    {
+      steering_table_path = runtime.binaural.profile.table_path;
+    }
+    std::unique_ptr<sonitude::dsp::HrtfTable> steering_hrtf;
+    if (runtime.steering.kemar_lut.enabled)
+    {
+      if (steering_table_path.empty())
+      {
+        throw std::runtime_error("steering.kemar_lut requires table_path");
+      }
+      steering_hrtf = std::make_unique<sonitude::dsp::HrtfTable>(
+          sonitude::dsp::LoadHrtfTableFromFile(steering_table_path));
+    }
     sonitude::dsp::MvdrBeamformer beamformer;
-    beamformer.configure(
-        geometry, runtime.steering, calibration, input_wav.sample_rate_hz, runtime.capture.period_frames);
+    beamformer.configure(geometry,
+                         runtime.steering,
+                         calibration,
+                         input_wav.sample_rate_hz,
+                         runtime.capture.period_frames,
+                         steering_hrtf.get());
     beamformer.setTarget(events.front().target);
     float current_width_deg = events.front().width_deg;
     const bool suppression_enabled = ResolveSuppression(suppression_mode, runtime.suppression.enabled);

@@ -16,10 +16,7 @@ namespace
 constexpr std::size_t kFftSize = 128;
 constexpr std::size_t kHopSize = 32;
 constexpr std::size_t kM = audio::kMicChannels;
-constexpr float kDiagLoad = 0.08F;
 constexpr float kCovFloor = 1.0e-4F;
-constexpr float kMaxWhiteNoiseGain = 4.0F;  // relative to 1/M
-constexpr float kCovTauSec = 0.080F;
 
 struct Cpx
 {
@@ -128,7 +125,8 @@ void DelayAndSum(const Cpx d[kM], const Cpx x[kM], Cpx& y)
 void MvdrCombine(const Cpx r[kM][kM],
                  const Cpx d[kM],
                  const Cpx x[kM],
-                 Cpx& y)
+                 Cpx& y,
+                 const float max_white_noise_gain)
 {
   Cpx w[kM]{};
   if (!SolveRwEqualsD(r, d, w))
@@ -165,7 +163,7 @@ void MvdrCombine(const Cpx r[kM][kM],
     unity.im += term.im;
   }
   const float ds_wn = 1.0F / static_cast<float>(kM);
-  if (wn > kMaxWhiteNoiseGain * ds_wn || std::fabs(unity.re - 1.0F) > 0.25F ||
+  if (wn > max_white_noise_gain * ds_wn || std::fabs(unity.re - 1.0F) > 0.25F ||
       std::fabs(unity.im) > 0.25F)
   {
     DelayAndSum(d, x, y);
@@ -186,7 +184,8 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
                                const app::SteeringConfig& steering_config,
                                const app::CalibrationConfig& calibration,
                                const std::uint32_t sample_rate_hz,
-                               const std::size_t max_block_frames)
+                               const std::size_t max_block_frames,
+                               const HrtfTable* kemar_table)
 {
   if (geometry.microphones.size() != audio::kMicChannels)
   {
@@ -202,6 +201,8 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   }
 
   steering_config_ = steering_config;
+  near_field_ = steering_config_.model != "far_field";
+  binaural_output_ = steering_config_.binaural_output;
   sample_rate_hz_ = sample_rate_hz;
   ramp_samples_ = std::max<std::size_t>(
       1U, static_cast<std::size_t>((steering_config_.steering_ramp_ms * 0.001F) *
@@ -211,6 +212,24 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   if (ref >= audio::kMicChannels)
   {
     throw std::runtime_error("reference_mic_index out of range");
+  }
+  if (steering_config_.left_ear_mic_index >= audio::kMicChannels ||
+      steering_config_.right_ear_mic_index >= audio::kMicChannels)
+  {
+    throw std::runtime_error("ear mic index out of range");
+  }
+
+  if (steering_config_.kemar_lut.enabled)
+  {
+    if (kemar_table == nullptr || kemar_table->empty())
+    {
+      throw std::runtime_error("KEMAR steering LUT enabled but HRTF table is missing");
+    }
+    steering_model_.configure(*kemar_table, geometry, steering_config_, sample_rate_hz_);
+  }
+  else
+  {
+    steering_model_.configureAnalytic(geometry, steering_config_, sample_rate_hz_);
   }
 
   std::unordered_map<std::string, float> cal_by_id;
@@ -251,6 +270,16 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   {
     throw std::runtime_error("MVDR synthesis STFT prepare failed");
   }
+  if (binaural_output_)
+  {
+    if (!left_target_stft_.prepare(sr, fifo_frames, synthesis) ||
+        !left_pending_stft_.prepare(sr, fifo_frames, synthesis) ||
+        !right_target_stft_.prepare(sr, fifo_frames, synthesis) ||
+        !right_pending_stft_.prepare(sr, fifo_frames, synthesis))
+    {
+      throw std::runtime_error("MVDR binaural synthesis STFT prepare failed");
+    }
+  }
   for (std::size_t g = 0; g < kGuardLooks; ++g)
   {
     guard_y_re_[g].assign(kFftSize, 0.0F);
@@ -260,6 +289,14 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   y_im_.assign(kFftSize, 0.0F);
   pending_y_re_.assign(kFftSize, 0.0F);
   pending_y_im_.assign(kFftSize, 0.0F);
+  left_y_re_.assign(kFftSize, 0.0F);
+  left_y_im_.assign(kFftSize, 0.0F);
+  right_y_re_.assign(kFftSize, 0.0F);
+  right_y_im_.assign(kFftSize, 0.0F);
+  pending_left_y_re_.assign(kFftSize, 0.0F);
+  pending_left_y_im_.assign(kFftSize, 0.0F);
+  pending_right_y_re_.assign(kFftSize, 0.0F);
+  pending_right_y_im_.assign(kFftSize, 0.0F);
 
   const std::size_t n_bins = (kFftSize / 2U) + 1U;
   cov_.assign(n_bins, {});
@@ -271,34 +308,118 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
     }
   }
   const float hop_sec = static_cast<float>(kHopSize) / static_cast<float>(sample_rate_hz_);
-  cov_beta_ = 1.0F - std::exp(-hop_sec / kCovTauSec);
+  cov_beta_ = 1.0F - std::exp(-hop_sec / std::max(tuning_.cov_tau_sec, 1.0e-3F));
 
   current_target_ = {0.0F, 0.0F};
-  current_delays_ = computeRelativeDelays(current_target_);
+  current_delays_ = computeRelativeDelays(current_target_, steering_config_.reference_mic_index);
   pending_delays_ = current_delays_;
+  current_left_delays_ = computeBinauralDelays(current_target_, true);
+  pending_left_delays_ = current_left_delays_;
+  current_right_delays_ = computeBinauralDelays(current_target_, false);
+  pending_right_delays_ = current_right_delays_;
   updateGuardDelays();
   crossfading_ = false;
   fade_cursor_ = 0;
   configured_ = true;
 }
 
-MvdrBeamformer::DelayArray MvdrBeamformer::computeRelativeDelays(
-    const audio::BeamformerSteering target) const
+void MvdrBeamformer::resetStream() noexcept
 {
-  const auto u = spatial::UnitVectorFromAzElDeg(target.azimuth_deg, target.elevation_deg);
-  const std::size_t ref = steering_config_.reference_mic_index;
-  const double ref_dot = (u[0] * mic_positions_[ref][0]) + (u[1] * mic_positions_[ref][1]) +
-                         (u[2] * mic_positions_[ref][2]);
-  const double ref_delay = calibration_delays_[ref];
+  if (crossfading_)
+  {
+    current_delays_ = pending_delays_;
+    current_left_delays_ = pending_left_delays_;
+    current_right_delays_ = pending_right_delays_;
+  }
+  pending_delays_ = current_delays_;
+  pending_left_delays_ = current_left_delays_;
+  pending_right_delays_ = current_right_delays_;
+  for (auto& stft : mic_stft_)
+  {
+    stft.reset();
+  }
+  target_stft_.reset();
+  pending_stft_.reset();
+  left_target_stft_.reset();
+  left_pending_stft_.reset();
+  right_target_stft_.reset();
+  right_pending_stft_.reset();
+  for (auto& bin : cov_)
+  {
+    bin = {};
+  }
+  crossfading_ = false;
+  fade_cursor_ = 0;
+}
 
+MvdrBeamformer::DelayArray MvdrBeamformer::computeRelativeDelays(
+    const audio::BeamformerSteering target,
+    const std::size_t reference_mic_index) const
+{
+  audio::BeamformerSteering look = target;
+  DelayArray geom{};
+  if (near_field_)
+  {
+    if (steering_model_.enabled())
+    {
+      const std::size_t idx =
+          steering_model_.lookupIndex(target.azimuth_deg, target.elevation_deg);
+      look = steering_model_.snappedDirection(idx);
+      if (reference_mic_index == steering_config_.reference_mic_index)
+      {
+        geom = steering_model_.delaysForIndex(idx);
+      }
+      else
+      {
+        geom = steering_model_.computeNearFieldDelays(look, reference_mic_index);
+      }
+    }
+    else
+    {
+      geom = steering_model_.computeNearFieldDelays(look, reference_mic_index);
+    }
+  }
+  else
+  {
+    const auto u = spatial::UnitVectorFromAzElDeg(look.azimuth_deg, look.elevation_deg);
+    const double ref_dot = (u[0] * mic_positions_[reference_mic_index][0]) +
+                           (u[1] * mic_positions_[reference_mic_index][1]) +
+                           (u[2] * mic_positions_[reference_mic_index][2]);
+    for (std::size_t i = 0; i < audio::kMicChannels; ++i)
+    {
+      const double dot = (u[0] * mic_positions_[i][0]) + (u[1] * mic_positions_[i][1]) +
+                         (u[2] * mic_positions_[i][2]);
+      const double tau_sec =
+          -((dot - ref_dot) / static_cast<double>(steering_config_.speed_of_sound_mps));
+      geom[i] = tau_sec * static_cast<double>(sample_rate_hz_);
+    }
+  }
+
+  const double ref_cal = calibration_delays_[reference_mic_index];
   DelayArray out{};
   for (std::size_t i = 0; i < audio::kMicChannels; ++i)
   {
-    const double dot = (u[0] * mic_positions_[i][0]) + (u[1] * mic_positions_[i][1]) +
-                       (u[2] * mic_positions_[i][2]);
-    const double tau_sec =
-        -((dot - ref_dot) / static_cast<double>(steering_config_.speed_of_sound_mps));
-    out[i] = (calibration_delays_[i] + (tau_sec * static_cast<double>(sample_rate_hz_))) - ref_delay;
+    out[i] = geom[i] + calibration_delays_[i] - ref_cal;
+  }
+  return out;
+}
+
+MvdrBeamformer::DelayArray MvdrBeamformer::computeBinauralDelays(
+    const audio::BeamformerSteering target,
+    const bool left_ear) const
+{
+  const std::size_t ref =
+      left_ear ? steering_config_.left_ear_mic_index : steering_config_.right_ear_mic_index;
+  DelayArray out = computeRelativeDelays(target, ref);
+  if (steering_model_.enabled())
+  {
+    const std::size_t idx = steering_model_.lookupIndex(target.azimuth_deg, target.elevation_deg);
+    const float offset = left_ear ? steering_model_.leftEarOffsetSamples(idx)
+                                  : steering_model_.rightEarOffsetSamples(idx);
+    for (double& delay : out)
+    {
+      delay += static_cast<double>(offset);
+    }
   }
   return out;
 }
@@ -316,11 +437,25 @@ void MvdrBeamformer::setTarget(const audio::BeamformerSteering target)
   {
     return;
   }
-  pending_delays_ = computeRelativeDelays(target);
+  pending_delays_ = computeRelativeDelays(target, steering_config_.reference_mic_index);
+  pending_left_delays_ = computeBinauralDelays(target, true);
+  pending_right_delays_ = computeBinauralDelays(target, false);
   current_target_ = target;
   updateGuardDelays();
   crossfading_ = true;
   fade_cursor_ = 0;
+}
+
+void MvdrBeamformer::setTuning(const MvdrTuningParams& tuning) noexcept
+{
+  tuning_.diag_load = std::clamp(tuning.diag_load, 0.001F, 1.0F);
+  tuning_.max_white_noise_gain = std::clamp(tuning.max_white_noise_gain, 1.0F, 32.0F);
+  tuning_.cov_tau_sec = std::clamp(tuning.cov_tau_sec, 0.010F, 2.0F);
+  if (configured_ && sample_rate_hz_ > 0)
+  {
+    const float hop_sec = static_cast<float>(kHopSize) / static_cast<float>(sample_rate_hz_);
+    cov_beta_ = 1.0F - std::exp(-hop_sec / tuning_.cov_tau_sec);
+  }
 }
 
 void MvdrBeamformer::updateGuardDelays()
@@ -332,7 +467,7 @@ void MvdrBeamformer::updateGuardDelays()
             spatial::NormalizeAzimuthDeg(static_cast<double>(current_target_.azimuth_deg) +
                                          static_cast<double>(kGuardAzimuthOffsetDeg[g]))),
         current_target_.elevation_deg};
-    guard_delays_[g] = computeRelativeDelays(look);
+    guard_delays_[g] = computeRelativeDelays(look, steering_config_.reference_mic_index);
   }
 }
 
@@ -405,7 +540,7 @@ void MvdrBeamformer::FormLookSpectrum(const DelayArray& delays,
       }
       trace += r[i][i].re;
     }
-    const float load = kDiagLoad * (trace / static_cast<float>(kM));
+    const float load = tuning_.diag_load * (trace / static_cast<float>(kM));
     for (std::size_t i = 0; i < kM; ++i)
     {
       r[i][i].re += load;
@@ -418,7 +553,7 @@ void MvdrBeamformer::FormLookSpectrum(const DelayArray& delays,
     }
     else
     {
-      MvdrCombine(r, d, x, y);
+      MvdrCombine(r, d, x, y, tuning_.max_white_noise_gain);
     }
     y_re[b] = y.re;
     y_im[b] = y.im;
@@ -456,9 +591,19 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
   }
 
   FormLookSpectrum(current_delays_, y_re_, y_im_);
+  if (binaural_output_)
+  {
+    FormLookSpectrum(current_left_delays_, left_y_re_, left_y_im_);
+    FormLookSpectrum(current_right_delays_, right_y_re_, right_y_im_);
+  }
   if (crossfading_)
   {
     FormLookSpectrum(pending_delays_, pending_y_re_, pending_y_im_);
+    if (binaural_output_)
+    {
+      FormLookSpectrum(pending_left_delays_, pending_left_y_re_, pending_left_y_im_);
+      FormLookSpectrum(pending_right_delays_, pending_right_y_re_, pending_right_y_im_);
+    }
   }
   if (spectral_filter_ != nullptr)
   {
@@ -478,14 +623,61 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
     }
   }
   target_stft_.overlapAddSpectrum(y_re_.data(), y_im_.data());
+  if (binaural_output_)
+  {
+    left_target_stft_.overlapAddSpectrum(left_y_re_.data(), left_y_im_.data());
+    right_target_stft_.overlapAddSpectrum(right_y_re_.data(), right_y_im_.data());
+  }
   if (crossfading_)
   {
     pending_stft_.overlapAddSpectrum(pending_y_re_.data(), pending_y_im_.data());
+    if (binaural_output_)
+    {
+      left_pending_stft_.overlapAddSpectrum(pending_left_y_re_.data(), pending_left_y_im_.data());
+      right_pending_stft_.overlapAddSpectrum(pending_right_y_re_.data(), pending_right_y_im_.data());
+    }
   }
   else
   {
     pending_stft_.overlapAddSpectrum(y_re_.data(), y_im_.data());
+    if (binaural_output_)
+    {
+      left_pending_stft_.overlapAddSpectrum(left_y_re_.data(), left_y_im_.data());
+      right_pending_stft_.overlapAddSpectrum(right_y_re_.data(), right_y_im_.data());
+    }
   }
+}
+
+float MvdrBeamformer::PopMono()
+{
+  auto blend = [&](const float current, const float pending) -> float {
+    if (!crossfading_)
+    {
+      return current;
+    }
+    const float alpha =
+        static_cast<float>(fade_cursor_) / static_cast<float>(std::max<std::size_t>(1U, ramp_samples_));
+    return ((1.0F - alpha) * current) + (alpha * pending);
+  };
+  return blend(target_stft_.pop(), pending_stft_.pop());
+}
+
+float MvdrBeamformer::PopEar(const bool left_channel)
+{
+  auto blend = [&](const float current, const float pending) -> float {
+    if (!crossfading_)
+    {
+      return current;
+    }
+    const float alpha =
+        static_cast<float>(fade_cursor_) / static_cast<float>(std::max<std::size_t>(1U, ramp_samples_));
+    return ((1.0F - alpha) * current) + (alpha * pending);
+  };
+  if (left_channel)
+  {
+    return blend(left_target_stft_.pop(), left_pending_stft_.pop());
+  }
+  return blend(right_target_stft_.pop(), right_pending_stft_.pop());
 }
 
 void MvdrBeamformer::process(const std::span<const audio::MicFrame> input,
@@ -506,24 +698,68 @@ void MvdrBeamformer::process(const std::span<const audio::MicFrame> input,
     {
       mic_stft_[ch].feed(input[i][ch], &MvdrBeamformer::OnMicHop, &mic_ctx_[ch]);
     }
-    const float current_y = target_stft_.pop();
-    const float pending_y = pending_stft_.pop();
-    if (!crossfading_)
+    mono_out[i] = PopMono();
+    if (binaural_output_)
     {
-      mono_out[i] = current_y;
+      (void)PopEar(true);
+      (void)PopEar(false);
     }
-    else
+    if (crossfading_)
     {
-      const float alpha =
-          static_cast<float>(fade_cursor_) / static_cast<float>(std::max<std::size_t>(1U, ramp_samples_));
-      mono_out[i] = ((1.0F - alpha) * current_y) + (alpha * pending_y);
       ++fade_cursor_;
       if (fade_cursor_ >= ramp_samples_)
       {
         crossfading_ = false;
         fade_cursor_ = 0;
         current_delays_ = pending_delays_;
+        current_left_delays_ = pending_left_delays_;
+        current_right_delays_ = pending_right_delays_;
         std::swap(target_stft_, pending_stft_);
+        if (binaural_output_)
+        {
+          std::swap(left_target_stft_, left_pending_stft_);
+          std::swap(right_target_stft_, right_pending_stft_);
+        }
+      }
+    }
+  }
+}
+
+void MvdrBeamformer::processStereo(const std::span<const audio::MicFrame> input,
+                                   const std::span<float> left_out,
+                                   const std::span<float> right_out)
+{
+  if (!configured_ || !binaural_output_)
+  {
+    throw std::runtime_error("processStereo requires binaural MVDR output");
+  }
+  if (left_out.size() < input.size() || right_out.size() < input.size())
+  {
+    throw std::runtime_error("stereo output spans too small for input");
+  }
+
+  for (std::size_t i = 0; i < input.size(); ++i)
+  {
+    for (std::size_t ch = 0; ch < audio::kMicChannels; ++ch)
+    {
+      mic_stft_[ch].feed(input[i][ch], &MvdrBeamformer::OnMicHop, &mic_ctx_[ch]);
+    }
+    (void)PopMono();
+    left_out[i] = PopEar(true);
+    right_out[i] = PopEar(false);
+    if (crossfading_)
+    {
+      ++fade_cursor_;
+      if (fade_cursor_ >= ramp_samples_)
+      {
+        crossfading_ = false;
+        fade_cursor_ = 0;
+        current_delays_ = pending_delays_;
+        current_left_delays_ = pending_left_delays_;
+        current_right_delays_ = pending_right_delays_;
+        std::swap(target_stft_, pending_stft_);
+        std::swap(left_target_stft_, left_pending_stft_);
+        std::swap(right_target_stft_, right_pending_stft_);
       }
     }
   }

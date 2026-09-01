@@ -17,6 +17,15 @@ struct SpectralPostfilterConfig
   float confidence_threshold = 0.6F;
 };
 
+struct SpectralTuningParams
+{
+  float gain_floor_db = -12.0F;
+  float protect_ratio = 4.0F;
+  float noise_overestimate = 2.0F;
+  float tonal_median_ratio = 6.0F;
+  float noise_rise_sec = 0.48F;
+};
+
 // Spectral gain stage for the MVDR 128/32 STFT. This class does not perform
 // FFT, inverse FFT, or overlap-add. The beamformer owns the only transform.
 class SpectralPostfilter
@@ -28,6 +37,7 @@ class SpectralPostfilter
   void reset() noexcept;
   void setControl(bool focus_active, float confidence) noexcept;
   void setConfidenceThreshold(float threshold) noexcept;
+  void setTuning(const SpectralTuningParams& tuning) noexcept;
   void setEstimatorHold(bool hold) noexcept;
   void processSpectrum(std::span<float> re,
                        std::span<float> im,
@@ -43,12 +53,14 @@ class SpectralPostfilter
   {
    public:
     bool prepare(std::size_t n_bins, double hop_hz);
+    void setNoiseRiseSec(float tau_sec, double hop_hz);
     void reset() noexcept;
     void update(std::span<const float> power, bool allow_update) noexcept;
     void update(std::span<const float> power,
                 bool allow_update,
                 std::span<const float> max_guard_power,
-                float protect_ratio) noexcept;
+                float protect_ratio,
+                float tonal_median_ratio) noexcept;
     [[nodiscard]] std::span<const float> noisePower() const noexcept;
     [[nodiscard]] bool initialized() const noexcept { return have_first_; }
 
@@ -67,6 +79,7 @@ class SpectralPostfilter
    public:
     bool prepare(std::size_t n_bins, double hop_hz, float gain_floor_linear);
     void reset() noexcept;
+    void setNoiseOverestimate(float factor) noexcept;
     void compute(std::span<const float> power,
                  std::span<const float> noise,
                  std::span<float> gain_out) noexcept;
@@ -75,6 +88,7 @@ class SpectralPostfilter
    private:
     std::size_t n_bins_ = 0;
     float gain_floor_ = 0.25F;
+    float noise_overestimate_ = 2.0F;
     float dd_coeff_ = 0.9F;
     float time_coeff_ = 0.5F;
     std::vector<float> xi_{};
@@ -89,6 +103,7 @@ class SpectralPostfilter
   bool estimator_hold_ = false;
   double hop_hz_ = 0.0;
   SpectralPostfilterConfig config_{};
+  SpectralTuningParams tuning_{};
   NoiseTracker tracker_{};
   WienerGain wiener_{};
   std::vector<float> power_{};

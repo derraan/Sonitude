@@ -34,6 +34,7 @@ add_library(
   sonitude_core
   src/app/config.cpp
   src/app/calibration_config.cpp
+  src/app/calibration_estimator.cpp
   src/app/calibration_writer.cpp
   src/app/logging.cpp
   src/audio/wav_io.cpp
@@ -41,6 +42,7 @@ add_library(
   src/control/conversation_state_machine.cpp
   src/control/zones.cpp
   src/dsp/beamformer.cpp
+  src/dsp/steering_lut.cpp
   src/dsp/binaural_renderer.cpp
   src/dsp/calibration_applier.cpp
   src/dsp/hrtf_table.cpp

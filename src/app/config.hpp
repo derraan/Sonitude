@@ -53,6 +53,16 @@ struct SteeringConfig
   std::size_t reference_mic_index = 0;
   float steering_ramp_ms = 150.0F;
   float ambient_floor_linear = 0.25F;
+  std::string model = "near_field";
+  float source_distance_m = 0.45F;
+  bool binaural_output = false;
+  std::size_t left_ear_mic_index = 0;
+  std::size_t right_ear_mic_index = 5;
+  struct KemarLutConfig
+  {
+    bool enabled = false;
+    std::string table_path;
+  } kemar_lut;
 };
 
 struct SpectralSuppressionConfig

@@ -1,39 +1,101 @@
-#include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
 
+#include "app/calibration_estimator.hpp"
 #include "app/calibration_writer.hpp"
+#include "app/config.hpp"
 #include "audio/wav_io.hpp"
 
 namespace
 {
-float Mean(const std::vector<float>& v)
+void PrintUsage()
 {
-  if (v.empty())
+  std::cout << "Usage: sonitude_calibration_estimate <input.wav> <output.yaml> [options]\n"
+            << "Options:\n"
+            << "  --geometry <path>           geometry YAML for microphone IDs (default: config/geometry)\n"
+            << "  --reference-index <N>       reference channel index (default: 2)\n"
+            << "  --report <path>             write human-readable quality report\n"
+            << "  --silence-frames <N>        silence region length (default: auto)\n"
+            << "  --signal-start <N>          signal region start frame (default: after silence)\n"
+            << "  --signal-frames <N>         signal region length (default: remainder)\n"
+            << "  --hardware-evidence         mark output as hardware-evidence-backed\n";
+}
+
+std::vector<std::string> LoadGeometryIds(const std::string& geometry_path)
+{
+  const auto geometry = sonitude::app::LoadGeometryFromFile(geometry_path);
+  std::vector<std::string> ids;
+  ids.reserve(geometry.microphones.size());
+  for (const auto& mic : geometry.microphones)
   {
-    return 0.0F;
+    ids.push_back(mic.id);
   }
-  double sum = 0.0;
-  for (const float x : v)
-  {
-    sum += x;
-  }
-  return static_cast<float>(sum / static_cast<double>(v.size()));
+  return ids;
 }
 }  // namespace
 
 int main(int argc, char** argv)
 {
-  std::string in_path = "build/calibration_capture.wav";
-  std::string out_path = "build/calibration_estimate.yaml";
-  if (argc > 1)
+  if (argc < 3)
   {
-    in_path = argv[1];
+    PrintUsage();
+    return 1;
   }
-  if (argc > 2)
+
+  std::string in_path = argv[1];
+  std::string out_path = argv[2];
+  std::string geometry_path = "config/geometry_soundbubble_initial.yaml";
+  std::string report_path;
+  std::size_t reference_index = 2;
+  std::size_t silence_frames = 0;
+  std::size_t signal_start = 0;
+  std::size_t signal_frames = 0;
+  bool hardware_evidence = false;
+
+  for (int i = 3; i < argc; ++i)
   {
-    out_path = argv[2];
+    const std::string arg = argv[i];
+    if (arg == "--geometry" && i + 1 < argc)
+    {
+      geometry_path = argv[++i];
+    }
+    else if (arg == "--reference-index" && i + 1 < argc)
+    {
+      reference_index = static_cast<std::size_t>(std::stoul(argv[++i]));
+    }
+    else if (arg == "--report" && i + 1 < argc)
+    {
+      report_path = argv[++i];
+    }
+    else if (arg == "--silence-frames" && i + 1 < argc)
+    {
+      silence_frames = static_cast<std::size_t>(std::stoul(argv[++i]));
+    }
+    else if (arg == "--signal-start" && i + 1 < argc)
+    {
+      signal_start = static_cast<std::size_t>(std::stoul(argv[++i]));
+    }
+    else if (arg == "--signal-frames" && i + 1 < argc)
+    {
+      signal_frames = static_cast<std::size_t>(std::stoul(argv[++i]));
+    }
+    else if (arg == "--hardware-evidence")
+    {
+      hardware_evidence = true;
+    }
+    else if (arg == "--help" || arg == "-h")
+    {
+      PrintUsage();
+      return 0;
+    }
+    else
+    {
+      std::cerr << "Unknown argument: " << arg << "\n";
+      PrintUsage();
+      return 1;
+    }
   }
 
   try
@@ -43,38 +105,53 @@ int main(int argc, char** argv)
     {
       throw std::runtime_error("calibration_estimate expects a 6-channel WAV");
     }
-    sonitude::app::CalibrationConfig cal;
-    cal.sample_rate_hz = wav.sample_rate_hz;
-    cal.channels.resize(6);
-    for (std::size_t ch = 0; ch < 6; ++ch)
+
+    const auto geometry = sonitude::app::LoadGeometryFromFile(geometry_path);
+    const auto channel_ids = LoadGeometryIds(geometry_path);
+
+    sonitude::app::CalibrationEstimateOptions options;
+    options.channel_ids = channel_ids;
+    options.reference_channel_index = reference_index;
+    options.sample_rate_hz = wav.sample_rate_hz;
+    options.silence_frame_count = silence_frames;
+    options.signal_start_frame = signal_start;
+    options.signal_frame_count = signal_frames;
+    options.geometry_id = geometry.profile_name;
+    options.hardware_evidence = hardware_evidence;
+
+    const auto estimate = sonitude::app::EstimateCalibrationFromCapture(
+        std::span<const float>(wav.interleaved.data(), wav.interleaved.size()), wav.channels, options);
+
+    const std::filesystem::path out_dir = std::filesystem::path(out_path).parent_path();
+    if (!out_dir.empty())
     {
-      std::vector<float> sig;
-      sig.reserve(wav.interleaved.size() / 6);
-      for (std::size_t i = ch; i < wav.interleaved.size(); i += 6)
-      {
-        sig.push_back(wav.interleaved[i]);
-      }
-      const float dc = Mean(sig);
-      double rms_sum = 0.0;
-      double max_abs = 0.0;
-      for (const float s : sig)
-      {
-        const float c = s - dc;
-        rms_sum += static_cast<double>(c) * static_cast<double>(c);
-        max_abs = std::max(max_abs, static_cast<double>(std::fabs(c)));
-      }
-      const float rms = static_cast<float>(std::sqrt(rms_sum / static_cast<double>(sig.size())));
-      auto& out = cal.channels[ch];
-      out.id = "M" + std::to_string(ch);
-      out.polarity = 1;
-      out.gain_linear = (rms > 1e-6F) ? (0.1F / rms) : 1.0F;
-      out.delay_samples = 0.0F;
-      out.dc_offset = dc;
-      std::cout << "ch" << ch << " dc=" << dc << " rms=" << rms << " peak=" << max_abs << "\n";
+      std::filesystem::create_directories(out_dir);
     }
-    sonitude::app::WriteCalibrationYamlBackupSafe(out_path, cal, true);
+
+    sonitude::app::WriteCalibrationYamlBackupSafe(out_path, estimate.calibration, true);
     std::cout << "Wrote calibration YAML: " << out_path << "\n";
-    return 0;
+    std::cout << "overall_status: "
+              << sonitude::app::CalibrationQualityStatusToString(estimate.report.overall_status)
+              << "\n";
+
+    if (!report_path.empty())
+    {
+      sonitude::app::WriteCalibrationReport(report_path, estimate.report);
+      std::cout << "Wrote calibration report: " << report_path << "\n";
+    }
+
+    for (const auto& ch : estimate.report.channels)
+    {
+      std::cout << ch.id << " dc=" << ch.dc_offset << " gain=" << ch.gain_linear
+                << " delay=" << ch.delay_samples << " polarity=" << ch.polarity;
+      if (ch.polarity_unresolved)
+      {
+        std::cout << "(unresolved)";
+      }
+      std::cout << " conf=" << ch.delay_confidence << "\n";
+    }
+
+    return estimate.report.overall_status == sonitude::app::CalibrationQualityStatus::Invalid ? 2 : 0;
   }
   catch (const std::exception& ex)
   {

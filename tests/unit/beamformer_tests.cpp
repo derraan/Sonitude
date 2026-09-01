@@ -52,6 +52,7 @@ sonitude::app::CalibrationConfig BuildCalibration(const std::vector<float>& dela
 sonitude::app::SteeringConfig BuildSteering()
 {
   sonitude::app::SteeringConfig s;
+  s.model = "far_field";
   s.speed_of_sound_mps = 343.0F;
   s.reference_mic_index = 0;
   s.steering_ramp_ms = 100.0F;
