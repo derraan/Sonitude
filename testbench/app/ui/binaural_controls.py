@@ -1,0 +1,175 @@
+"""Capability-gated binaural controls shared by Recorded and Real-Time tabs."""
+
+from __future__ import annotations
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
+
+from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
+from app.processing.capabilities import ToolCapabilities, preferred_binaural_backend
+from app.storage.models import BinauralRequest
+from app.ui.secondary_note import apply_secondary_note
+
+BACKEND_LABELS = {
+    "array_downmix": "array_downmix (6-mic → stereo, default)",
+    "mono_reference": "mono_reference (L=R bypass)",
+    "itd_ild": "itd_ild (mono virtualizer, legacy)",
+    "compact_hrtf": "compact_hrtf (mono HRTF, experimental)",
+    "full_hrtf_reference": "full_hrtf_reference (mono HRTF)",
+}
+
+
+class BinauralControls(QWidget):
+    changed = Signal()
+
+    def __init__(self, capabilities: ToolCapabilities, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._capabilities = capabilities
+
+        box = QGroupBox("Binaural renderer (6-mic → stereo)")
+        self._enable = QCheckBox("Binaural enabled")
+        self._backend = QComboBox()
+        self._backend.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._backend.setMinimumContentsLength(16)
+        self._follow = QCheckBox("Link spatial cue to beamformer steering (mono virtualizers only)")
+        self._follow.setChecked(False)
+        self._follow.setToolTip(
+            "Only applies to itd_ild / HRTF backends that spatialize beamformed mono. "
+            "array_downmix ignores steering and folds all six mics directly."
+        )
+        self._azimuth = QDoubleSpinBox()
+        self._azimuth.setRange(-180.0, 180.0)
+        self._azimuth.setSuffix("°")
+        self._azimuth.setToolTip("Virtual direction for mono→HRTF/ITD backends only.")
+        self._elevation = QDoubleSpinBox()
+        self._elevation.setRange(-90.0, 90.0)
+        self._elevation.setSuffix("°")
+        self._elevation.setToolTip("Elevation for mono virtualizer backends only.")
+        self._note = QLabel("")
+        apply_secondary_note(self._note)
+
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.addRow(self._enable)
+        form.addRow("Renderer backend:", self._backend)
+        form.addRow(self._follow)
+        form.addRow("Spatial azimuth:", self._azimuth)
+        form.addRow("Spatial elevation:", self._elevation)
+
+        layout = QVBoxLayout(box)
+        layout.addLayout(form)
+        layout.addWidget(self._note)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(box)
+
+        self._populate()
+        self._enable.toggled.connect(lambda _c: self.changed.emit())
+        self._backend.currentIndexChanged.connect(self._on_backend_changed)
+        self._follow.toggled.connect(self._on_follow_toggled)
+        self._azimuth.valueChanged.connect(lambda _v: self.changed.emit())
+        self._elevation.valueChanged.connect(lambda _v: self.changed.emit())
+
+    def request(self) -> BinauralRequest:
+        backend = self._backend.currentData()
+        return BinauralRequest(
+            enabled=self._enable.isChecked() and self._enable.isEnabled(),
+            backend=backend if isinstance(backend, str) else None,
+            azimuth_deg=self._azimuth.value(),
+            elevation_deg=self._elevation.value(),
+            follow_beamformer_steering=self._follow.isChecked(),
+        )
+
+    def _on_backend_changed(self, _index: int) -> None:
+        self._sync_backend_widgets()
+        self.changed.emit()
+
+    def _on_follow_toggled(self, _checked: bool) -> None:
+        self._sync_backend_widgets()
+        self.changed.emit()
+
+    def _selected_backend(self) -> str | None:
+        backend = self._backend.currentData()
+        return backend if isinstance(backend, str) else None
+
+    def _is_array_downmix(self) -> bool:
+        return self._selected_backend() == "array_downmix"
+
+    def _sync_backend_widgets(self) -> None:
+        usable = self._enable.isEnabled()
+        array_mode = self._is_array_downmix()
+        self._follow.setEnabled(usable and not array_mode)
+        angles_on = usable and not array_mode and not self._follow.isChecked()
+        self._azimuth.setEnabled(angles_on)
+        self._elevation.setEnabled(angles_on)
+
+    def _populate(self) -> None:
+        caps = self._capabilities.binaural
+        self._backend.clear()
+        usable = bool(caps.available and self._capabilities.queried and caps.backends)
+        self._enable.setEnabled(usable)
+        self._backend.setEnabled(usable)
+
+        yaml_binaural = None
+        try:
+            yaml_binaural = read_runtime_config_summary(DEFAULT_CONFIG_PATH).binaural
+        except Exception:  # noqa: BLE001 - still populate from C++ capabilities
+            pass
+
+        if not self._capabilities.queried:
+            self._enable.setChecked(False)
+            self._sync_backend_widgets()
+            self._note.setText(
+                "C++ binaural capabilities were not reported (binary missing or older than this "
+                "protocol). Rebuild sonitude_wav_replay / sonitude_stream_process in this tree so "
+                "--capabilities lists backends. The rest of the test bench remains usable."
+            )
+            return
+        if not usable:
+            self._enable.setChecked(False)
+            self._sync_backend_widgets()
+            self._note.setText("This C++ build reports binaural as unavailable.")
+            return
+
+        for name in caps.backends:
+            self._backend.addItem(BACKEND_LABELS.get(name, name), userData=name)
+        yaml_backend = yaml_binaural.backend if yaml_binaural is not None else None
+        chosen = preferred_binaural_backend(caps.backends, yaml_backend)
+        if chosen is not None:
+            index = self._backend.findData(chosen)
+            if index >= 0:
+                self._backend.setCurrentIndex(index)
+
+        if yaml_binaural is not None:
+            self._follow.setChecked(yaml_binaural.follow_steering)
+            self._azimuth.setValue(yaml_binaural.azimuth_deg)
+            self._elevation.setValue(yaml_binaural.elevation_deg)
+            self._enable.setChecked(yaml_binaural.enabled)
+            if yaml_binaural.backend:
+                index = self._backend.findData(yaml_binaural.backend)
+                if index >= 0:
+                    self._backend.setCurrentIndex(index)
+        elif "array_downmix" in caps.backends:
+            self._enable.setChecked(True)
+
+        self._sync_backend_widgets()
+        unavailable = ", ".join(caps.unavailable_backends) or "none"
+        binary = f" Binary: {self._capabilities.binary_path}." if self._capabilities.binary_path else ""
+        self._note.setText(
+            "array_downmix faithfully folds the calibrated six-mic ear-cup capture into stereo "
+            "(left/right hemispheres weighted from geometry). Steering only affects the "
+            "delay-and-sum beamformer tap, not this headphone image. "
+            "itd_ild/HRTF backends are legacy mono virtualizers. "
+            f"Unavailable backends (not offered): {unavailable}.{binary}"
+        )

@@ -12,9 +12,9 @@ float Clamp01(const float x)
 {
   return std::clamp(x, 0.0F, 1.0F);
 }
-} // namespace
+}  // namespace
 
-void OutputGainGate::configure(const SuppressorConfig& config, const std::uint32_t sample_rate_hz)
+void ConservativeSuppressor::configure(const SuppressorConfig& config, const std::uint32_t sample_rate_hz)
 {
   if (sample_rate_hz == 0)
   {
@@ -26,16 +26,17 @@ void OutputGainGate::configure(const SuppressorConfig& config, const std::uint32
   config_.confidence_threshold = Clamp01(config_.confidence_threshold);
   config_.activity_threshold = std::max(0.0F, config_.activity_threshold);
   config_.fade_ms = std::max(1.0F, config_.fade_ms);
+  config_.envelope_attack_coeff =
+      std::clamp(config_.envelope_attack_coeff, 0.001F, 1.0F);
+  config_.envelope_release_coeff =
+      std::clamp(config_.envelope_release_coeff, 0.0001F, 1.0F);
 
   const float fade_samples =
       std::max(1.0F, (config_.fade_ms * 0.001F) * static_cast<float>(sample_rate_hz));
   gain_step_per_sample_ = 1.0F / fade_samples;
 
-  // Keep envelope memory short to follow speech on period-scale blocks.
-  // TODO(sonitude-suppression): Tune envelope coefficients from runtime config once selective
-  // suppression acceptance metrics and hardware calibration runs are available.
-  envelope_attack_coeff_ = 0.35F;
-  envelope_release_coeff_ = 0.01F;
+  envelope_attack_coeff_ = config_.envelope_attack_coeff;
+  envelope_release_coeff_ = config_.envelope_release_coeff;
 
   focus_active_ = false;
   confidence_ = 0.0F;
@@ -44,13 +45,13 @@ void OutputGainGate::configure(const SuppressorConfig& config, const std::uint32
   configured_ = true;
 }
 
-void OutputGainGate::setControl(const bool focus_active, const float confidence)
+void ConservativeSuppressor::setControl(const bool focus_active, const float confidence)
 {
   focus_active_ = focus_active;
   confidence_ = Clamp01(confidence);
 }
 
-void OutputGainGate::process(const std::span<float> mono)
+void ConservativeSuppressor::process(const std::span<float> mono)
 {
   if (!configured_)
   {
@@ -69,8 +70,9 @@ void OutputGainGate::process(const std::span<float> mono)
       envelope_ += envelope_release_coeff_ * (magnitude - envelope_);
     }
 
-    const bool allow_attenuation = focus_active_ && (confidence_ >= config_.confidence_threshold) &&
-                                   (envelope_ >= config_.activity_threshold);
+    const bool allow_attenuation =
+        focus_active_ && (confidence_ >= config_.confidence_threshold) &&
+        (envelope_ >= config_.activity_threshold);
     const float target_gain = allow_attenuation ? config_.ambient_floor_linear : 1.0F;
 
     if (current_gain_ < target_gain)
@@ -85,4 +87,4 @@ void OutputGainGate::process(const std::span<float> mono)
     sample *= current_gain_;
   }
 }
-} // namespace sonitude::dsp
+}  // namespace sonitude::dsp

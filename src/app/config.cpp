@@ -1,6 +1,7 @@
 #include "app/config.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <stdexcept>
@@ -161,6 +162,26 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
   config.suppression.activity_threshold = RequireScalar<float>(suppression, "activity_threshold");
   config.suppression.confidence_threshold =
       RequireScalar<float>(suppression, "confidence_threshold");
+  if (suppression["backend"])
+  {
+    config.suppression.backend = RequireScalar<std::string>(suppression, "backend");
+  }
+  if (suppression["spectral"])
+  {
+    const YAML::Node spectral = suppression["spectral"];
+    if (spectral["fft_size"])
+    {
+      config.suppression.spectral.fft_size = RequireScalar<std::size_t>(spectral, "fft_size");
+    }
+    if (spectral["hop_size"])
+    {
+      config.suppression.spectral.hop_size = RequireScalar<std::size_t>(spectral, "hop_size");
+    }
+    if (spectral["gain_floor_db"])
+    {
+      config.suppression.spectral.gain_floor_db = RequireScalar<float>(spectral, "gain_floor_db");
+    }
+  }
 
   const YAML::Node sm = root["state_machine"];
   config.state_machine.activation_hold_ms = RequireScalar<std::uint32_t>(sm, "activation_hold_ms");
@@ -194,6 +215,47 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
       OptionalScalar<std::uint32_t>(realtime, "rt_prefault_kib", 128U);
   config.realtime.startup_timeout_ms =
       OptionalScalar<std::uint32_t>(realtime, "startup_timeout_ms", 2000U);
+
+  if (root["binaural"])
+  {
+    const YAML::Node binaural = root["binaural"];
+    config.binaural.enabled = RequireScalar<bool>(binaural, "enabled");
+    config.binaural.backend = RequireScalar<std::string>(binaural, "backend");
+    if (binaural["direction"])
+    {
+      const YAML::Node direction = binaural["direction"];
+      config.binaural.direction.follow_steering = RequireScalar<bool>(direction, "follow_steering");
+      if (direction["azimuth_deg"])
+      {
+        config.binaural.direction.azimuth_deg = RequireScalar<float>(direction, "azimuth_deg");
+      }
+      if (direction["elevation_deg"])
+      {
+        config.binaural.direction.elevation_deg = RequireScalar<float>(direction, "elevation_deg");
+      }
+    }
+    if (binaural["transition"])
+    {
+      const YAML::Node transition = binaural["transition"];
+      config.binaural.transition.duration_ms = RequireScalar<float>(transition, "duration_ms");
+    }
+    if (binaural["profile"])
+    {
+      const YAML::Node profile = binaural["profile"];
+      config.binaural.profile.id = RequireScalar<std::string>(profile, "id");
+      if (profile["table_path"])
+      {
+        config.binaural.profile.table_path =
+            ResolvePath(path, RequireScalar<std::string>(profile, "table_path"));
+      }
+    }
+    if (binaural["model"])
+    {
+      const YAML::Node model = binaural["model"];
+      config.binaural.model.head_radius_m = RequireScalar<float>(model, "head_radius_m");
+      config.binaural.model.max_ild_db = RequireScalar<float>(model, "max_ild_db");
+    }
+  }
 
   config.zones = ParseZones(root["zones"]);
 
@@ -342,8 +404,26 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     throw std::runtime_error("suppression.confidence_threshold must be in [0, 1]");
   }
 
-  if (config.state_machine.activation_hold_ms == 0 ||
-      config.state_machine.confirmation_hold_ms == 0)
+  if (config.suppression.backend != "conservative" && config.suppression.backend != "spectral")
+  {
+    throw std::runtime_error(
+        "suppression.backend must be conservative or spectral (unknown value is not remapped)");
+  }
+
+  const bool spectral_pair_ok =
+      (config.suppression.spectral.fft_size == 128 && config.suppression.spectral.hop_size == 32) ||
+      (config.suppression.spectral.fft_size == 256 && config.suppression.spectral.hop_size == 64);
+  if (config.suppression.backend == "spectral" && !spectral_pair_ok)
+  {
+    throw std::runtime_error("suppression.spectral fft/hop must be 128/32 or 256/64");
+  }
+  if (config.suppression.spectral.gain_floor_db > 0.0F ||
+      config.suppression.spectral.gain_floor_db < -80.0F)
+  {
+    throw std::runtime_error("suppression.spectral.gain_floor_db must be in [-80, 0]");
+  }
+
+  if (config.state_machine.activation_hold_ms == 0 || config.state_machine.confirmation_hold_ms == 0)
   {
     throw std::runtime_error("state machine activation and confirmation holds must be non-zero");
   }
@@ -405,6 +485,29 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     {
       throw std::runtime_error("zone azimuth bounds must be within [-180, 360]");
     }
+  }
+
+  static const std::array<const char*, 5> kKnownBinauralBackends = {
+      "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference", "array_downmix"};
+  const bool known_backend = std::any_of(
+      kKnownBinauralBackends.begin(),
+      kKnownBinauralBackends.end(),
+      [&](const char* value) { return config.binaural.backend == value; });
+  if (!known_backend)
+  {
+    throw std::runtime_error("Unknown binaural backend: " + config.binaural.backend);
+  }
+  if (config.binaural.transition.duration_ms < 0.0F || config.binaural.transition.duration_ms > 500.0F)
+  {
+    throw std::runtime_error("binaural.transition.duration_ms must be in [0, 500]");
+  }
+  if (config.binaural.model.head_radius_m <= 0.0F || config.binaural.model.head_radius_m > 0.25F)
+  {
+    throw std::runtime_error("binaural.model.head_radius_m must be in (0, 0.25]");
+  }
+  if (config.binaural.profile.id.empty())
+  {
+    throw std::runtime_error("binaural.profile.id cannot be empty");
   }
 }
 

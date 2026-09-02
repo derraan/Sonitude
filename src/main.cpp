@@ -25,11 +25,12 @@
 #include "control/zones.hpp"
 #include "dsp/asrc_controller.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/binaural_renderer.hpp"
 #include "dsp/calibration_applier.hpp"
+#include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/resampler.hpp"
-#include "dsp/selective_suppressor.hpp"
-#include "dsp/suppressor.hpp"
+#include "dsp/suppression_stage.hpp"
 #include "rt/block_channel.hpp"
 #include "rt/lifecycle.hpp"
 #include "rt/managed_thread.hpp"
@@ -41,6 +42,81 @@
 
 namespace
 {
+sonitude::dsp::BinauralBackend ParseBinauralBackend(const std::string& backend)
+{
+  if (backend == "itd_ild")
+  {
+    return sonitude::dsp::BinauralBackend::ItdIld;
+  }
+  if (backend == "compact_hrtf")
+  {
+    return sonitude::dsp::BinauralBackend::CompactHrtf;
+  }
+  if (backend == "full_hrtf_reference")
+  {
+    return sonitude::dsp::BinauralBackend::FullHrtfReference;
+  }
+  if (backend == "array_downmix")
+  {
+    return sonitude::dsp::BinauralBackend::ArrayDownmix;
+  }
+  return sonitude::dsp::BinauralBackend::MonoReference;
+}
+
+std::string SiblingFile(const std::string& path, const std::string& filename)
+{
+  const auto pos = path.find_last_of("/\\");
+  if (pos == std::string::npos)
+  {
+    return filename;
+  }
+  return path.substr(0, pos + 1U) + filename;
+}
+
+sonitude::dsp::ArrayDownmixWeights ArrayDownmixForGeometry(
+    const sonitude::app::GeometryConfig& geometry)
+{
+  std::vector<double> mic_x;
+  mic_x.reserve(geometry.microphones.size());
+  for (const auto& mic : geometry.microphones)
+  {
+    mic_x.push_back(mic.x);
+  }
+  return sonitude::dsp::MakeArrayDownmixWeights(mic_x);
+}
+
+std::unique_ptr<sonitude::dsp::HrtfTable> TryLoadHrtfTable(const std::string& path)
+{
+  if (path.empty())
+  {
+    return {};
+  }
+  try
+  {
+    return std::make_unique<sonitude::dsp::HrtfTable>(sonitude::dsp::LoadHrtfTableFromFile(path));
+  }
+  catch (const std::exception& ex)
+  {
+    std::cerr << "realtime: HRTF table not loaded from " << path << ": " << ex.what() << '\n';
+    return {};
+  }
+}
+
+const sonitude::dsp::HrtfTable* TableFor(const sonitude::dsp::HrtfTable* compact,
+                                         const sonitude::dsp::HrtfTable* reference,
+                                         const sonitude::dsp::BinauralBackend backend)
+{
+  if (backend == sonitude::dsp::BinauralBackend::CompactHrtf)
+  {
+    return compact;
+  }
+  if (backend == sonitude::dsp::BinauralBackend::FullHrtfReference)
+  {
+    return reference;
+  }
+  return nullptr;
+}
+
 void PrintUsage()
 {
   std::cout
@@ -313,27 +389,89 @@ int main(int argc, char** argv)
          .ambient_floor_linear = runtime_config.steering.ambient_floor_linear},
         &conversation);
 
-    sonitude::dsp::DelaySumBeamformer beamformer;
+    sonitude::dsp::MvdrBeamformer beamformer;
     beamformer.configure(geometry, runtime_config.steering, calibration, dsp_sample_rate_hz, 4096);
-    sonitude::dsp::OutputGainGate output_gain_gate;
-    output_gain_gate.configure(
-        {.ambient_floor_linear = runtime_config.steering.ambient_floor_linear,
-         .fade_ms = runtime_config.suppression.fade_ms,
-         .activity_threshold = runtime_config.suppression.activity_threshold,
-         .confidence_threshold = runtime_config.suppression.confidence_threshold},
-        dsp_sample_rate_hz);
-    sonitude::dsp::SelectiveSuppressor selective_suppressor;
-    selective_suppressor.configure({}, dsp_sample_rate_hz);
+    sonitude::dsp::SuppressionStage suppressor;
+    const auto suppression_backend =
+        sonitude::dsp::ParseSuppressionBackend(runtime_config.suppression.backend);
+    suppressor.configure(
+        {.enabled = runtime_config.suppression.enabled,
+         .backend = suppression_backend,
+         .sample_rate_hz = dsp_sample_rate_hz,
+         .maximum_block_frames = cap_worker.periodFrames(),
+         .conservative = {.ambient_floor_linear = runtime_config.steering.ambient_floor_linear,
+                          .fade_ms = runtime_config.suppression.fade_ms,
+                          .activity_threshold = runtime_config.suppression.activity_threshold,
+                          .confidence_threshold = runtime_config.suppression.confidence_threshold},
+         .spectral = {.enabled = true,
+                      .fft_size = runtime_config.suppression.spectral.fft_size,
+                      .hop_size = runtime_config.suppression.spectral.hop_size,
+                      .gain_floor_db = runtime_config.suppression.spectral.gain_floor_db,
+                      .confidence_threshold = runtime_config.suppression.confidence_threshold}});
+    beamformer.setSpectralPostfilter(suppressor.spectralFilter());
     sonitude::dsp::PeakLimiter limiter;
     // TODO(sonitude-limiter): Promote limiter defaults into runtime config when limiter tuning
     // is calibrated against target hardware and benchmark fixtures.
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
 
     const std::size_t period_frames = cap_worker.periodFrames();
+
+    const bool binaural_enabled = runtime_config.binaural.enabled;
+    const auto binaural_backend = ParseBinauralBackend(runtime_config.binaural.backend);
+    std::unique_ptr<sonitude::dsp::HrtfTable> compact_hrtf;
+    std::unique_ptr<sonitude::dsp::HrtfTable> reference_hrtf;
+    if (binaural_enabled &&
+        (binaural_backend == sonitude::dsp::BinauralBackend::CompactHrtf ||
+         binaural_backend == sonitude::dsp::BinauralBackend::FullHrtfReference))
+    {
+      compact_hrtf = TryLoadHrtfTable(runtime_config.binaural.profile.table_path);
+      if (!runtime_config.binaural.profile.table_path.empty())
+      {
+        reference_hrtf =
+            TryLoadHrtfTable(SiblingFile(runtime_config.binaural.profile.table_path, "reference.shrf"));
+      }
+    }
+    sonitude::dsp::BinauralRenderer binaural_renderer;
+    sonitude::dsp::StereoPeakLimiter stereo_limiter;
+    bool binaural_renderer_ready = false;
+    if (binaural_enabled)
+    {
+      const sonitude::dsp::HrtfTable* table =
+          TableFor(compact_hrtf.get(), reference_hrtf.get(), binaural_backend);
+      if ((binaural_backend == sonitude::dsp::BinauralBackend::CompactHrtf ||
+           binaural_backend == sonitude::dsp::BinauralBackend::FullHrtfReference) &&
+          (table == nullptr || table->empty()))
+      {
+        std::cerr << "realtime: binaural backend requires HRTF table; falling back to mono L=R\n";
+      }
+      else
+      {
+        try
+        {
+          binaural_renderer.configure({.sample_rate_hz = dsp_sample_rate_hz,
+                                       .backend = binaural_backend,
+                                       .transition_ms = runtime_config.binaural.transition.duration_ms,
+                                       .max_block_frames = period_frames,
+                                       .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
+                                                   .max_ild_db = runtime_config.binaural.model.max_ild_db},
+                                       .table = table,
+                                       .array_downmix = ArrayDownmixForGeometry(geometry)});
+          stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
+          binaural_renderer_ready = true;
+          std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
+        }
+        catch (const std::exception& ex)
+        {
+          std::cerr << "realtime: binaural configure failed: " << ex.what() << '\n';
+        }
+      }
+    }
+
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
     std::vector<sonitude::audio::MicFrame> calibrated_frames(period_frames);
     std::vector<float> mono(period_frames, 0.0F);
-    std::vector<float> distractor_reference(period_frames, 0.0F);
+    std::vector<float> binaural_left(period_frames, 0.0F);
+    std::vector<float> binaural_right(period_frames, 0.0F);
     std::vector<sonitude::dsp::StereoSample> stereo(period_frames);
 
     // Capture/DSP -> playback. Every slot has exactly one owner at all times and
@@ -414,6 +552,7 @@ int main(int argc, char** argv)
       bool have_target = false;
       sonitude::control::RtSteeringSnapshot steering{};
       std::uint64_t previous_start_ns = 0;
+      bool hold_estimator_after_xrun = false;
 
       const bool can_wait = cap_worker.waitingSupported();
       while (!lifecycle.stopRequested())
@@ -452,6 +591,13 @@ int main(int argc, char** argv)
         if (!cap_worker.readBlock(std::span<sonitude::audio::MicFrame>(mic_frames), &frame_count) ||
             frame_count == 0U)
         {
+          beamformer.resetStream();
+          suppressor.reset();
+          if (binaural_renderer_ready)
+          {
+            binaural_renderer.reset();
+          }
+          hold_estimator_after_xrun = true;
           continue;
         }
 
@@ -491,39 +637,18 @@ int main(int argc, char** argv)
             have_target = true;
           }
           std::fill(mono.begin(), mono.begin() + static_cast<std::ptrdiff_t>(frame_count), 0.0F);
-          if (runtime_config.suppression.enabled && steering.has_distractor)
-          {
-            beamformer.processWithReference(
-                std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
-                std::span<float>(mono.data(), frame_count), steering.distractor,
-                std::span<float>(distractor_reference.data(), frame_count));
-          }
-          else
-          {
-            beamformer.process(
-                std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
-                std::span<float>(mono.data(), frame_count));
-            std::fill(distractor_reference.begin(),
-                      distractor_reference.begin() + static_cast<std::ptrdiff_t>(frame_count),
-                      0.0F);
-          }
-          if (runtime_config.suppression.enabled)
-          {
-            const bool focus_active = !steering.failsafe;
-            selective_suppressor.setControl(focus_active, steering.has_distractor);
-            selective_suppressor.process(
-                std::span<float>(mono.data(), frame_count),
-                std::span<const float>(distractor_reference.data(), frame_count));
-            output_gain_gate.setControl(steering.failsafe, steering.confidence);
-            output_gain_gate.process(std::span<float>(mono.data(), frame_count));
-          }
-          else
-          {
-            selective_suppressor.setControl(false, false);
-            output_gain_gate.setControl(false, 0.0F);
-          }
+          const bool focus_active = !steering.failsafe;
+          const float confidence = focus_active ? steering.confidence : 0.0F;
+          suppressor.setEstimatorHold(hold_estimator_after_xrun);
+          hold_estimator_after_xrun = false;
+          suppressor.setControl(focus_active, confidence);
+          beamformer.process(
+              std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+              std::span<float>(mono.data(), frame_count));
+          suppressor.process(std::span<float>(mono.data(), frame_count));
+          limiter.process(std::span<float>(mono.data(), frame_count));
           counters.suppressor_gain_milli.store(
-              static_cast<std::int64_t>(std::llround(output_gain_gate.currentGain() * 1000.0F)),
+              static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),
               std::memory_order_relaxed);
           counters.steering_confidence_milli.store(
               static_cast<std::int64_t>(std::llround(steering.confidence * 1000.0F)),
@@ -531,19 +656,45 @@ int main(int argc, char** argv)
           counters.speech_probability_milli.store(
               static_cast<std::int64_t>(std::llround(steering.speech_probability * 1000.0F)),
               std::memory_order_relaxed);
-          for (std::size_t i = 0; i < frame_count; ++i)
+          if (binaural_renderer_ready)
           {
-            stereo[i].left = mono[i];
-            stereo[i].right = mono[i];
+            const sonitude::audio::BeamformerSteering binaural_dir =
+                runtime_config.binaural.direction.follow_steering
+                    ? steering.target
+                    : sonitude::audio::BeamformerSteering{
+                          runtime_config.binaural.direction.azimuth_deg,
+                          runtime_config.binaural.direction.elevation_deg};
+            binaural_renderer.setDirection(binaural_dir);
+            binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
+                                      std::span<float>(binaural_left.data(), frame_count),
+                                      std::span<float>(binaural_right.data(), frame_count));
+            stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
+                                   std::span<float>(binaural_right.data(), frame_count));
+            for (std::size_t i = 0; i < frame_count; ++i)
+            {
+              stereo[i].left = binaural_left[i];
+              stereo[i].right = binaural_right[i];
+            }
+          }
+          else
+          {
+            for (std::size_t i = 0; i < frame_count; ++i)
+            {
+              stereo[i].left = mono[i];
+              stereo[i].right = mono[i];
+            }
           }
         }
 
-        const sonitude::dsp::LimiterTelemetry limiter_telemetry = limiter.processLinkedStereo(
-            std::span<sonitude::dsp::StereoSample>(stereo.data(), frame_count));
-        counters.limiter_input_over_ceiling_events.fetch_add(
-            limiter_telemetry.input_over_ceiling_events, std::memory_order_relaxed);
-        counters.limiter_output_saturation_events.fetch_add(
-            limiter_telemetry.output_saturation_events, std::memory_order_relaxed);
+        if (passthrough_mode)
+        {
+          const sonitude::dsp::LimiterTelemetry limiter_telemetry = limiter.processLinkedStereo(
+              std::span<sonitude::dsp::StereoSample>(stereo.data(), frame_count));
+          counters.limiter_input_over_ceiling_events.fetch_add(
+              limiter_telemetry.input_over_ceiling_events, std::memory_order_relaxed);
+          counters.limiter_output_saturation_events.fetch_add(
+              limiter_telemetry.output_saturation_events, std::memory_order_relaxed);
+        }
 
         // Ownership handoff: take a free slot, fill it, publish it. If playback
         // has not returned a slot yet this block is dropped and counted; the

@@ -2,7 +2,7 @@
 
 This document defines the target architecture, real-time latency budget, ODAS integration posture, and ownership constraints. `docs/milestones.md` remains authoritative for gate evidence; `docs/CodebaseState.md` for scope vetoes and interface snapshots.
 
-Last updated: 2026-08-16.
+Last updated: 2026-08-29.
 
 ---
 
@@ -22,6 +22,8 @@ Sonitude is a **hearable-class** low-latency pipeline, not a robot-audition batc
 
 **Implication:** Any separation or post-filtering block that needs **STFT frames of 8–16 ms+**, or outputs on **128-sample hops @ 16 kHz**, is incompatible with the audio-path target unless it runs **off the RT thread** and only influences slow steering — not live PCM.
 
+The PySide6 algorithm test bench (`testbench/`) is explicitly **outside** this budget. It drives `sonitude_wav_replay` / `sonitude_stream_process` over subprocess IPC for correctness checks, including hour-scale file streaming and live steering while playing a recording. See `testbench/README.md`. Do not treat its block-round-trip latency as an M8 measurement.
+
 ---
 
 
@@ -40,8 +42,23 @@ Pico USB ALSA capture (6 active channels)
 Audio path target order:
 
 ```text
-steering snapshot -> delay-and-sum beamformer -> conservative suppression policy
--> limiter -> mono-to-stereo -> ASRC/drift control -> ALSA playback
+steering snapshot -> STFT-domain MVDR (optional same-hop spectral NS) -> conservative PCM if selected
+-> binaural renderer -> linked stereo limiter -> ASRC/drift control -> ALSA playback
+```
+
+The experimental spectral postfilter (`docs/spectral_postfilter.md`) shares the
+MVDR 128/32 hop. It is an alternative to the conservative PCM suppressor, off by
+default, and does not claim M8 latency or MCU fit.
+**SCOPE-3 is user-vetoed for in-tree STFT-domain MVDR** (2026-08-30). Neural DSP remains unused.
+
+Direction convention (authoritative for steering and binaural rendering;
+helpers in `src/spatial/head_frame.hpp`):
+
+```text
+azimuth 0 deg  = front (+Y)
+azimuth +deg   = clockwise toward listener-right (+X)
+elevation +deg = up (+Z)
+wrap range     = (-180, +180]
 ```
 
 Control path target order:
@@ -59,7 +76,7 @@ ODAS/mock DOA -> source association -> source confidence and zone selection
 
 Current runtime uses split workers with explicit startup-gated scheduling checks.
 
-- **Capture/DSP worker thread (RT):** ALSA capture, calibration, mode-stage DSP, limiter, block publish.
+- **Capture/DSP worker thread (RT):** ALSA capture, calibration, beamforming, suppression, binaural rendering (when enabled), limiting, block publish.
 - **Playback worker thread (RT):** `BlockChannel` consume, ASRC drift control, ALSA playback.
 - **Control thread (non-RT, beamform mode only):** ODAS/mock source tracking and state-machine steering publication.
 - **Telemetry thread (non-RT):** one-second counter emission and final summary reporting.
@@ -386,7 +403,7 @@ flowchart TB
 
 ### M4 beamformer — openMHA-aligned design
 
-The in-tree `IBeamformer` (M4) follows the openMHA delay-and-sum convention:
+The in-tree `MvdrBeamformer` (M4) follows the openMHA delay-and-sum convention for its fallback path:
 
 1. **Far-field plane-wave delays** from mic positions (YAML geometry) and steering direction **u**, using the same speed-of-sound parameter as config (`343 m/s` default).
 2. **Per-channel fractional delay** — 8-tap windowed-sinc FIR (Sonitude choice for Pi NEON); openMHA uses equivalent delay lines in the DS plugin.
@@ -460,7 +477,7 @@ This satisfies reproducibility goals of the openMHA platform [1] while keeping o
 | --------- | ---------------------------- |
 | **SCOPE-1** (no JACK) | Blocks hosting `mha` with `MHAIOJack` in the live path; offline `MHAIOFile` only |
 | **SCOPE-2** (ODAS control-only) | No openMHA+ODAS hybrid audio chain |
-| **SCOPE-3** (no MVDR/neural) | DS + conservative suppressor only; MVDR/ADM/DNN openMHA configs are reference-only |
+| **SCOPE-3** (MVDR in-tree; no neural) | In-tree STFT MVDR is the beamformer; openMHA MVDR/ADM/DNN configs stay reference-only |
 | **SCOPE-7** (reference-only firmware vendoring) | openMHA remains out-of-tree and out of the Sonitude build graph (`libopenmha` not linked) |
 
 **If SCOPE-1 is vetoed:** a sidecar `mha` on JACK could process a tap — still incompatible with direct `hw:` latency claims unless remeasured (M8).

@@ -1,6 +1,7 @@
 # Build outputs
 /build/
 /build-*/
+/build-asan/
 /out/
 /mic-array-pico2w-usb6ch/build/
 /mic-array-pico2w-usb6ch/build-*/
@@ -25,3 +26,17 @@ Thumbs.db
 /config/geometry_soundbubble_local.yaml
 /config/geometry_soundbubble_corrected.yaml
 /config/calibration_gain_test.yaml
+
+# Test bench (testbench/) — Python runtime artifacts and generated test data
+testbench/.venv/
+testbench/venv/
+testbench/__pycache__/
+testbench/**/__pycache__/
+testbench/.pytest_cache/
+testbench/data/
+
+# Large HRTF source datasets are fetched into local cache only.
+data/hrtf_cache/
+
+# Local capture files for test-bench replay (large; do not commit)
+/test_data/

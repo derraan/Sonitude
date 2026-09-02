@@ -96,7 +96,7 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
 
 - Status: `in_progress`
 - Gate:
-  - deterministic fractional delay-and-sum implementation
+  - deterministic STFT-domain MVDR implementation (delay-and-sum fallback)
   - scripted steering WAV harness passes synthetic alignment checks
 - Evidence command template:
   - `ctest --test-dir build --output-on-failure`
@@ -130,8 +130,9 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
   - smooth fade in/out and safe fallback verified
 - Evidence command template:
   - `ctest --test-dir build --output-on-failure`
-  - `./build/sonitude_wav_replay --input <six_channel_wav> --config config/default.yaml --script <steering_csv> --output <suppressed_mono_wav> --enable-suppression`
-  - `./build/sonitude_wav_replay --input <six_channel_wav> --config config/default.yaml --script <steering_csv> --output <unsuppressed_mono_wav>`
+  - `./build/sonitude_wav_replay --input <six_channel_wav> --config config/default.yaml --script <steering_csv> --output <suppressed_mono_wav> --suppression on`
+  - `./build/sonitude_wav_replay --input <six_channel_wav> --config config/default.yaml --script <steering_csv> --output <unsuppressed_mono_wav> --suppression off`
+  - `--enable-suppression` remains an ON alias; `--disable-suppression` forces OFF even when YAML `suppression.enabled` is true.
 - Evidence/result:
   - Conservative suppressor (`ConservativeSuppressor`) added with ambient-floor clamp, confidence gating, and failsafe ramp-to-unity behavior.
   - Peak limiter (`PeakLimiter`) now runs as a shared post-mode output stage for both passthrough and beamform paths.

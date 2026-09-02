@@ -63,12 +63,21 @@ struct SteeringConfig
   float ambient_floor_linear = 0.25F;
 };
 
+struct SpectralSuppressionConfig
+{
+  std::size_t fft_size = 128;
+  std::size_t hop_size = 32;
+  float gain_floor_db = -12.0F;
+};
+
 struct SuppressionConfig
 {
   bool enabled = false;
+  std::string backend = "conservative";
   float fade_ms = 120.0F;
   float activity_threshold = 0.03F;
   float confidence_threshold = 0.6F;
+  SpectralSuppressionConfig spectral{};
 };
 
 struct StateMachineConfig
@@ -115,6 +124,40 @@ struct RealtimeConfig
   std::uint32_t startup_timeout_ms = 2000;
 };
 
+struct BinauralDirectionConfig
+{
+  bool follow_steering = false;
+  float azimuth_deg = 0.0F;
+  float elevation_deg = 0.0F;
+};
+
+struct BinauralTransitionConfig
+{
+  float duration_ms = 150.0F;
+};
+
+struct BinauralProfileConfig
+{
+  std::string id = "generic";
+  std::string table_path;
+};
+
+struct BinauralModelConfig
+{
+  float head_radius_m = 0.0875F;
+  float max_ild_db = 6.0F;
+};
+
+struct BinauralConfig
+{
+  bool enabled = false;
+  std::string backend = "mono_reference";
+  BinauralDirectionConfig direction;
+  BinauralTransitionConfig transition;
+  BinauralProfileConfig profile;
+  BinauralModelConfig model;
+};
+
 struct RuntimeConfig
 {
   DeviceConfig capture;
@@ -130,6 +173,7 @@ struct RuntimeConfig
   OdasConfig odas;
   TelemetryConfig telemetry;
   RealtimeConfig realtime;
+  BinauralConfig binaural;
   std::vector<ZoneConfig> zones;
 };
 

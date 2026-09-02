@@ -26,7 +26,7 @@ asrc:
 
 steering:
   speed_of_sound_mps: 343.0
-  reference_mic_index: 0
+  reference_mic_index: 2
   steering_ramp_ms: 150.0
   ambient_floor_linear: 0.25
 
@@ -34,9 +34,14 @@ suppression:
   # TODO(sonitude-suppression): Keep default disabled until M7 acceptance gates
   # demonstrate measurable SNR gains with bounded target-speech distortion.
   enabled: false
+  backend: conservative
   fade_ms: 120.0
   activity_threshold: 0.03
   confidence_threshold: 0.6
+  spectral:
+    fft_size: 128
+    hop_size: 32
+    gain_floor_db: -12.0
 
 state_machine:
   activation_hold_ms: 400
@@ -73,6 +78,24 @@ telemetry:
   emit_csv: false
   emit_json: false
   stats_period_ms: 1000
+
+binaural:
+  enabled: true
+  backend: mono_reference
+  direction:
+    follow_steering: false
+    azimuth_deg: 0.0
+    elevation_deg: 0.0
+  transition:
+    duration_ms: 150.0
+  profile:
+    id: generic_sadie2_d2
+    # Experimental compact-HRIR candidate (raw 32-sample prefix). Not a
+    # selected Pico/STM32 representation; no reference-error study yet.
+    table_path: "../data/hrtf/generic_sadie2_d2/compact_32.shrf"
+  model:
+    head_radius_m: 0.0875
+    max_ild_db: 6.0
 
 realtime:
   # Provisional priorities: no measured WCET exists for this pipeline yet, so

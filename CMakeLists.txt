@@ -11,6 +11,7 @@ option(SONITUDE_BUILD_TESTS "Build Sonitude unit tests" ON)
 option(SONITUDE_BUILD_FUZZERS "Build Sonitude libFuzzer harnesses" OFF)
 option(SONITUDE_FETCH_DEPS "Fetch dependencies when not found locally" ON)
 option(SONITUDE_WITH_LIBSAMPLERATE "Enable libsamplerate-backed resampler" ON)
+option(SONITUDE_ENABLE_SANITIZERS "Enable address/UB sanitizers" OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   option(SONITUDE_WITH_ALSA "Enable ALSA audio modules" ON)
 else()
@@ -64,12 +65,17 @@ add_library(
   src/control/conversation_state_machine.cpp
   src/control/zones.cpp
   src/dsp/beamformer.cpp
+  src/dsp/binaural_renderer.cpp
   src/dsp/calibration_applier.cpp
+  src/dsp/hrtf_table.cpp
   src/dsp/limiter.cpp
   src/dsp/resampler_linear.cpp
   src/dsp/resampler_cubic.cpp
   src/dsp/resampler_src.cpp
-  src/dsp/selective_suppressor.cpp
+  src/dsp/fft_radix2.cpp
+  src/dsp/streaming_stft.cpp
+  src/dsp/spectral_postfilter.cpp
+  src/dsp/suppression_stage.cpp
   src/dsp/suppressor.cpp
   src/rt/lifecycle.cpp
   src/rt/managed_thread.cpp
@@ -284,6 +290,26 @@ target_link_libraries(
     sonitude_core
 )
 
+add_executable(
+  sonitude_stream_process
+  src/tools/stream_process.cpp
+)
+target_link_libraries(
+  sonitude_stream_process
+  PRIVATE
+    sonitude_core
+)
+
+add_executable(
+  sonitude_binaural_bench
+  src/tools/binaural_bench.cpp
+)
+target_link_libraries(
+  sonitude_binaural_bench
+  PRIVATE
+    sonitude_core
+)
+
 if(SONITUDE_BUILD_TESTS)
   enable_testing()
 
@@ -297,7 +323,13 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/calibration_estimate_tests.cpp
     tests/unit/beamformer_tests.cpp
     tests/unit/limiter_tests.cpp
+    tests/unit/stereo_limiter_tests.cpp
+    tests/unit/snapshot_tests.cpp
+    tests/unit/binaural_tests.cpp
     tests/unit/suppressor_tests.cpp
+    tests/unit/stft_tests.cpp
+    tests/unit/spectral_postfilter_tests.cpp
+    tests/support/alloc_counter.cpp
     tests/unit/odas_parser_tests.cpp
     tests/unit/source_tracker_tests.cpp
     tests/unit/control_loop_tests.cpp
@@ -333,6 +365,11 @@ if(SONITUDE_BUILD_TESTS)
     COMMAND sonitude_unit_tests
   )
   set_tests_properties(sonitude_unit_tests PROPERTIES LABELS "unit")
+
+  if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
+    target_compile_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined)
+  endif()
 
   add_executable(
     sonitude_concurrency_tests
@@ -401,4 +438,3 @@ if(SONITUDE_BUILD_FUZZERS)
         -fsanitize=fuzzer,address,undefined
     )
   endforeach()
-endif()

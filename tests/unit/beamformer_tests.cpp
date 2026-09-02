@@ -1,4 +1,7 @@
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -7,6 +10,7 @@
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/spectral_postfilter.hpp"
 #include "tests/support/synth_signals.hpp"
 
 namespace
@@ -64,13 +68,13 @@ void TestAlignmentBeatsOffAxis()
   const auto mic = sonitude::tests::support::GeneratePlaneWave(
       source, geometry, kFs, 0, 25.0F, 0.0F, 343.0F);
 
-  sonitude::dsp::DelaySumBeamformer on_axis;
+  sonitude::dsp::MvdrBeamformer on_axis;
   on_axis.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   on_axis.setTarget({25.0F, 0.0F});
   std::vector<float> on(kFrames, 0.0F);
   on_axis.process(mic, on);
 
-  sonitude::dsp::DelaySumBeamformer off_axis;
+  sonitude::dsp::MvdrBeamformer off_axis;
   off_axis.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   off_axis.setTarget({-65.0F, 0.0F});
   std::vector<float> off(kFrames, 0.0F);
@@ -93,7 +97,7 @@ void TestClickFreeRetarget()
   const auto mic = sonitude::tests::support::GeneratePlaneWave(
       source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
 
-  sonitude::dsp::DelaySumBeamformer beam;
+  sonitude::dsp::MvdrBeamformer beam;
   beam.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   beam.setTarget({-70.0F, 0.0F});
 
@@ -115,6 +119,44 @@ void TestClickFreeRetarget()
 
   const double jump = sonitude::tests::support::MaxSecondDifference(out);
   Require(jump < 0.8, "retargeting introduced click-like discontinuity");
+}
+
+void TestRepeatedIdenticalSetTargetSettles()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr float kTransitionMs = 150.0F;
+  const std::size_t ramp =
+      std::max<std::size_t>(1U, static_cast<std::size_t>((kTransitionMs * 0.001F) * kFs));
+  const std::size_t frames = ramp + 512;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  const auto source = sonitude::tests::support::GenerateSine(frames, kFs, 600.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::MvdrBeamformer settled;
+  settled.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  settled.setTarget({45.0F, 0.0F});
+  std::vector<float> settled_out(frames, 0.0F);
+  settled.process(std::span<const sonitude::audio::MicFrame>(mic.data(), frames),
+                  std::span<float>(settled_out.data(), frames));
+
+  sonitude::dsp::MvdrBeamformer live;
+  live.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  std::vector<float> live_out(frames, 0.0F);
+  for (std::size_t start = 0; start < frames; start += 256)
+  {
+    live.setTarget({45.0F, 0.0F});
+    const std::size_t count = std::min<std::size_t>(256, frames - start);
+    live.process(std::span<const sonitude::audio::MicFrame>(mic.data() + start, count),
+                 std::span<float>(live_out.data() + start, count));
+  }
+  for (std::size_t i = ramp; i < frames; ++i)
+  {
+    Require(std::fabs(live_out[i] - settled_out[i]) < 1e-5F,
+            "repeated identical setTarget must not restart the beamformer crossfade");
+  }
 }
 
 void TestCalibrationDelayClosure()
@@ -149,7 +191,7 @@ void TestCalibrationDelayClosure()
     }
   }
 
-  sonitude::dsp::DelaySumBeamformer no_cal;
+  sonitude::dsp::MvdrBeamformer no_cal;
   no_cal.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   no_cal.setTarget({0.0F, 0.0F});
   std::vector<float> out_no_cal(kFrames, 0.0F);
@@ -160,7 +202,7 @@ void TestCalibrationDelayClosure()
   {
     correction[i] = -mismatch[i];
   }
-  sonitude::dsp::DelaySumBeamformer with_cal;
+  sonitude::dsp::MvdrBeamformer with_cal;
   with_cal.configure(geometry, BuildSteering(), BuildCalibration(correction), kFs, kFrames);
   with_cal.setTarget({0.0F, 0.0F});
   std::vector<float> out_with_cal(kFrames, 0.0F);
@@ -168,7 +210,7 @@ void TestCalibrationDelayClosure()
 
   const auto aligned = sonitude::tests::support::GeneratePlaneWave(
       source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
-  sonitude::dsp::DelaySumBeamformer ideal_beam;
+  sonitude::dsp::MvdrBeamformer ideal_beam;
   ideal_beam.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
   ideal_beam.setTarget({0.0F, 0.0F});
   std::vector<float> out_ideal(kFrames, 0.0F);
@@ -182,11 +224,110 @@ void TestCalibrationDelayClosure()
   Require(with_cal_err < no_cal_err,
           "calibration delay correction should move beam output toward ideal alignment");
 }
+
+void TestLeftRightAzimuthConvention()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 4096;
+  const auto geometry = BuildGeometry();
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, -90.0F, 0.0F, 343.0F);
+
+  // In the head frame, azimuth -90 deg is listener-left and should arrive at
+  // the left-side microphone before the right-side microphone.
+  double lead_sum = 0.0;
+  for (std::size_t i = 1; i < kFrames; ++i)
+  {
+    lead_sum += static_cast<double>(mic[i][4]) * static_cast<double>(mic[i - 1][5]);
+    lead_sum -= static_cast<double>(mic[i][5]) * static_cast<double>(mic[i - 1][4]);
+  }
+  Require(lead_sum > 0.0, "left-side source should lead at left ear channel");
+
+  sonitude::dsp::MvdrBeamformer left_steer;
+  left_steer.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  left_steer.setTarget({-90.0F, 0.0F});
+  std::vector<float> out_left(kFrames, 0.0F);
+  left_steer.process(mic, out_left);
+
+  sonitude::dsp::MvdrBeamformer right_steer;
+  right_steer.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  right_steer.setTarget({90.0F, 0.0F});
+  std::vector<float> out_right(kFrames, 0.0F);
+  right_steer.process(mic, out_right);
+
+  const double left_rms = sonitude::tests::support::ComputeRms(out_left, 512);
+  const double right_rms = sonitude::tests::support::ComputeRms(out_right, 512);
+  Require(left_rms > right_rms * 1.2, "listener-left steering should beat listener-right steering");
+}
+
+void TestSpectralSharesSingleStftDelay()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 2048;
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(BuildGeometry(), BuildSteering(), BuildCalibration(), kFs, kFrames);
+  Require(bf.algorithmicDelaySamples() == 127, "MVDR first-arrival is one 128/32 STFT");
+
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(static_cast<double>(kFs), kFrames, {.enabled = true, .gain_floor_db = -12.0F}),
+          "shared-hop postfilter prepare");
+  bf.setSpectralPostfilter(&pf);
+  Require(bf.algorithmicDelaySamples() == 127,
+          "attaching spectral NS must not add a second STFT delay");
+
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, BuildGeometry(), kFs, 0, 0.0F, 0.0F, 343.0F);
+  std::vector<float> out(kFrames, 0.0F);
+  bf.setTarget({0.0F, 0.0F});
+  pf.setControl(true, 1.0F);
+  bf.process(mic, out);
+  Require(std::all_of(out.begin(), out.end(), [](const float v) { return std::isfinite(v); }),
+          "shared-hop spectral MVDR output must stay finite");
+}
+
+void TestMvdrNullsOffAxisInterferer()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 8192;
+  const auto geometry = BuildGeometry();
+  const auto target_src = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto interf_src = sonitude::tests::support::GenerateSine(kFrames, kFs, 1100.0);
+  auto mic = sonitude::tests::support::GeneratePlaneWave(
+      target_src, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+  const auto interf = sonitude::tests::support::GeneratePlaneWave(
+      interf_src, geometry, kFs, 0, 90.0F, 0.0F, 343.0F);
+  for (std::size_t i = 0; i < kFrames; ++i)
+  {
+    for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+    {
+      mic[i][ch] += interf[i][ch];
+    }
+  }
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> out(kFrames, 0.0F);
+  bf.process(mic, out);
+
+  const double out_rms = sonitude::tests::support::ComputeRms(out, 1024);
+  const double target_rms = sonitude::tests::support::ComputeRms(target_src, 1024);
+  const double mix_ref = sonitude::tests::support::ComputeRms(interf_src, 1024);
+  Require(out_rms < (target_rms + mix_ref) * 0.85,
+          "MVDR target look should suppress some off-axis interferer energy");
+  Require(out_rms > target_rms * 0.4, "MVDR should not cancel the look direction");
+}
 }  // namespace
 
 void RunBeamformerTests()
 {
   TestAlignmentBeatsOffAxis();
   TestClickFreeRetarget();
+  TestRepeatedIdenticalSetTargetSettles();
   TestCalibrationDelayClosure();
+  TestLeftRightAzimuthConvention();
+  TestSpectralSharesSingleStftDelay();
+  TestMvdrNullsOffAxisInterferer();
 }

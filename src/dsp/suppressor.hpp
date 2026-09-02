@@ -12,30 +12,19 @@ struct SuppressorConfig
   float fade_ms = 120.0F;
   float activity_threshold = 0.03F;
   float confidence_threshold = 0.6F;
+  float envelope_attack_coeff = 0.35F;
+  float envelope_release_coeff = 0.01F;
 };
 
-class ISuppressor
+class ConservativeSuppressor
 {
-public:
-  virtual ~ISuppressor() = default;
-  virtual void configure(const SuppressorConfig& config, std::uint32_t sample_rate_hz) = 0;
-  virtual void setControl(bool focus_active, float confidence) = 0;
-  virtual void process(std::span<float> mono) = 0;
-  virtual float currentGain() const = 0;
-};
+ public:
+  void configure(const SuppressorConfig& config, std::uint32_t sample_rate_hz);
+  void setControl(bool focus_active, float confidence);
+  void process(std::span<float> mono);
+  float currentGain() const { return current_gain_; }
 
-class OutputGainGate final : public ISuppressor
-{
-public:
-  void configure(const SuppressorConfig& config, std::uint32_t sample_rate_hz) override;
-  void setControl(bool focus_active, float confidence) override;
-  void process(std::span<float> mono) override;
-  float currentGain() const override
-  {
-    return current_gain_;
-  }
-
-private:
+ private:
   SuppressorConfig config_{};
   bool configured_ = false;
   bool focus_active_ = false;
@@ -46,7 +35,4 @@ private:
   float envelope_attack_coeff_ = 0.35F;
   float envelope_release_coeff_ = 0.01F;
 };
-
-// TODO(sonitude-suppression): Remove legacy alias once all downstream references are migrated.
-using ConservativeSuppressor = OutputGainGate;
-} // namespace sonitude::dsp
+}  // namespace sonitude::dsp
