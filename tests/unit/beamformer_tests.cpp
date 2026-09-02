@@ -509,6 +509,88 @@ void TestKemarLutFlagDoesNotAffectArraySteering()
   }
   Require(max_diff < 1.0e-5, "kemar_lut flag must not change analytic array steering output");
 }
+
+void TestSteeringTransitionStateMachine()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr float kTransitionMs = 200.0F;
+  const std::size_t ramp =
+      std::max<std::size_t>(1U, static_cast<std::size_t>((kTransitionMs * 0.001F) * kFs));
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  const auto source = sonitude::tests::support::GenerateSine(ramp * 3U, kFs, 620.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> out(ramp * 3U, 0.0F);
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data(), ramp / 2U),
+             std::span<float>(out.data(), ramp / 2U));
+  Require(!bf.crossfadingForTest(), "identical initial target must not start a crossfade");
+
+  bf.setTarget({40.0F, 0.0F});
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + ramp / 2U, ramp / 4U),
+             std::span<float>(out.data() + ramp / 2U, ramp / 4U));
+  Require(bf.crossfadingForTest(), "new target must start crossfade");
+  const std::size_t cursor_mid = bf.fadeCursorForTest();
+  Require(cursor_mid > 0U && cursor_mid < ramp, "fade cursor must advance during transition");
+
+  bf.setTarget({40.05F, 0.0F});
+  Require(bf.fadeCursorForTest() == cursor_mid,
+          "sub-deadband jitter must not restart the steering crossfade");
+
+  bf.setTarget({40.0F, 0.0F});
+  Require(bf.fadeCursorForTest() == cursor_mid,
+          "repeated identical pending target must not restart the crossfade");
+
+  const std::size_t retarget_at = ramp / 2U + ramp / 4U;
+  const float sample_before = out[retarget_at > 0U ? retarget_at - 1U : 0U];
+  const std::size_t cursor_before_retarget = bf.fadeCursorForTest();
+  bf.setTarget({-25.0F, 0.0F});
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + retarget_at, 1U),
+             std::span<float>(out.data() + retarget_at, 1U));
+  Require(bf.fadeCursorForTest() > 0U && bf.fadeCursorForTest() < ramp,
+          "mid-fade retarget must preserve the inverted crossfade progress");
+  Require(bf.fadeCursorForTest() != cursor_before_retarget,
+          "mid-fade retarget must pivot crossfade progress");
+  Require(std::fabs(bf.activeTargetForTest().azimuth_deg - 40.0F) < 1.0e-3F,
+          "active target must track the audible blend start after pivot");
+  Require(std::fabs(bf.pendingTargetForTest().azimuth_deg + 25.0F) < 1.0e-3F,
+          "pending target must reflect the latest command");
+  Require(std::fabs(out[retarget_at] - sample_before) < 0.35F,
+          "mid-fade retarget must continue from the current acoustic state");
+
+  const std::array<float, 4> rapid_az = {10.0F, 28.0F, 52.0F, 70.0F};
+  std::size_t cursor = 0;
+  for (const float az : rapid_az)
+  {
+    bf.setTarget({az, 0.0F});
+    const std::size_t chunk = std::min<std::size_t>(ramp / 8U, out.size() - cursor);
+    bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + cursor, chunk),
+               std::span<float>(out.data() + cursor, chunk));
+    cursor += chunk;
+  }
+  Require(sonitude::tests::support::MaxSecondDifference(out) < 0.8,
+          "rapid steering changes must stay click-free");
+
+  bf.setTarget({179.8F, 0.0F});
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data(), ramp / 4U),
+             std::span<float>(out.data(), ramp / 4U));
+  const std::size_t wrap_cursor = bf.fadeCursorForTest();
+  bf.setTarget({-179.9F, 0.0F});
+  Require(bf.fadeCursorForTest() == wrap_cursor,
+          "180 wraparound within deadband must not restart crossfade");
+
+  bf.setTarget({179.8F, 12.0F});
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + ramp / 4U, ramp / 4U),
+             std::span<float>(out.data() + ramp / 4U, ramp / 4U));
+  Require(std::fabs(bf.pendingTargetForTest().elevation_deg - 12.0F) < 1.0e-3F,
+          "elevation changes must update the pending steering target");
+  Require(bf.crossfadingForTest(), "elevation retarget must keep the crossfade active");
+}
 }  // namespace
 
 void RunBeamformerTests()
@@ -525,4 +607,5 @@ void RunBeamformerTests()
   TestMovingNoiseStatisticsUpdateDuringCrossfade();
   TestNearFieldElevationSteering();
   TestKemarLutFlagDoesNotAffectArraySteering();
+  TestSteeringTransitionStateMachine();
 }

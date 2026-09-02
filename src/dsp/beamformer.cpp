@@ -463,14 +463,18 @@ void MvdrBeamformer::setTarget(const audio::BeamformerSteering target_in)
   {
     return;
   }
-  if (crossfading_)
+  const bool was_crossfading = crossfading_;
+  if (was_crossfading)
   {
     pivotCrossfadeForRetarget();
+  }
+  else
+  {
+    fade_cursor_ = 0;
   }
   assignPendingLook(target);
   updateGuardDelays(pending_target_);
   crossfading_ = true;
-  fade_cursor_ = 0;
 }
 
 void MvdrBeamformer::setTuning(const MvdrTuningParams& tuning) noexcept
