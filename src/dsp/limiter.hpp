@@ -26,7 +26,10 @@ class PeakLimiter
   void reset();
   LimiterTelemetry process(std::span<float> mono);
   LimiterTelemetry processLinkedStereo(std::span<StereoSample> stereo);
-  float currentGain() const { return gain_; }
+  float currentGain() const
+  {
+    return gain_;
+  }
 
  private:
   LimiterConfig config_{};
@@ -41,7 +44,10 @@ class StereoPeakLimiter
   void configure(const LimiterConfig& config, std::uint32_t sample_rate_hz);
   void reset();
   void process(std::span<float> left, std::span<float> right);
-  float currentGain() const { return gain_; }
+  float currentGain() const
+  {
+    return gain_;
+  }
 
  private:
   LimiterConfig config_{};
@@ -49,4 +55,4 @@ class StereoPeakLimiter
   float gain_ = 1.0F;
   float release_step_per_sample_ = 0.01F;
 };
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp

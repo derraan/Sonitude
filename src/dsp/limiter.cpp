@@ -8,10 +8,8 @@ namespace sonitude::dsp
 {
 namespace
 {
-float UpdateGain(const float amplitude,
-                 const float ceiling_linear,
-                 const float release_step_per_sample,
-                 const float current_gain)
+float UpdateGain(const float amplitude, const float ceiling_linear,
+                 const float release_step_per_sample, const float current_gain)
 {
   float target_gain = 1.0F;
   if (amplitude > ceiling_linear)
@@ -24,7 +22,7 @@ float UpdateGain(const float amplitude,
   }
   return std::min(1.0F, current_gain + release_step_per_sample);
 }
-}  // namespace
+} // namespace
 
 void PeakLimiter::configure(const LimiterConfig& config, const std::uint32_t sample_rate_hz)
 {
@@ -156,4 +154,4 @@ void StereoPeakLimiter::process(const std::span<float> left, const std::span<flo
     right[i] = r * gain_;
   }
 }
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp

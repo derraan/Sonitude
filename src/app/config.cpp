@@ -423,7 +423,8 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     throw std::runtime_error("suppression.spectral.gain_floor_db must be in [-80, 0]");
   }
 
-  if (config.state_machine.activation_hold_ms == 0 || config.state_machine.confirmation_hold_ms == 0)
+  if (config.state_machine.activation_hold_ms == 0 ||
+      config.state_machine.confirmation_hold_ms == 0)
   {
     throw std::runtime_error("state machine activation and confirmation holds must be non-zero");
   }
@@ -489,15 +490,15 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
 
   static const std::array<const char*, 5> kKnownBinauralBackends = {
       "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference", "array_downmix"};
-  const bool known_backend = std::any_of(
-      kKnownBinauralBackends.begin(),
-      kKnownBinauralBackends.end(),
-      [&](const char* value) { return config.binaural.backend == value; });
+  const bool known_backend =
+      std::any_of(kKnownBinauralBackends.begin(), kKnownBinauralBackends.end(),
+                  [&](const char* value) { return config.binaural.backend == value; });
   if (!known_backend)
   {
     throw std::runtime_error("Unknown binaural backend: " + config.binaural.backend);
   }
-  if (config.binaural.transition.duration_ms < 0.0F || config.binaural.transition.duration_ms > 500.0F)
+  if (config.binaural.transition.duration_ms < 0.0F ||
+      config.binaural.transition.duration_ms > 500.0F)
   {
     throw std::runtime_error("binaural.transition.duration_ms must be in [0, 500]");
   }

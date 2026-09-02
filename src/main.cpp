@@ -73,8 +73,8 @@ std::string SiblingFile(const std::string& path, const std::string& filename)
   return path.substr(0, pos + 1U) + filename;
 }
 
-sonitude::dsp::ArrayDownmixWeights ArrayDownmixForGeometry(
-    const sonitude::app::GeometryConfig& geometry)
+sonitude::dsp::ArrayDownmixWeights
+ArrayDownmixForGeometry(const sonitude::app::GeometryConfig& geometry)
 {
   std::vector<double> mic_x;
   mic_x.reserve(geometry.microphones.size());
@@ -427,8 +427,8 @@ int main(int argc, char** argv)
       compact_hrtf = TryLoadHrtfTable(runtime_config.binaural.profile.table_path);
       if (!runtime_config.binaural.profile.table_path.empty())
       {
-        reference_hrtf =
-            TryLoadHrtfTable(SiblingFile(runtime_config.binaural.profile.table_path, "reference.shrf"));
+        reference_hrtf = TryLoadHrtfTable(
+            SiblingFile(runtime_config.binaural.profile.table_path, "reference.shrf"));
       }
     }
     sonitude::dsp::BinauralRenderer binaural_renderer;
@@ -448,15 +448,17 @@ int main(int argc, char** argv)
       {
         try
         {
-          binaural_renderer.configure({.sample_rate_hz = dsp_sample_rate_hz,
-                                       .backend = binaural_backend,
-                                       .transition_ms = runtime_config.binaural.transition.duration_ms,
-                                       .max_block_frames = period_frames,
-                                       .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
-                                                   .max_ild_db = runtime_config.binaural.model.max_ild_db},
-                                       .table = table,
-                                       .array_downmix = ArrayDownmixForGeometry(geometry)});
-          stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
+          binaural_renderer.configure(
+              {.sample_rate_hz = dsp_sample_rate_hz,
+               .backend = binaural_backend,
+               .transition_ms = runtime_config.binaural.transition.duration_ms,
+               .max_block_frames = period_frames,
+               .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
+                           .max_ild_db = runtime_config.binaural.model.max_ild_db},
+               .table = table,
+               .array_downmix = ArrayDownmixForGeometry(geometry)});
+          stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F},
+                                   dsp_sample_rate_hz);
           binaural_renderer_ready = true;
           std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
         }
