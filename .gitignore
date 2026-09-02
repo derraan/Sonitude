@@ -1,7 +1,14 @@
 # Build outputs
 /build/
+/build-*/
 /build-asan/
 /out/
+/mic-array-pico2w-usb6ch/build/
+/mic-array-pico2w-usb6ch/build-*/
+
+# LibFuzzer-generated SHA-1 corpus entries (promote useful cases to named seeds).
+/tests/fuzz/corpus/odas/????????????????????????????????????????
+/tests/fuzz/corpus/wav/????????????????????????????????????????
 
 # IDE and editor files
 /.idea/
@@ -11,6 +18,14 @@
 # OS files
 Thumbs.db
 .DS_Store
+
+# Firmware local capture artifacts
+/mic-array-pico2w-usb6ch/inmp441_test_capture.wav
+/config/production_pi.local.yaml
+/config/production_pi.*.local.yaml
+/config/geometry_soundbubble_local.yaml
+/config/geometry_soundbubble_corrected.yaml
+/config/calibration_gain_test.yaml
 
 # Test bench (testbench/) — Python runtime artifacts and generated test data
 testbench/.venv/

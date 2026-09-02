@@ -11,13 +11,15 @@ namespace sonitude::spatial
 {
 class SourceTracker
 {
- public:
+public:
   explicit SourceTracker(std::uint64_t stale_after_ns) : stale_after_ns_(stale_after_ns) {}
 
   void ingest(const std::vector<SourceObservation>& observations, std::uint64_t now_ns);
   std::optional<SourceObservation> best(std::uint64_t now_ns) const;
+  std::optional<SourceObservation> strongestDistractor(std::uint64_t now_ns,
+                                                       std::uint64_t focus_source_id) const;
 
- private:
+private:
   struct Track
   {
     SourceObservation obs{};
@@ -27,4 +29,4 @@ class SourceTracker
   std::unordered_map<std::uint64_t, Track> tracks_;
   std::uint64_t stale_after_ns_ = 1'500'000'000ULL;
 };
-}  // namespace sonitude::spatial
+} // namespace sonitude::spatial

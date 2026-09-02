@@ -8,6 +8,7 @@ project(
 )
 
 option(SONITUDE_BUILD_TESTS "Build Sonitude unit tests" ON)
+option(SONITUDE_BUILD_FUZZERS "Build Sonitude libFuzzer harnesses" OFF)
 option(SONITUDE_FETCH_DEPS "Fetch dependencies when not found locally" ON)
 option(SONITUDE_WITH_LIBSAMPLERATE "Enable libsamplerate-backed resampler" ON)
 option(SONITUDE_ENABLE_SANITIZERS "Enable address/UB sanitizers" OFF)
@@ -25,6 +26,29 @@ if(MSVC)
   add_compile_options(/W4 /permissive-)
 else()
   add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# Sanitizer builds for the concurrency tests. ThreadSanitizer and
+# AddressSanitizer cannot be combined, so SONITUDE_SANITIZER selects one.
+# These builds are for the non-realtime test configuration: TSan in particular
+# interposes on synchronisation and must not be used to judge timing.
+set(SONITUDE_SANITIZER "none" CACHE STRING "Sanitizer to enable: none, thread, address")
+set_property(CACHE SONITUDE_SANITIZER PROPERTY STRINGS none thread address)
+if(NOT SONITUDE_SANITIZER STREQUAL "none")
+  if(MSVC)
+    message(FATAL_ERROR "SONITUDE_SANITIZER is only supported for GCC/Clang builds")
+  endif()
+  if(SONITUDE_SANITIZER STREQUAL "thread")
+    add_compile_options(-fsanitize=thread -g -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+  elseif(SONITUDE_SANITIZER STREQUAL "address")
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -g
+                        -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+  else()
+    message(FATAL_ERROR "Unknown SONITUDE_SANITIZER: ${SONITUDE_SANITIZER}")
+  endif()
+  message(STATUS "Sanitizer enabled: ${SONITUDE_SANITIZER}")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -53,7 +77,10 @@ add_library(
   src/dsp/spectral_postfilter.cpp
   src/dsp/suppression_stage.cpp
   src/dsp/suppressor.cpp
-  src/rt/rt_thread.cpp
+  src/rt/lifecycle.cpp
+  src/rt/managed_thread.cpp
+  src/rt/scheduling.cpp
+  src/rt/wake_event.cpp
   src/spatial/mock_doa_provider.cpp
   src/spatial/odas_message_parser.cpp
   src/spatial/odas_provider.cpp
@@ -71,6 +98,7 @@ target_link_libraries(
   PUBLIC
     yaml-cpp::yaml-cpp
     spdlog::spdlog
+    Threads::Threads
 )
 
 if(SONITUDE_WITH_LIBSAMPLERATE AND SONITUDE_LIBSAMPLERATE_FOUND)
@@ -217,10 +245,18 @@ target_link_libraries(
   PRIVATE
     sonitude_core
 )
+if(SONITUDE_WITH_ALSA)
+  target_link_libraries(
+    sonitude_calibration_capture
+    PRIVATE
+      sonitude_audio_alsa
+  )
+endif()
 
 add_executable(
   sonitude_calibration_estimate
   src/tools/calibration_estimate.cpp
+  src/tools/calibration_estimate_support.cpp
 )
 target_link_libraries(
   sonitude_calibration_estimate
@@ -236,6 +272,7 @@ add_executable(
 add_executable(
   sonitude_wav_replay
   src/tools/wav_replay.cpp
+  src/tools/wav_replay_support.cpp
 )
 target_link_libraries(
   sonitude_wav_replay
@@ -283,6 +320,7 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/rt_tests.cpp
     tests/unit/asrc_sim_tests.cpp
     tests/unit/calibration_tests.cpp
+    tests/unit/calibration_estimate_tests.cpp
     tests/unit/beamformer_tests.cpp
     tests/unit/limiter_tests.cpp
     tests/unit/stereo_limiter_tests.cpp
@@ -293,15 +331,22 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/spectral_postfilter_tests.cpp
     tests/support/alloc_counter.cpp
     tests/unit/odas_parser_tests.cpp
+    tests/unit/source_tracker_tests.cpp
     tests/unit/control_loop_tests.cpp
     tests/unit/zone_tests.cpp
     tests/unit/state_machine_tests.cpp
+    tests/unit/lifecycle_tests.cpp
+    tests/unit/thread_safety_tests.cpp
+    tests/unit/wav_replay_tests.cpp
+    src/tools/calibration_estimate_support.cpp
+    src/tools/wav_replay_support.cpp
   )
 
   target_link_libraries(
     sonitude_unit_tests
     PRIVATE
       sonitude_core
+      Threads::Threads
   )
   target_include_directories(
     sonitude_unit_tests
@@ -319,9 +364,78 @@ if(SONITUDE_BUILD_TESTS)
     NAME sonitude_unit_tests
     COMMAND sonitude_unit_tests
   )
+  set_tests_properties(sonitude_unit_tests PROPERTIES LABELS "unit")
 
   if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
     target_compile_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined)
   endif()
+
+  add_executable(
+    sonitude_concurrency_tests
+    tests/unit/concurrency_tests.cpp
+    tests/unit/rt_tests.cpp
+    tests/unit/lifecycle_tests.cpp
+    tests/unit/thread_safety_tests.cpp
+  )
+  target_link_libraries(
+    sonitude_concurrency_tests
+    PRIVATE
+      sonitude_core
+      Threads::Threads
+  )
+  add_test(
+    NAME sonitude_concurrency_tests
+    COMMAND sonitude_concurrency_tests
+  )
+  set_tests_properties(sonitude_concurrency_tests PROPERTIES LABELS "concurrency")
+
+  add_executable(
+    sonitude_integration_smoke_tests
+    tests/integration/integration_smoke_tests.cpp
+  )
+  target_link_libraries(
+    sonitude_integration_smoke_tests
+    PRIVATE
+      sonitude_core
+  )
+  target_compile_definitions(
+    sonitude_integration_smoke_tests
+    PRIVATE
+      SONITUDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  add_test(
+    NAME sonitude_integration_smoke_tests
+    COMMAND sonitude_integration_smoke_tests
+  )
+  set_tests_properties(sonitude_integration_smoke_tests PROPERTIES LABELS "smoke")
+endif()
+
+if(SONITUDE_BUILD_FUZZERS)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "SONITUDE_BUILD_FUZZERS requires clang/clang++")
+  endif()
+
+  foreach(fuzz_target IN ITEMS odas_parser wav_io)
+    add_executable(
+      fuzz_${fuzz_target}
+      tests/fuzz/${fuzz_target}_fuzz.cpp
+    )
+    target_link_libraries(
+      fuzz_${fuzz_target}
+      PRIVATE
+        sonitude_core
+    )
+    target_compile_options(
+      fuzz_${fuzz_target}
+      PRIVATE
+        -fsanitize=fuzzer,address,undefined
+        -fno-omit-frame-pointer
+    )
+    target_link_options(
+      fuzz_${fuzz_target}
+      PRIVATE
+        -fsanitize=fuzzer,address,undefined
+    )
+  endforeach()
 endif()

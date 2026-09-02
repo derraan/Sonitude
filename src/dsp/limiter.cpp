@@ -8,10 +8,8 @@ namespace sonitude::dsp
 {
 namespace
 {
-float UpdateGain(const float amplitude,
-                 const float ceiling_linear,
-                 const float release_step_per_sample,
-                 const float current_gain)
+float UpdateGain(const float amplitude, const float ceiling_linear,
+                 const float release_step_per_sample, const float current_gain)
 {
   float target_gain = 1.0F;
   if (amplitude > ceiling_linear)
@@ -24,7 +22,7 @@ float UpdateGain(const float amplitude,
   }
   return std::min(1.0F, current_gain + release_step_per_sample);
 }
-}  // namespace
+} // namespace
 
 void PeakLimiter::configure(const LimiterConfig& config, const std::uint32_t sample_rate_hz)
 {
@@ -49,19 +47,59 @@ void PeakLimiter::reset()
   gain_ = 1.0F;
 }
 
-void PeakLimiter::process(const std::span<float> mono)
+LimiterTelemetry PeakLimiter::process(const std::span<float> mono)
 {
   if (!configured_)
   {
     throw std::runtime_error("Limiter used before configure");
   }
 
+  LimiterTelemetry telemetry{};
   for (float& sample : mono)
   {
     const float amplitude = std::fabs(sample);
+    if (amplitude > config_.ceiling_linear)
+    {
+      ++telemetry.input_over_ceiling_events;
+    }
     gain_ = UpdateGain(amplitude, config_.ceiling_linear, release_step_per_sample_, gain_);
     sample *= gain_;
+    if (std::fabs(sample) > 1.0F)
+    {
+      ++telemetry.output_saturation_events;
+    }
   }
+  return telemetry;
+}
+
+LimiterTelemetry PeakLimiter::processLinkedStereo(const std::span<StereoSample> stereo)
+{
+  if (!configured_)
+  {
+    throw std::runtime_error("Limiter used before configure");
+  }
+
+  LimiterTelemetry telemetry{};
+  for (StereoSample& sample : stereo)
+  {
+    const float frame_peak = std::max(std::fabs(sample.left), std::fabs(sample.right));
+    if (frame_peak > config_.ceiling_linear)
+    {
+      ++telemetry.input_over_ceiling_events;
+    }
+    gain_ = UpdateGain(frame_peak, config_.ceiling_linear, release_step_per_sample_, gain_);
+    sample.left *= gain_;
+    sample.right *= gain_;
+    if (std::fabs(sample.left) > 1.0F)
+    {
+      ++telemetry.output_saturation_events;
+    }
+    if (std::fabs(sample.right) > 1.0F)
+    {
+      ++telemetry.output_saturation_events;
+    }
+  }
+  return telemetry;
 }
 
 void StereoPeakLimiter::configure(const LimiterConfig& config, const std::uint32_t sample_rate_hz)
@@ -116,4 +154,4 @@ void StereoPeakLimiter::process(const std::span<float> left, const std::span<flo
     right[i] = r * gain_;
   }
 }
-}  // namespace sonitude::dsp
+} // namespace sonitude::dsp

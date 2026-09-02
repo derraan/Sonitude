@@ -3,6 +3,9 @@ include(FetchContent)
 set(SONITUDE_LIBSAMPLERATE_FOUND OFF)
 set(SONITUDE_LIBSAMPLERATE_TARGET "")
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 if(SONITUDE_WITH_ALSA)
   find_package(ALSA REQUIRED)
 endif()

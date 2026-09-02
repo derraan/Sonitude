@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
@@ -8,15 +9,32 @@
 
 namespace sonitude::control
 {
+struct ResolvedZone
+{
+  std::size_t index = 0;
+  app::ZonePolicy policy = app::ZonePolicy::Focus;
+};
+
 class ZoneMap
 {
- public:
+public:
   explicit ZoneMap(std::vector<app::ZoneConfig> zones);
 
   std::optional<std::string> zoneFor(float azimuth_deg) const;
   bool contains(const std::string& zone_name, float azimuth_deg) const;
 
- private:
+  // Index-based lookup for the control snapshot: the audio thread receives a
+  // zone identity, never a zone name, so nothing string-shaped crosses the
+  // realtime boundary.
+  std::optional<std::size_t> zoneIndexFor(float azimuth_deg) const;
+  std::optional<ResolvedZone> resolve(float azimuth_deg) const;
+  std::size_t zoneCount() const
+  {
+    return zones_.size();
+  }
+  const std::string& zoneName(std::size_t index) const;
+
+private:
   std::vector<app::ZoneConfig> zones_;
 };
-}  // namespace sonitude::control
+} // namespace sonitude::control

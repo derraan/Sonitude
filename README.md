@@ -33,7 +33,7 @@ flowchart TB
         Odas["ODAS or MockDoaProvider"]
         Parser["SST parser / source tracker"]
         SM["Conversation state machine\n+ ZoneMap + VAD"]
-        Snap["Steering snapshot\nseqlock publish"]
+        Snap["SteeringChannel publish\nlatest-wins SPSC"]
     end
 
     subgraph offline [Offline / diagnostics]
@@ -80,7 +80,7 @@ flowchart TB
 | **Stereo limiter**   | Final linked stereo peak safety stage after binaural processing                              |
 | **ASRC**             | PI controller adjusts playback resample ratio so capture/playback clock drift does not XRUN |
 | **Passthrough mode** | Today: ear-cup mics 4/5 to L/R, bypasses beamformer (`--mode passthrough`)                  |
-| **Control**          | ODAS/mock → tracker → state machine → atomic snapshot; audio thread reads snapshot only     |
+| **Control**          | ODAS/mock → tracker → state machine → `SteeringChannel`; audio thread drains latest only     |
 
 
 **Clock rule:** Pico and DAC clocks are independent (~tens of ppm). Never drop/duplicate samples for drift — use bounded ASRC ratio control (default ±0.5%).
@@ -128,11 +128,11 @@ Core **directional listening** DSP — **narrowband MVDR**:
 
 Conservative **distractor suppression** after beamforming. In-tree **MVDR** is in the beamformer (**SCOPE-3** vetoed). Neural DSP is unused. Spectral NS stays experimental; default backend is conservative.
 
-### Stage 5 — Mono → stereo
+### Stage 5 — Output staging and stereo
 
-- `--mode passthrough` **(today):** taps ear-cup mics 4 and 5 to L/R in `main.cpp` — no beamformer.
-- `--mode beamform` on `sonitude_realtime`: still duplicates directional mono to L/R. The Pi playback path is **not** yet wired to `BinauralRenderer`.
-- Portable tools (`sonitude_wav_replay`, `sonitude_stream_process`): `BinauralRenderer` backends `mono_reference`, `itd_ild`, `compact_hrtf`, `full_hrtf_reference`, then linked `StereoPeakLimiter`. `compact_hrtf` uses experimental raw-HRIR prefix tables, not a validated edge representation. Replay `--output` stays mono; stereo is `--output-binaural` or the stream payload. Details: `[docs/binaural_renderer.md](docs/binaural_renderer.md)`.
+- `--mode passthrough`: taps calibrated ear-cup mics 4 and 5 to L/R in `main.cpp`.
+- `--mode beamform`: MVDR beamforming with `SuppressionStage` and optional `BinauralRenderer` when enabled in config.
+- Portable tools (`sonitude_wav_replay`, `sonitude_stream_process`): `BinauralRenderer` backends `mono_reference`, `itd_ild`, `compact_hrtf`, `full_hrtf_reference`, then linked `StereoPeakLimiter`. Details: `[docs/binaural_renderer.md](docs/binaural_renderer.md)`.
 
 
 
@@ -174,8 +174,8 @@ Authoritative gate evidence: `[docs/milestones.md](docs/milestones.md)`.
 | **M2** | Real-time primitives             | `in_progress` | Lock-free/preallocated path; XRUN telemetry; ASRC interface; passthrough mode       |
 | **M3** | Calibration and offline analysis | `in_progress` | Calibration apply path; offline estimator; YAML report with backup-safe writes      |
 | **M4** | Beamformer                       | `in_progress` | STFT-domain MVDR implemented; scripted steering WAV harness passes synthetic checks |
-| **M5** | ODAS control integration         | `pending`     | Mock provider + ODAS adapter; safe fallback on ODAS loss                            |
-| **M6** | Conversation state machine       | `pending`     | Deterministic hysteresis transitions; telemetry for state and confidence            |
+| **M5** | ODAS control integration         | `in_progress` | Mock provider + ODAS adapter; safe fallback on ODAS loss                            |
+| **M6** | Conversation state machine       | `in_progress` | Deterministic hysteresis transitions; telemetry for state and confidence            |
 | **M7** | Suppression v1                   | `in_progress` | One-distractor conservative policy implemented; smooth fade in/out; safe fallback checks pending |
 | **M8** | Measurement and hardening        | `pending`     | Latency marker tooling; soak logs; measured latency percentiles reported            |
 
@@ -183,9 +183,22 @@ Authoritative gate evidence: `[docs/milestones.md](docs/milestones.md)`.
 Status legend: `pending` · `in_progress` · `done` · `blocked`
 
 ```bash
-./build/sonitude_realtime --config config/default.yaml --mode passthrough   # Linux + ALSA
+./build/sonitude_realtime --config config/default.yaml --mode passthrough   # development
+./scripts/run_realtime.sh                                                   # production Pi
 ctest --test-dir build --output-on-failure                                 # portable
 ```
+
+The production launcher explicitly uses `config/production_pi.yaml`. It fails
+startup unless `mlockall(MCL_CURRENT | MCL_FUTURE)` succeeds and both audio
+threads obtain their requested FIFO policies. Before accepting a Pi run, the
+printed scheduling table must show capture `SCHED_FIFO/80`, playback
+`SCHED_FIFO/78`, and telemetry `SCHED_OTHER/0` in passthrough mode; beamform
+adds control at `SCHED_OTHER/0`. No row should show `DEGRADED`.
+
+The tracked Pi baseline profile uses `hw:active,0` capture, `hw:X1,0`
+playback, reverse map `[5,4,3,2,1,0]`, `geometry_soundbubble_xyz_v1.yaml`, and
+`calibration_example.yaml`. Re-check card identities with `arecord -l` and
+`aplay -l` if hardware identity changes.
 
 
 
@@ -211,8 +224,8 @@ Veto checkboxes and override log: `docs/CodebaseState.md` [§1](docs/CodebaseSta
 
 See the [Milestones](#milestones) table above. Quick summary:
 
-- **Implemented:** scaffold, typed config, ALSA probe/workers, RT primitives (SPSC, block pool), ASRC + resampler, calibration load/apply/WAV tools, passthrough mode, unit tests.
-- **In progress / pending gates:** Pi hardware soak (M1–M3), M4/M7 hardware evidence, M5 ODAS control gate, M6 state machine gate, M8 latency measurement.
+- **Implemented:** typed config validation, split capture/playback realtime workers, control and telemetry supervisor threads, ASRC + resampler, calibration load/apply/WAV tools, passthrough/beamform runtime modes, and unit/integration coverage.
+- **In progress / pending gates:** one-hour passthrough and beamform soaks, corrected-geometry beam evidence, scripted/live ODAS gates, current six-active-channel calibration capture, fault-injection gates, and latency measurement.
 
 
 
@@ -251,8 +264,6 @@ Example install (Debian/Raspberry Pi OS):
 sudo apt update
 sudo apt install -y cmake ninja-build g++ libasound2-dev libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
 ```
-
-
 
 ### Windows development scaffold validation
 
@@ -317,6 +328,7 @@ tests fail if those binaries are missing. Details: `[testbench/README.md](testbe
 - **Codebase snapshot (scope, DSP, layout, interfaces):** `[docs/CodebaseState.md](docs/CodebaseState.md)`
 - Architecture and thread/data ownership: `[docs/architecture.md](docs/architecture.md)`
 - Linux/ALSA setup and runtime policy: `[docs/device_setup.md](docs/device_setup.md)`
+- Linux/Pi post-PR4 hardware validation runbook: `[docs/linux_pi_hardware_gate_runbook.md](docs/linux_pi_hardware_gate_runbook.md)`
 - Calibration format and tooling roadmap: `[docs/calibration.md](docs/calibration.md)`
 - Latency measurement method and caveats: `[docs/latency_measurement.md](docs/latency_measurement.md)`
 - Binaural renderer (DSP, HRTF tables, protocol v2 tools): `[docs/binaural_renderer.md](docs/binaural_renderer.md)`

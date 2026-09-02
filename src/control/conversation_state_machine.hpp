@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
@@ -25,21 +26,28 @@ struct ConversationInput
 {
   bool has_track = false;
   audio::BeamformerSteering track{};
+  float confidence = 0.0F;
   float speech_probability = 0.0F;
 };
 
 class ConversationStateMachine
 {
- public:
-  ConversationStateMachine(app::StateMachineConfig config, float ambient_floor_linear, ZoneMap zones);
+public:
+  ConversationStateMachine(app::StateMachineConfig config, float ambient_floor_linear,
+                           ZoneMap zones);
 
   SteeringSnapshot update(const ConversationInput& input, std::uint64_t now_ns);
-  ConversationState state() const { return state_; }
+  ConversationState state() const
+  {
+    return state_;
+  }
   std::uint64_t transitionCount(ConversationState from, ConversationState to) const;
 
- private:
+private:
   void transitionTo(ConversationState next);
   bool directionStable(float azimuth_deg) const;
+  static bool isFocusEligible(const std::optional<ResolvedZone>& zone);
+  static bool isAmbientZone(const std::optional<ResolvedZone>& zone);
 
   app::StateMachineConfig config_{};
   float ambient_floor_linear_ = 0.25F;
@@ -54,4 +62,4 @@ class ConversationStateMachine
   audio::BeamformerSteering focus_target_{};
   std::uint64_t generation_ = 0;
 };
-}  // namespace sonitude::control
+} // namespace sonitude::control

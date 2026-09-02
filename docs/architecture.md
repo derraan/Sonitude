@@ -72,15 +72,15 @@ ODAS/mock DOA -> source association -> source confidence and zone selection
 
 
 
-## Thread model (target)
+## Thread model
 
-Current M2 runtime uses one blocking capture/DSP/playback audio loop; the three RT-worker split and per-thread scheduling isolation below remain pending hardening gates. Control and telemetry already run on separate threads.
+Current runtime uses split workers with explicit startup-gated scheduling checks.
 
-- **Capture worker thread (RT):** ALSA capture, sequence accounting, ring publication.
-- **Audio render thread (RT):** beamforming, suppression policy, binaural rendering (when wired), limiting, ASRC feed.
-- **Playback worker thread (RT):** ALSA playback, underrun recovery telemetry.
-- **Control thread (non-RT):** ODAS client, source association, state machine.
-- **Telemetry thread (non-RT):** aggregate counters, structured output, diagnostics.
+- **Capture/DSP worker thread (RT):** ALSA capture, calibration, beamforming, suppression, binaural rendering (when enabled), limiting, block publish.
+- **Playback worker thread (RT):** `BlockChannel` consume, ASRC drift control, ALSA playback.
+- **Control thread (non-RT, beamform mode only):** ODAS/mock source tracking and state-machine steering publication.
+- **Telemetry thread (non-RT):** one-second counter emission and final summary reporting.
+- **Supervisor thread (non-RT):** memory lock, signal/lifecycle authority, scheduling validation, and ordered shutdown.
 
 ---
 
@@ -91,7 +91,7 @@ Current M2 runtime uses one blocking capture/DSP/playback audio loop; the three 
 - Real-time threads are allocation-free after startup.
 - No mutex acquisition on real-time threads.
 - No file/network I/O, console output, or blocking IPC waits on real-time threads.
-- Control-to-audio handoff uses atomics or immutable double-buffer snapshots.
+- Control-to-audio handoff uses `SteeringChannel<RtSteeringSnapshot>` latest-wins publication.
 - Ring buffers are SPSC lock-free for producer/consumer pairs.
 
 ---
@@ -387,7 +387,7 @@ flowchart TB
 
 1. **Same problem class, different IO contract.** openMHA targets hearing-aid research with JACK or file IO and Pascal-level calibration [1], [2]. Sonitude targets a **Pi 5 + Pico UAC + USB DAC** path with **float `MicFrame` blocks**, YAML calibration, and **ODAS steering** instead of openMHA's in-chain SSL [8].
 2. **Time-domain first on the RT thread.** openMHA's flagship chains lean on shared STFT (`overlapadd`) for coherence filtering, SCNR, and MVDR [2], [4], [5]. Sonitude v1 keeps beamforming in the **time domain at capture period scale** (~1.45 ms @ 44.1 kHz / 64 frames) to preserve the audio-path budget in §Real-time latency budget.
-3. **RT-safe handoff mirrors openMHA config double-buffering.** openMHA prepares updated runtime configs on a configuration thread and swaps atomically into the processing thread [2]. Sonitude maps this to **immutable steering snapshots** published by the control thread and read lock-free on the audio render thread (already in §Thread model).
+3. **RT-safe handoff mirrors openMHA config double-buffering.** openMHA prepares updated runtime configs on a configuration thread and swaps atomically into the processing thread [2]. Sonitude maps this to `SteeringChannel<RtSteeringSnapshot>` publication from control and lock-free draining on the capture/DSP thread (already in §Thread model).
 4. **openMHA is the golden reference, not the shipping stack.** Offline file chains (`MHAIOFile`) render reference PCM for `sonitude_wav_replay` diff tests without pulling JACK or TCP control into CI.
 
 ### Block-level mapping (v1)
@@ -518,7 +518,7 @@ This satisfies reproducibility goals of the openMHA platform [1] while keeping o
 | ALSA capture/playback, passthrough, ASRC | Implemented (M1–M2, gates pending Pi soak)                           |
 | Calibration load/apply/tools             | Implemented (M3, HW sweep pending)                                   |
 | Beamformer, ODAS adapter, state machine  | Implemented in code; milestone-gate evidence still pending (M4–M6)   |
-| Suppression, limiter                     | Implemented in beamform path; milestone-gate evidence pending (M7)   |
+| Suppression, limiter                     | Implemented; output limiter now protects passthrough and beamform paths, evidence gates pending (M7)   |
 | Latency instrumentation                  | Pending hardware measurement and reporting (M8)                       |
 | ODAS latency / alternative survey        | Documented here; **not measured on project hardware**                 |
 | openMHA adaptation (reference + offline) | Documented here ([§Sonitude adaptation](#sonitude-adaptation-of-openmha-design)); not integrated in runtime |

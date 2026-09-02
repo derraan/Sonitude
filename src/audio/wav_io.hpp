@@ -9,6 +9,11 @@
 
 namespace sonitude::audio
 {
+// Bounds the encoded PCM payload accepted by the decoder. This prevents a WAV
+// chunk declaration from driving unbounded allocation; decoded float storage
+// may require up to twice this amount for 16-bit input.
+inline constexpr std::size_t kMaxDecodedPcmBytes = 64U * 1024U * 1024U;
+
 struct WavData
 {
   std::uint32_t sample_rate_hz = 0;
@@ -19,4 +24,5 @@ struct WavData
 
 void WriteWavFile(const std::string& path, const WavData& data);
 WavData ReadWavFile(const std::string& path);
-}  // namespace sonitude::audio
+WavData ReadWavBytes(const std::uint8_t* data, std::size_t size);
+} // namespace sonitude::audio

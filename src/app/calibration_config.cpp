@@ -10,8 +10,7 @@ namespace sonitude::app
 {
 namespace
 {
-template <typename T>
-T RequireScalar(const YAML::Node& node, const char* key)
+template <typename T> T RequireScalar(const YAML::Node& node, const char* key)
 {
   if (!node[key])
   {
@@ -19,7 +18,7 @@ T RequireScalar(const YAML::Node& node, const char* key)
   }
   return node[key].as<T>();
 }
-}  // namespace
+} // namespace
 
 CalibrationConfig LoadCalibrationFromFile(const std::string& path)
 {
@@ -53,6 +52,10 @@ void ValidateCalibrationConfig(const CalibrationConfig& calibration,
                                const std::vector<std::string>& geometry_ids,
                                const std::uint32_t expected_sample_rate_hz)
 {
+  if (calibration.sample_rate_hz == 0)
+  {
+    throw std::runtime_error("calibration sample_rate_hz must be non-zero");
+  }
   if (calibration.sample_rate_hz != expected_sample_rate_hz)
   {
     throw std::runtime_error("calibration sample_rate_hz does not match capture rate");
@@ -74,22 +77,43 @@ void ValidateCalibrationConfig(const CalibrationConfig& calibration,
     {
       throw std::runtime_error("calibration channel ids must be unique");
     }
+    if (channel.id.empty())
+    {
+      throw std::runtime_error("calibration channel id cannot be empty");
+    }
     if (!(channel.polarity == 1 || channel.polarity == -1))
     {
       throw std::runtime_error("calibration polarity must be +1 or -1");
+    }
+    if (!std::isfinite(channel.gain_linear))
+    {
+      throw std::runtime_error("calibration gain must be finite");
     }
     if (!(channel.gain_linear > 0.0F && channel.gain_linear <= 8.0F))
     {
       throw std::runtime_error("calibration gain out of range");
     }
+    if (!std::isfinite(channel.delay_samples))
+    {
+      throw std::runtime_error("calibration delay_samples must be finite");
+    }
     if (std::fabs(channel.delay_samples) > 256.0F)
     {
       throw std::runtime_error("calibration delay_samples out of range");
     }
+    if (!std::isfinite(channel.dc_offset))
+    {
+      throw std::runtime_error("calibration dc_offset must be finite");
+    }
+    if (std::fabs(channel.dc_offset) > 1.0F)
+    {
+      throw std::runtime_error("calibration dc_offset magnitude out of range");
+    }
   }
   if (calibration_id_set.size() != geometry_id_set.size())
   {
-    throw std::runtime_error("calibration must contain exactly one channel for each geometry microphone");
+    throw std::runtime_error(
+        "calibration must contain exactly one channel for each geometry microphone");
   }
 }
-}  // namespace sonitude::app
+} // namespace sonitude::app
