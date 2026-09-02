@@ -20,6 +20,8 @@ struct TelemetryCounters
                 "realtime threads update these counters and must not block on them");
   static_assert(std::atomic<std::int64_t>::is_always_lock_free,
                 "realtime threads update these counters and must not block on them");
+  static_assert(std::atomic<std::uint8_t>::is_always_lock_free,
+                "realtime threads update these counters and must not block on them");
 
   // Throughput.
   std::atomic<std::uint64_t> capture_frames{0};
@@ -62,6 +64,21 @@ struct TelemetryCounters
   std::atomic<std::int64_t> steering_confidence_milli{0};
   std::atomic<std::int64_t> speech_probability_milli{0};
   std::atomic<std::uint8_t> control_state{0};
+
+  // Own-voice subsystem. RT producers only store primitive values; the
+  // telemetry thread owns formatting and aggregation.
+  std::atomic<std::int64_t> own_voice_probability_milli{0};
+  std::atomic<std::uint8_t> own_voice_active{0};
+  std::atomic<std::uint8_t> own_voice_state_stale{1};
+  std::atomic<std::int64_t> own_reference_quality_milli{0};
+  std::atomic<std::uint8_t> own_canceller_state{0};
+  std::atomic<std::int64_t> own_cancellation_db_milli{0};
+  std::atomic<std::uint64_t> ovd_observation_drops{0};
+  std::atomic<std::uint64_t> ovd_updates{0};
+  std::atomic<std::uint64_t> ovd_stale_events{0};
+
+  // TODO(ovd-level1-integration): Wire these stores at the audio/OVD period
+  // boundaries after the calibrated worker and target-protection policy land.
 };
 
 // Stores `value` into `target` if it is larger. Realtime-safe: a relaxed
