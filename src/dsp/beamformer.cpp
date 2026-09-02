@@ -621,6 +621,16 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
     {
       spectral_filter_->processSpectrum(y_re_, y_im_, guards);
     }
+if (binaural_output_)
+    {
+      if (crossfading_)
+      {
+        spectral_filter_->applyStoredGains(pending_left_y_re_, pending_left_y_im_);
+        spectral_filter_->applyStoredGains(pending_right_y_re_, pending_right_y_im_);
+      }
+      spectral_filter_->applyStoredGains(left_y_re_, left_y_im_);
+      spectral_filter_->applyStoredGains(right_y_re_, right_y_im_);
+    }
   }
   target_stft_.overlapAddSpectrum(y_re_.data(), y_im_.data());
   if (binaural_output_)

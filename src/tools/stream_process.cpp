@@ -1,4 +1,4 @@
-// sonitude_stream_process — framed stdin/stdout adapter around the existing
+// sonitude_stream_process â€” framed stdin/stdout adapter around the existing
 // calibration -> beamformer -> suppressor -> limiter chain, plus optional
 // binaural rendering.
 //
@@ -910,12 +910,6 @@ int main(int argc, char** argv)
       }
       else if (binaural_mvdr)
       {
-        const float gain = suppressor.currentGain();
-        for (std::size_t i = 0; i < frame_count; ++i)
-        {
-          left[i] *= gain;
-          right[i] *= gain;
-        }
         if (!disable_limiter)
         {
           if (!binaural_runtime.stereo_limiter_configured)

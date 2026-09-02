@@ -497,12 +497,6 @@ int main(int argc, char** argv)
             mono[i] = 0.5F * (binaural_left[i] + binaural_right[i]);
           }
           suppressor.process(std::span<float>(mono.data(), frame_count));
-          const float gain = suppressor.currentGain();
-          for (std::size_t i = 0; i < frame_count; ++i)
-          {
-            binaural_left[i] *= gain;
-            binaural_right[i] *= gain;
-          }
           stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
                                  std::span<float>(binaural_right.data(), frame_count));
           for (std::size_t i = 0; i < frame_count; ++i)
