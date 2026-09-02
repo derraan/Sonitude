@@ -320,6 +320,128 @@ void TestMvdrNullsOffAxisInterferer()
           "MVDR target look should suppress some off-axis interferer energy");
   Require(out_rms > target_rms * 0.4, "MVDR should not cancel the look direction");
 }
+void TestCovarianceAdaptsDuringLongSteeringTransition()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr float kTransitionMs = 400.0F;
+  constexpr std::size_t kHopSize = 32;
+  const std::size_t ramp =
+      std::max<std::size_t>(1U, static_cast<std::size_t>((kTransitionMs * 0.001F) * kFs));
+  const std::size_t warmup = 512;
+  const std::size_t frames = warmup + ramp + 256;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  const auto source = sonitude::tests::support::GenerateSine(frames, kFs, 720.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> out(frames, 0.0F);
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data(), warmup),
+             std::span<float>(out.data(), warmup));
+
+  bf.resetCovarianceDiagnosticsForTest();
+  bf.setTarget({35.0F, 0.0F});
+  Require(bf.crossfadingForTest(), "setTarget must enter steering crossfade");
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + warmup, ramp),
+             std::span<float>(out.data() + warmup, ramp));
+
+  Require(bf.covarianceUpdateHopsForTest() >= (ramp / kHopSize) / 2U,
+          "covariance must keep adapting through a long steering crossfade");
+}
+
+void TestRepeatedTargetUpdatesDoNotStarveAdaptation()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr float kTransitionMs = 300.0F;
+  constexpr std::size_t kRetargetInterval = 64;
+  const std::size_t frames = 8192;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  const auto source = sonitude::tests::support::GenerateSine(frames, kFs, 680.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> out(frames, 0.0F);
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data(), 512),
+             std::span<float>(out.data(), 512));
+
+  bf.resetCovarianceDiagnosticsForTest();
+  float azimuth = 10.0F;
+  for (std::size_t start = 512; start < frames; start += kRetargetInterval)
+  {
+    bf.setTarget({azimuth, 0.0F});
+    azimuth += 12.0F;
+    const std::size_t count = std::min(kRetargetInterval, frames - start);
+    bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + start, count),
+               std::span<float>(out.data() + start, count));
+  }
+
+  Require(bf.covarianceUpdateHopsForTest() >= (frames - 512) / 64U,
+          "repeated steering retargets must not freeze covariance adaptation");
+}
+
+void TestMovingNoiseStatisticsUpdateDuringCrossfade()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 6144;
+  constexpr float kTransitionMs = 250.0F;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  sonitude::dsp::MvdrTuningParams tuning{};
+  tuning.cov_tau_sec = 0.020F;
+
+  const auto target_src = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto early_noise = sonitude::tests::support::GenerateSine(kFrames, kFs, 950.0);
+  const auto late_noise = sonitude::tests::support::GenerateSine(kFrames, kFs, 1250.0);
+  auto mic = sonitude::tests::support::GeneratePlaneWave(
+      target_src, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+  const auto early_interf = sonitude::tests::support::GeneratePlaneWave(
+      early_noise, geometry, kFs, 0, 90.0F, 0.0F, 343.0F);
+  const auto late_interf = sonitude::tests::support::GeneratePlaneWave(
+      late_noise, geometry, kFs, 0, -75.0F, 0.0F, 343.0F);
+  const std::size_t scene_switch = 2048;
+  for (std::size_t i = 0; i < kFrames; ++i)
+  {
+    const auto& noise = (i < scene_switch) ? early_interf : late_interf;
+    for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+    {
+      mic[i][ch] += noise[i][ch];
+    }
+  }
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  bf.setTuning(tuning);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> out(kFrames, 0.0F);
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data(), scene_switch),
+             std::span<float>(out.data(), scene_switch));
+
+  bf.resetCovarianceDiagnosticsForTest();
+  bf.setTarget({40.0F, 0.0F});
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + scene_switch, kFrames - scene_switch),
+             std::span<float>(out.data() + scene_switch, kFrames - scene_switch));
+
+  Require(bf.covarianceUpdateHopsForTest() > 0U,
+          "moving interferer statistics must update while output steering crossfades");
+
+  const double out_rms = sonitude::tests::support::ComputeRms(out, 1024);
+  const double target_rms = sonitude::tests::support::ComputeRms(target_src, 1024);
+  const double late_noise_rms = sonitude::tests::support::ComputeRms(late_noise, 1024);
+  Require(out_rms < (target_rms + late_noise_rms) * 0.90,
+          "MVDR should track scene changes that occur during steering transition");
+  Require(out_rms > target_rms * 0.35, "MVDR should retain on-axis target energy");
+}
+
 }  // namespace
 
 void RunBeamformerTests()
@@ -331,4 +453,7 @@ void RunBeamformerTests()
   TestLeftRightAzimuthConvention();
   TestSpectralSharesSingleStftDelay();
   TestMvdrNullsOffAxisInterferer();
+  TestCovarianceAdaptsDuringLongSteeringTransition();
+  TestRepeatedTargetUpdatesDoNotStarveAdaptation();
+  TestMovingNoiseStatisticsUpdateDuringCrossfade();
 }

@@ -44,6 +44,11 @@ class MvdrBeamformer
   [[nodiscard]] bool binauralOutputEnabled() const noexcept { return binaural_output_; }
   void resetStream() noexcept;
   [[nodiscard]] std::size_t algorithmicDelaySamples() const noexcept;
+#ifdef SONITUDE_BEAMFORMER_TEST_HOOKS
+  [[nodiscard]] std::uint64_t covarianceUpdateHopsForTest() const noexcept { return cov_update_hops_; }
+  void resetCovarianceDiagnosticsForTest() noexcept { cov_update_hops_ = 0; }
+  [[nodiscard]] bool crossfadingForTest() const noexcept { return crossfading_; }
+#endif
 
  private:
   using DelayArray = std::array<double, audio::kMicChannels>;
@@ -119,5 +124,8 @@ class MvdrBeamformer
       cov_{};
   MvdrTuningParams tuning_{};
   float cov_beta_ = 0.02F;
+#ifdef SONITUDE_BEAMFORMER_TEST_HOOKS
+  std::uint64_t cov_update_hops_ = 0;
+#endif
 };
 }  // namespace sonitude::dsp

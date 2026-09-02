@@ -278,6 +278,8 @@ target_link_libraries(
 if(SONITUDE_BUILD_TESTS)
   enable_testing()
 
+  target_compile_definitions(sonitude_core PRIVATE SONITUDE_BEAMFORMER_TEST_HOOKS=1)
+
   add_executable(
     sonitude_unit_tests
     tests/unit/config_tests.cpp
@@ -315,6 +317,7 @@ if(SONITUDE_BUILD_TESTS)
     sonitude_unit_tests
     PRIVATE
       SONITUDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+      SONITUDE_BEAMFORMER_TEST_HOOKS=1
   )
 
   add_test(

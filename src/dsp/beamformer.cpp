@@ -567,28 +567,29 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
   const std::size_t n_bins = (kFftSize / 2U) + 1U;
   const float keep = 1.0F - cov_beta_;
 
+  // R(k) from x(k)x(k)^H is independent of output steering crossfade state.
   Cpx x[kM]{};
-  if (!crossfading_)
+  for (std::size_t b = 0; b < n_bins; ++b)
   {
-    for (std::size_t b = 0; b < n_bins; ++b)
+    for (std::size_t ch = 0; ch < kM; ++ch)
     {
-      for (std::size_t ch = 0; ch < kM; ++ch)
+      x[ch] = {x_re_[ch][b], x_im_[ch][b]};
+    }
+    for (std::size_t i = 0; i < kM; ++i)
+    {
+      for (std::size_t j = 0; j < kM; ++j)
       {
-        x[ch] = {x_re_[ch][b], x_im_[ch][b]};
+        const Cpx xxh = Mul(x[i], Conj(x[j]));
+        auto& rij = cov_[b][i][j];
+        rij[0] = (keep * rij[0]) + (cov_beta_ * xxh.re);
+        rij[1] = (keep * rij[1]) + (cov_beta_ * xxh.im);
       }
-      for (std::size_t i = 0; i < kM; ++i)
-      {
-        for (std::size_t j = 0; j < kM; ++j)
-        {
-          const Cpx xxh = Mul(x[i], Conj(x[j]));
-          auto& rij = cov_[b][i][j];
-          rij[0] = (keep * rij[0]) + (cov_beta_ * xxh.re);
-          rij[1] = (keep * rij[1]) + (cov_beta_ * xxh.im);
-        }
-        cov_[b][i][i][1] = 0.0F;
-      }
+      cov_[b][i][i][1] = 0.0F;
     }
   }
+#ifdef SONITUDE_BEAMFORMER_TEST_HOOKS
+  ++cov_update_hops_;
+#endif
 
   FormLookSpectrum(current_delays_, y_re_, y_im_);
   if (binaural_output_)
