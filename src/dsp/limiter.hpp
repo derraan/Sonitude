@@ -21,7 +21,7 @@ struct LimiterTelemetry
 
 class PeakLimiter
 {
- public:
+public:
   void configure(const LimiterConfig& config, std::uint32_t sample_rate_hz);
   void reset();
   LimiterTelemetry process(std::span<float> mono);
@@ -31,7 +31,7 @@ class PeakLimiter
     return gain_;
   }
 
- private:
+private:
   LimiterConfig config_{};
   bool configured_ = false;
   float gain_ = 1.0F;
@@ -40,7 +40,7 @@ class PeakLimiter
 
 class StereoPeakLimiter
 {
- public:
+public:
   void configure(const LimiterConfig& config, std::uint32_t sample_rate_hz);
   void reset();
   void process(std::span<float> left, std::span<float> right);
@@ -49,7 +49,7 @@ class StereoPeakLimiter
     return gain_;
   }
 
- private:
+private:
   LimiterConfig config_{};
   bool configured_ = false;
   float gain_ = 1.0F;

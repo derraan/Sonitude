@@ -420,9 +420,8 @@ int main(int argc, char** argv)
     const auto binaural_backend = ParseBinauralBackend(runtime_config.binaural.backend);
     std::unique_ptr<sonitude::dsp::HrtfTable> compact_hrtf;
     std::unique_ptr<sonitude::dsp::HrtfTable> reference_hrtf;
-    if (binaural_enabled &&
-        (binaural_backend == sonitude::dsp::BinauralBackend::CompactHrtf ||
-         binaural_backend == sonitude::dsp::BinauralBackend::FullHrtfReference))
+    if (binaural_enabled && (binaural_backend == sonitude::dsp::BinauralBackend::CompactHrtf ||
+                             binaural_backend == sonitude::dsp::BinauralBackend::FullHrtfReference))
     {
       compact_hrtf = TryLoadHrtfTable(runtime_config.binaural.profile.table_path);
       if (!runtime_config.binaural.profile.table_path.empty())
