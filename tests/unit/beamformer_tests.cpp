@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -10,6 +11,7 @@
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/steering_lut.hpp"
 #include "dsp/spectral_postfilter.hpp"
 #include "tests/support/synth_signals.hpp"
 
@@ -442,6 +444,71 @@ void TestMovingNoiseStatisticsUpdateDuringCrossfade()
   Require(out_rms > target_rms * 0.35, "MVDR should retain on-axis target energy");
 }
 
+void TestNearFieldElevationSteering()
+{
+  constexpr std::uint32_t kFs = 16000;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.model = "near_field";
+  steering.source_distance_m = 0.45F;
+
+  sonitude::dsp::KemarSteeringLut model;
+  model.configure(geometry, steering, kFs);
+  const auto elevated =
+      model.computeNearFieldDelays({30.0F, 17.5F}, steering.reference_mic_index);
+  const auto horizontal =
+      model.computeNearFieldDelays({30.0F, 0.0F}, steering.reference_mic_index);
+  bool differs = false;
+  for (std::size_t m = 0; m < sonitude::audio::kMicChannels; ++m)
+  {
+    if (std::fabs(elevated[m] - horizontal[m]) > 1.0e-6)
+    {
+      differs = true;
+      break;
+    }
+  }
+  Require(differs, "near-field steering must use requested elevation in delay model");
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  bf.setTarget({30.0F, 17.5F});
+  Require(std::fabs(bf.pendingTargetForTest().elevation_deg - 17.5F) < 1.0e-3F,
+          "beamformer must preserve requested elevation target");
+}
+
+
+void TestKemarLutFlagDoesNotAffectArraySteering()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 4096;
+  const auto geometry = BuildGeometry();
+  auto steering_off = BuildSteering();
+  steering_off.model = "near_field";
+  steering_off.source_distance_m = 0.45F;
+  steering_off.kemar_lut.enabled = false;
+  auto steering_on = steering_off;
+  steering_on.kemar_lut.enabled = true;
+  steering_on.kemar_lut.table_path = "unused.shrf";
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 850.0);
+  const auto mic = sonitude::tests::support::GenerateSphericalPointSource(
+      source, geometry, kFs, 0, 30.0F, 17.5F, steering_off.source_distance_m, steering_off.speed_of_sound_mps);
+  sonitude::dsp::MvdrBeamformer without_lut;
+  without_lut.configure(geometry, steering_off, BuildCalibration(), kFs, kFrames);
+  without_lut.setTarget({30.0F, 17.5F});
+  std::vector<float> out_off(kFrames, 0.0F);
+  without_lut.process(mic, out_off);
+  sonitude::dsp::MvdrBeamformer with_lut_flag;
+  with_lut_flag.configure(geometry, steering_on, BuildCalibration(), kFs, kFrames);
+  with_lut_flag.setTarget({30.0F, 17.5F});
+  std::vector<float> out_on(kFrames, 0.0F);
+  with_lut_flag.process(mic, out_on);
+  double max_diff = 0.0;
+  for (std::size_t i = 512; i < kFrames; ++i)
+  {
+    max_diff = std::max(max_diff, std::fabs(static_cast<double>(out_off[i] - out_on[i])));
+  }
+  Require(max_diff < 1.0e-5, "kemar_lut flag must not change analytic array steering output");
+}
 }  // namespace
 
 void RunBeamformerTests()
@@ -456,4 +523,6 @@ void RunBeamformerTests()
   TestCovarianceAdaptsDuringLongSteeringTransition();
   TestRepeatedTargetUpdatesDoNotStarveAdaptation();
   TestMovingNoiseStatisticsUpdateDuringCrossfade();
+  TestNearFieldElevationSteering();
+  TestKemarLutFlagDoesNotAffectArraySteering();
 }

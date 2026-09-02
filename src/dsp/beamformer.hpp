@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <array>
 #include <cstddef>
@@ -15,7 +15,6 @@
 
 namespace sonitude::dsp
 {
-class HrtfTable;
 class SpectralPostfilter;
 
 struct MvdrTuningParams
@@ -32,8 +31,7 @@ class MvdrBeamformer
                  const app::SteeringConfig& steering_config,
                  const app::CalibrationConfig& calibration,
                  std::uint32_t sample_rate_hz,
-                 std::size_t max_block_frames,
-                 const HrtfTable* kemar_table = nullptr);
+                 std::size_t max_block_frames);
   void setTarget(audio::BeamformerSteering target);
   void setTuning(const MvdrTuningParams& tuning) noexcept;
   void setSpectralPostfilter(SpectralPostfilter* filter) noexcept { spectral_filter_ = filter; }
@@ -48,6 +46,9 @@ class MvdrBeamformer
   [[nodiscard]] std::uint64_t covarianceUpdateHopsForTest() const noexcept { return cov_update_hops_; }
   void resetCovarianceDiagnosticsForTest() noexcept { cov_update_hops_ = 0; }
   [[nodiscard]] bool crossfadingForTest() const noexcept { return crossfading_; }
+  [[nodiscard]] std::size_t fadeCursorForTest() const noexcept { return fade_cursor_; }
+  [[nodiscard]] audio::BeamformerSteering activeTargetForTest() const noexcept { return active_target_; }
+  [[nodiscard]] audio::BeamformerSteering pendingTargetForTest() const noexcept { return pending_target_; }
 #endif
 
  private:
@@ -63,7 +64,15 @@ class MvdrBeamformer
   DelayArray computeRelativeDelays(audio::BeamformerSteering target,
                                    std::size_t reference_mic_index) const;
   DelayArray computeBinauralDelays(audio::BeamformerSteering target, bool left_ear) const;
-  void updateGuardDelays();
+  [[nodiscard]] audio::BeamformerSteering normalizeSteeringTarget(
+      audio::BeamformerSteering target) const noexcept;
+  [[nodiscard]] bool steeringWithinDeadband(audio::BeamformerSteering a,
+                                            audio::BeamformerSteering b) const noexcept;
+  void assignPendingLook(audio::BeamformerSteering target) noexcept;
+  void swapActivePendingPaths() noexcept;
+  void pivotCrossfadeForRetarget() noexcept;
+  void completeCrossfade() noexcept;
+  void updateGuardDelays(const audio::BeamformerSteering& estimator_target) noexcept;
   static void OnMicHop(void* context, float* re, float* im, std::size_t fft_size) noexcept;
   void StoreMicSpectrum(std::size_t channel, const float* re, const float* im, std::size_t fft_size) noexcept;
   void FormLooksAndSynthesize(std::size_t fft_size) noexcept;
@@ -83,7 +92,8 @@ class MvdrBeamformer
   KemarSteeringLut steering_model_{};
 
   app::SteeringConfig steering_config_{};
-  audio::BeamformerSteering current_target_{};
+  audio::BeamformerSteering active_target_{};
+  audio::BeamformerSteering pending_target_{};
   MicPosArray mic_positions_{};
   DelayArray calibration_delays_{};
   DelayArray current_delays_{};

@@ -287,6 +287,7 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/rt_tests.cpp
     tests/unit/asrc_sim_tests.cpp
     tests/unit/calibration_tests.cpp
+    tests/unit/steering_lut_tests.cpp
     tests/unit/beamformer_tests.cpp
     tests/unit/limiter_tests.cpp
     tests/unit/stereo_limiter_tests.cpp

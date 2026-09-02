@@ -283,28 +283,12 @@ int main(int argc, char** argv)
          .ambient_floor_linear = runtime_config.steering.ambient_floor_linear},
         &conversation);
 
-    std::string steering_table_path = runtime_config.steering.kemar_lut.table_path;
-    if (steering_table_path.empty())
-    {
-      steering_table_path = runtime_config.binaural.profile.table_path;
-    }
-    std::unique_ptr<sonitude::dsp::HrtfTable> steering_hrtf;
-    if (runtime_config.steering.kemar_lut.enabled)
-    {
-      steering_hrtf = TryLoadHrtfTable(steering_table_path);
-      if (steering_hrtf == nullptr || steering_hrtf->empty())
-      {
-        throw std::runtime_error("KEMAR steering LUT enabled but HRTF table could not be loaded");
-      }
-    }
-
     sonitude::dsp::MvdrBeamformer beamformer;
     beamformer.configure(geometry,
                          runtime_config.steering,
                          calibration,
                          dsp_sample_rate_hz,
-                         4096,
-                         steering_hrtf.get());
+                         4096);
     sonitude::dsp::SuppressionStage suppressor;
     const auto suppression_backend =
         sonitude::dsp::ParseSuppressionBackend(runtime_config.suppression.backend);
@@ -329,8 +313,9 @@ int main(int argc, char** argv)
     constexpr std::size_t kPlaybackRingSlots = 16;
     const std::size_t period_frames = cap_worker.periodFrames();
 
-    const bool binaural_mvdr = runtime_config.steering.binaural_output;
-    const bool binaural_enabled = runtime_config.binaural.enabled && !binaural_mvdr;
+    const bool experimental_dual_reference_mvdr =
+        runtime_config.steering.experimental_dual_reference_mvdr;
+    const bool binaural_enabled = runtime_config.binaural.enabled;
     const auto binaural_backend = ParseBinauralBackend(runtime_config.binaural.backend);
     std::unique_ptr<sonitude::dsp::HrtfTable> compact_hrtf;
     std::unique_ptr<sonitude::dsp::HrtfTable> reference_hrtf;
@@ -369,10 +354,11 @@ int main(int argc, char** argv)
       binaural_renderer_ready = true;
       std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
     }
-    if (binaural_mvdr)
+    if (experimental_dual_reference_mvdr)
     {
       stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
-      std::cout << "Binaural MVDR output enabled (near-field + KEMAR steering LUT)\n";
+      std::cerr << "WARNING: steering.experimental_dual_reference_mvdr bypasses HRTF binaural "
+                   "renderer; dual-reference MVDR is not a complete binaural beamformer.\n";
     }
 
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
@@ -486,7 +472,7 @@ int main(int argc, char** argv)
         suppressor.setEstimatorHold(hold_estimator_after_xrun);
         hold_estimator_after_xrun = false;
         suppressor.setControl(focus_active, confidence);
-        if (binaural_mvdr)
+        if (experimental_dual_reference_mvdr)
         {
           beamformer.processStereo(
               std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
@@ -534,7 +520,8 @@ int main(int argc, char** argv)
           }
           else
           {
-            throw std::runtime_error("mono L=R playback path is disabled; enable steering.binaural_output");
+            throw std::runtime_error(
+                "mono L=R playback path is disabled; enable binaural.enabled for HRTF output");
           }
         }
         counters.suppressor_gain_milli.store(

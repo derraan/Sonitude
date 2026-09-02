@@ -11,6 +11,7 @@ void RunRtPrimitiveTests();
 void RunAsrcSimulationTests();
 void RunCalibrationTests();
 void RunBeamformerTests();
+void RunSteeringLutTests();
 void RunLimiterTests();
 void RunStereoLimiterTests();
 void RunSnapshotTests();
@@ -290,6 +291,7 @@ int main()
     RunAsrcSimulationTests();
     RunCalibrationTests();
     RunBeamformerTests();
+    RunSteeringLutTests();
     RunSuppressorTests();
     RunStftTests();
     RunSpectralPostfilterTests();

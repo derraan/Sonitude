@@ -355,12 +355,6 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error("steering ear mic index out of range");
   }
-  if (config.steering.kemar_lut.enabled && config.steering.kemar_lut.table_path.empty() &&
-      config.binaural.profile.table_path.empty())
-  {
-    throw std::runtime_error("steering.kemar_lut requires table_path or binaural.profile.table_path");
-  }
-
   if (config.suppression.fade_ms < 1.0F || config.suppression.fade_ms > 1000.0F)
   {
     throw std::runtime_error("suppression.fade_ms must be in [1, 1000]");
