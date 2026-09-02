@@ -438,3 +438,4 @@ if(SONITUDE_BUILD_FUZZERS)
         -fsanitize=fuzzer,address,undefined
     )
   endforeach()
+endif()
