@@ -11,7 +11,7 @@ playback:
   periods: 3
 
 active_channel_map: [0, 1, 2, 3, 4, 5]
-geometry_path: "geometry_soundbubble_initial.yaml"
+geometry_path: "geometry_soundbubble_xyz_v1.yaml"
 calibration_path: "calibration_example.yaml"
 calibration_dc_block_hz: 20.0
 
