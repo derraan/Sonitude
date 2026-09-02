@@ -1,31 +1,45 @@
-# Sound Bubble headphone layout — vertical arc in the XZ plane (Y ≈ 0).
-# USB channel index 0..5 matches Sound_Bubble training / firmware order:
+# Sound Bubble 6-microphone headphone layout reconstructed from
+# Chen et al., "Hearable devices with sound bubbles", Extended Data Fig. 1A.
+#
+# Coordinate frame (Sonitude head-fixed Cartesian frame):
+#   origin = midpoint between the left and right earcup microphone positions
+#   +X = listener-forward
+#   +Y = listener-right
+#   +Z = up
+#
+# Assumption: the six microphones are coplanar in the YZ plane, therefore X = 0.
+# Paper dimensions used:
+#   earcup pair separation      = 25.9 cm  -> Y = +/-12.95 cm
+#   outer headband separation   = 20.8 cm  -> Y = +/-10.4 cm
+#   inner headband separation   =  7.6 cm  -> Y = +/-3.8 cm
+#   earcup-to-outer height      = 11.5 cm  -> Z = 11.5 cm
+#   outer-to-inner height       =  5.3 cm  -> Z = 16.8 cm total
+#
+# USB channel index 0..5 retains the existing Sound Bubble/Sonitude order:
 #   0 left ear, 1 left arc, 2 left top, 3 right top, 4 right arc, 5 right ear.
-# Coordinates from Sound_Bubble/generate_adaptive_dataset.py (cm/100), Sonitude head frame:
-#   +Y front, +X listener-right, +Z up.
-profile_name: "soundbubble_vertical_v1"
+profile_name: "soundbubble_coplanar_v2"
 microphones:
   - id: M0_left_ear
-    x: -0.1280
-    y: -0.0150
+    x: 0.0000
+    y: -0.1295
     z: 0.0000
   - id: M1_left_arc
-    x: -0.1020
-    y: 0.0000
-    z: 0.1130
+    x: 0.0000
+    y: -0.1040
+    z: 0.1150
   - id: M2_left_top
-    x: -0.0380
-    y: 0.0000
-    z: 0.1690
+    x: 0.0000
+    y: -0.0380
+    z: 0.1680
   - id: M3_right_top
-    x: 0.0380
-    y: 0.0000
-    z: 0.1690
+    x: 0.0000
+    y: 0.0380
+    z: 0.1680
   - id: M4_right_arc
-    x: 0.1060
-    y: 0.0000
-    z: 0.1170
+    x: 0.0000
+    y: 0.1040
+    z: 0.1150
   - id: M5_right_ear
-    x: 0.1310
-    y: -0.0150
-    z: 0.0070
+    x: 0.0000
+    y: 0.1295
+    z: 0.0000
