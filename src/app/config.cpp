@@ -128,9 +128,10 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
     config.steering.experimental_dual_reference_mvdr =
         RequireScalar<bool>(steering, "experimental_dual_reference_mvdr");
   }
-  if (steering["binaural_output"])
+  else if (steering["binaural_output"])
   {
-    config.steering.binaural_output = RequireScalar<bool>(steering, "binaural_output");
+    config.steering.experimental_dual_reference_mvdr =
+        RequireScalar<bool>(steering, "binaural_output");
   }
   if (steering["left_ear_mic_index"])
   {

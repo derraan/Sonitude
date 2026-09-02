@@ -134,8 +134,6 @@ class MvdrBeamformer
       cov_{};
   MvdrTuningParams tuning_{};
   float cov_beta_ = 0.02F;
-#ifdef SONITUDE_BEAMFORMER_TEST_HOOKS
   std::uint64_t cov_update_hops_ = 0;
-#endif
 };
 }  // namespace sonitude::dsp

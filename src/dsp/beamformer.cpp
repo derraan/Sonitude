@@ -202,7 +202,7 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
 
   steering_config_ = steering_config;
   near_field_ = steering_config_.model != "far_field";
-  binaural_output_ = steering_config_.binaural_output;
+  binaural_output_ = steering_config_.experimental_dual_reference_mvdr;
   sample_rate_hz_ = sample_rate_hz;
   ramp_samples_ = std::max<std::size_t>(
       1U, static_cast<std::size_t>((steering_config_.steering_ramp_ms * 0.001F) *
@@ -619,9 +619,7 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
       cov_[b][i][i][1] = 0.0F;
     }
   }
-#ifdef SONITUDE_BEAMFORMER_TEST_HOOKS
   ++cov_update_hops_;
-#endif
 
   FormLookSpectrum(current_delays_, y_re_, y_im_);
   if (binaural_output_)

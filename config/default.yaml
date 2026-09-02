@@ -31,7 +31,7 @@ steering:
   ambient_floor_linear: 0.25
   model: near_field
   source_distance_m: 0.45
-  binaural_output: true
+  experimental_dual_reference_mvdr: false
   left_ear_mic_index: 0
   right_ear_mic_index: 5
   kemar_lut:
