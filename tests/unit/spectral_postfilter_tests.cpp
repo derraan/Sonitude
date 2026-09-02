@@ -442,6 +442,86 @@ void TestConfidenceThresholdIsHonored()
   Require(ratio > 0.85, "below-threshold confidence must stay near unity, ratio=" + std::to_string(ratio));
 }
 
+void TestLiveTuningPreservesHistory()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "tuning prepare");
+  SharedStftFilter host;
+  Require(host.prepare(44100.0, pf), "tuning host STFT");
+  const auto in = Lcg(12000, 17, 0.2F);
+  std::vector<float> baseline(in.size(), 0.0F);
+  std::vector<float> repeated(in.size(), 0.0F);
+  pf.setControl(true, 1.0F);
+  const sonitude::dsp::SpectralTuningParams tuning{
+      .gain_floor_db = -12.0F,
+      .protect_ratio = 4.0F,
+      .noise_overestimate = 2.0F,
+      .tonal_median_ratio = 6.0F,
+      .noise_rise_sec = 0.48F};
+  host.process(std::span<const float>(in.data(), 6000), std::span<float>(baseline.data(), 6000));
+  for (int i = 0; i < 32; ++i)
+  {
+    pf.setTuning(tuning);
+  }
+  host.process(std::span<const float>(in.data() + 6000, in.size() - 6000),
+               std::span<float>(baseline.data() + 6000, in.size() - 6000));
+
+  pf.reset();
+  host.reset();
+  pf.setControl(true, 1.0F);
+  host.process(std::span<const float>(in.data(), 6000), std::span<float>(repeated.data(), 6000));
+  host.process(std::span<const float>(in.data() + 6000, in.size() - 6000),
+               std::span<float>(repeated.data() + 6000, in.size() - 6000));
+
+  double err = 0.0;
+  for (std::size_t i = kSharedFftDelay; i < in.size(); ++i)
+  {
+    err = std::max(err, std::fabs(static_cast<double>(baseline[i]) - static_cast<double>(repeated[i])));
+  }
+  Require(err < 2.0e-5, "repeated identical setTuning must not change output, err=" + std::to_string(err));
+}
+
+void TestLiveGainFloorChangeIsContinuous()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -24.0F}), "floor prepare");
+  SharedStftFilter host;
+  Require(host.prepare(44100.0, pf), "floor host STFT");
+  const auto in = Lcg(10000, 23, 0.2F);
+  std::vector<float> out(in.size(), 0.0F);
+  pf.setControl(true, 1.0F);
+  host.process(std::span<const float>(in.data(), 5000), std::span<float>(out.data(), 5000));
+  const float gain_before = pf.currentGain();
+  pf.setTuning({.gain_floor_db = -12.0F});
+  host.process(std::span<const float>(in.data() + 5000, 2000), std::span<float>(out.data() + 5000, 2000));
+  const float gain_after = pf.currentGain();
+  Require(gain_after > 0.0F, "live gain-floor change must keep estimator active");
+  Require(std::fabs(gain_after - gain_before) < 0.5F,
+          "live gain-floor change must not hard-reset Wiener history, before=" +
+              std::to_string(gain_before) + " after=" + std::to_string(gain_after));
+}
+
+void TestExplicitResetClearsTuningHistory()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "reset prepare");
+  SharedStftFilter host;
+  Require(host.prepare(44100.0, pf), "reset host STFT");
+  const auto in = Lcg(8000, 31, 0.25F);
+  std::vector<float> out(in.size(), 0.0F);
+  pf.setControl(true, 1.0F);
+  host.process(in, out);
+  const float gain_before_reset = pf.currentGain();
+  Require(gain_before_reset < 0.9F, "estimator should adapt before reset");
+  pf.reset();
+  host.reset();
+  host.process(std::span<const float>(in.data(), 512), std::span<float>(out.data(), 512));
+  const float gain_after_reset = pf.currentGain();
+  Require(gain_after_reset > gain_before_reset + 0.05F,
+          "explicit reset must clear Wiener history toward unity, before=" +
+              std::to_string(gain_before_reset) + " after=" + std::to_string(gain_after_reset));
+}
+
 void TestTwoTalkersGuardContrast()
 {
   constexpr std::uint32_t kFs = 44100;
@@ -513,5 +593,8 @@ void RunSpectralPostfilterTests()
   TestTonePresentFromStartup();
   TestFocusTransitionDoesNotLearnBypassAsNoise();
   TestConfidenceThresholdIsHonored();
+  TestLiveTuningPreservesHistory();
+  TestLiveGainFloorChangeIsContinuous();
+  TestExplicitResetClearsTuningHistory();
   TestTwoTalkersGuardContrast();
 }

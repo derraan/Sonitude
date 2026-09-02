@@ -18,7 +18,7 @@ removal. Pico 2 W and STM32H7 remain NOT MEASURED.
 | Config | `runtime.suppression.{enabled,fade_ms,activity_threshold,confidence_threshold}` required; `backend` and `spectral.*` optional |
 | FFT in repo | None. Host radix-2 added with unnormalized forward / 1/N inverse. CMSIS-DSP not linked. |
 | Allocator tests | None prior; test-only `operator new` counter in `tests/support/alloc_counter.cpp` |
-| Binaural / limiter | Spectral gains run in the MVDR hop before iSTFT. Conservative remains a later PCM stage. Mono limiter then optional binaural. Stereo limiter still last when binaural is on. |
+| Binaural / limiter | Spectral gains run in the MVDR hop before iSTFT. Conservative remains a later PCM stage. Mono limiter then optional binaural. Linked stereo sample-peak limiter still last when binaural is on (no look-ahead / no true-peak). |
 | XRUN into DSP | Capture XRUN skips the period (`readBlock` false). No concealment PCM is delivered. `setEstimatorHold` runs on the next successful period in `sonitude_realtime`. Stream protocol aborts on sequence gaps rather than concealing. |
 | Click-free backend switch | Conservative already ramps per sample. Backend is selected at configure/prepare. Spectral and off now share the MVDR delay; live mid-stream backend switches are still unsupported. |
 
@@ -35,7 +35,7 @@ Pre-change (PR #32):
   -> ConservativeSuppressor if enabled else copy
   -> mono peak limiter
   -> optional binaural
-  -> stereo limiter if binaural
+  -> linked stereo sample-peak limiter if binaural
 ```
 
 Post-change:
@@ -47,7 +47,7 @@ Post-change:
   -> conservative PCM stage only when that backend is selected
   -> mono peak limiter (unchanged)
   -> optional binaural (unchanged)
-  -> stereo limiter if binaural (unchanged)
+  -> linked stereo sample-peak limiter if binaural (unchanged)
 ```
 
 Do not run separate nonlinear suppressors on each microphone. Guard spectra are

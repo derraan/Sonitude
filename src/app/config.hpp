@@ -55,6 +55,7 @@ struct SteeringConfig
   float ambient_floor_linear = 0.25F;
   std::string model = "near_field";
   float source_distance_m = 0.45F;
+  bool experimental_dual_reference_mvdr = false;
   bool binaural_output = false;
   std::size_t left_ear_mic_index = 0;
   std::size_t right_ear_mic_index = 5;

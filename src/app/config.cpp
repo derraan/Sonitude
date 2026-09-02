@@ -123,6 +123,11 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
   {
     config.steering.source_distance_m = RequireScalar<float>(steering, "source_distance_m");
   }
+  if (steering["experimental_dual_reference_mvdr"])
+  {
+    config.steering.experimental_dual_reference_mvdr =
+        RequireScalar<bool>(steering, "experimental_dual_reference_mvdr");
+  }
   if (steering["binaural_output"])
   {
     config.steering.binaural_output = RequireScalar<bool>(steering, "binaural_output");

@@ -43,7 +43,7 @@ Audio path target order:
 
 ```text
 steering snapshot -> STFT-domain MVDR (optional same-hop spectral NS) -> conservative PCM if selected
--> binaural renderer -> linked stereo limiter -> ASRC/drift control -> ALSA playback
+-> binaural renderer -> linked stereo sample-peak limiter -> ASRC/drift control -> ALSA playback
 ```
 
 The experimental spectral postfilter (`docs/spectral_postfilter.md`) shares the

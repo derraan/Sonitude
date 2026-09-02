@@ -79,7 +79,7 @@ def test_parse_capabilities_json_lists_hrtf_backends() -> None:
 def test_config_reader_exposes_binaural_yaml() -> None:
     summary = read_runtime_config_summary(DEFAULT_CONFIG_PATH)
     assert summary.binaural.backend
-    assert summary.binaural.follow_steering is False
+    assert summary.binaural.follow_steering is True
     assert "generic_sadie2_d2" in summary.binaural.table_path
 
 

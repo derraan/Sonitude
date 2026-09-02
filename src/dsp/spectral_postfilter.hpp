@@ -78,6 +78,7 @@ class SpectralPostfilter
   {
    public:
     bool prepare(std::size_t n_bins, double hop_hz, float gain_floor_linear);
+    void setGainFloorLinear(float gain_floor_linear) noexcept;
     void reset() noexcept;
     void setNoiseOverestimate(float factor) noexcept;
     void compute(std::span<const float> power,
@@ -87,6 +88,7 @@ class SpectralPostfilter
 
    private:
     std::size_t n_bins_ = 0;
+    double hop_hz_ = 0.0;
     float gain_floor_ = 0.25F;
     float noise_overestimate_ = 2.0F;
     float dd_coeff_ = 0.9F;

@@ -24,7 +24,7 @@ flowchart TB
         BF["STFT MVDR beamformer\n128/32 + steering crossfade"]
         Suppress["Suppression v1\nM7 implemented"]
         Binaural["BinauralRenderer\nmono -> stereo"]
-        Limiter["Stereo limiter\nlinked gain"]
+        Limiter["Linked stereo sample-peak limiter"]
         Asrc["ASRC: PI controller +\nIStereoResampler"]
         AlsaPb["ALSA playback worker"]
     end
@@ -77,7 +77,7 @@ flowchart TB
 | **Calibration**      | Per mic: polarity, DC subtract, gain, high-pass (`CalibrationApplier`)                      |
 | **Beamformer**       | Align mics in time for steering angle; sum with 1/6 weights → mono (M4)                     |
 | **BinauralRenderer** | Converts mono to stereo using selected backend (`mono_reference`, `itd_ild`, HRTF modes)    |
-| **Stereo limiter**   | Final linked stereo peak safety stage after binaural processing                              |
+| **Stereo limiter**   | Linked stereo sample-peak limiter after binaural processing (no look-ahead / no true-peak) |
 | **ASRC**             | PI controller adjusts playback resample ratio so capture/playback clock drift does not XRUN |
 | **Passthrough mode** | Today: ear-cup mics 4/5 to L/R, bypasses beamformer (`--mode passthrough`)                  |
 | **Control**          | ODAS/mock → tracker → state machine → atomic snapshot; audio thread reads snapshot only     |

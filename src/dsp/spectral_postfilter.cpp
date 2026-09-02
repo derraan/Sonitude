@@ -166,14 +166,36 @@ bool SpectralPostfilter::WienerGain::prepare(const std::size_t n_bins,
   {
     return false;
   }
+  const bool structural = n_bins_ != n_bins || n_bins_ == 0;
   n_bins_ = n_bins;
-  gain_floor_ = gain_floor_linear;
+  hop_hz_ = hop_hz;
   dd_coeff_ = CoeffFromTau(kTauDecisionDirectedSec, hop_hz);
   time_coeff_ = CoeffFromTau(kTauGainSec, hop_hz);
-  xi_.assign(n_bins, 0.0F);
-  gain_.assign(n_bins, gain_floor_);
-  prev_gain_.assign(n_bins, gain_floor_);
+  if (structural)
+  {
+    gain_floor_ = gain_floor_linear;
+    xi_.assign(n_bins, 0.0F);
+    gain_.assign(n_bins, gain_floor_);
+    prev_gain_.assign(n_bins, gain_floor_);
+  }
+  else
+  {
+    setGainFloorLinear(gain_floor_linear);
+  }
   return true;
+}
+
+void SpectralPostfilter::WienerGain::setGainFloorLinear(const float gain_floor_linear) noexcept
+{
+  gain_floor_ = std::clamp(gain_floor_linear, 0.0F, 1.0F);
+  for (float& g : gain_)
+  {
+    g = std::max(g, gain_floor_);
+  }
+  for (float& pg : prev_gain_)
+  {
+    pg = std::max(pg, gain_floor_);
+  }
 }
 
 void SpectralPostfilter::WienerGain::reset() noexcept
@@ -295,18 +317,31 @@ void SpectralPostfilter::setConfidenceThreshold(const float threshold) noexcept
 
 void SpectralPostfilter::setTuning(const SpectralTuningParams& tuning) noexcept
 {
-  tuning_.gain_floor_db = std::clamp(tuning.gain_floor_db, -80.0F, 0.0F);
-  tuning_.protect_ratio = std::clamp(tuning.protect_ratio, 1.0F, 16.0F);
-  tuning_.noise_overestimate = std::clamp(tuning.noise_overestimate, 1.0F, 8.0F);
-  tuning_.tonal_median_ratio = std::clamp(tuning.tonal_median_ratio, 2.0F, 16.0F);
-  tuning_.noise_rise_sec = std::clamp(tuning.noise_rise_sec, 0.05F, 4.0F);
-  if (ready_)
+  const SpectralTuningParams next{
+      .gain_floor_db = std::clamp(tuning.gain_floor_db, -80.0F, 0.0F),
+      .protect_ratio = std::clamp(tuning.protect_ratio, 1.0F, 16.0F),
+      .noise_overestimate = std::clamp(tuning.noise_overestimate, 1.0F, 8.0F),
+      .tonal_median_ratio = std::clamp(tuning.tonal_median_ratio, 2.0F, 16.0F),
+      .noise_rise_sec = std::clamp(tuning.noise_rise_sec, 0.05F, 4.0F)};
+  if (next.gain_floor_db == tuning_.gain_floor_db && next.protect_ratio == tuning_.protect_ratio &&
+      next.noise_overestimate == tuning_.noise_overestimate &&
+      next.tonal_median_ratio == tuning_.tonal_median_ratio &&
+      next.noise_rise_sec == tuning_.noise_rise_sec)
   {
-    const float floor_lin = std::clamp(DbToLinear(tuning_.gain_floor_db), 0.0F, 1.0F);
-    wiener_.prepare(power_.size(), hop_hz_, floor_lin);
-    tracker_.setNoiseRiseSec(tuning_.noise_rise_sec, hop_hz_);
-    wiener_.setNoiseOverestimate(tuning_.noise_overestimate);
+    return;
   }
+  const float prev_floor_db = tuning_.gain_floor_db;
+  tuning_ = next;
+  if (!ready_)
+  {
+    return;
+  }
+  if (tuning_.gain_floor_db != prev_floor_db)
+  {
+    wiener_.setGainFloorLinear(std::clamp(DbToLinear(tuning_.gain_floor_db), 0.0F, 1.0F));
+  }
+  tracker_.setNoiseRiseSec(tuning_.noise_rise_sec, hop_hz_);
+  wiener_.setNoiseOverestimate(tuning_.noise_overestimate);
 }
 
 void SpectralPostfilter::setEstimatorHold(const bool hold) noexcept
