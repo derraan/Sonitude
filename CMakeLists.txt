@@ -134,45 +134,31 @@ else()
   )
 endif()
 
-add_executable(
-  sonitude_realtime
-  src/main.cpp
-)
-
-target_link_libraries(
-  sonitude_realtime
-  PRIVATE
-    sonitude_core
-)
 if(SONITUDE_WITH_ALSA)
+  add_executable(
+    sonitude_realtime
+    src/main.cpp
+  )
   target_link_libraries(
     sonitude_realtime
     PRIVATE
-      sonitude_audio_alsa
-  )
-endif()
-
-target_compile_definitions(
-  sonitude_realtime
-  PRIVATE
-    SONITUDE_VERSION="${PROJECT_VERSION}"
-)
-
-add_executable(
-  sonitude_device_probe
-  src/tools/device_probe.cpp
-)
-if(SONITUDE_WITH_ALSA)
-  target_link_libraries(
-    sonitude_device_probe
-    PRIVATE
-      sonitude_audio_alsa
       sonitude_core
+      sonitude_audio_alsa
   )
-else()
+  target_compile_definitions(
+    sonitude_realtime
+    PRIVATE
+      SONITUDE_VERSION="${PROJECT_VERSION}"
+  )
+
+  add_executable(
+    sonitude_device_probe
+    src/tools/device_probe.cpp
+  )
   target_link_libraries(
     sonitude_device_probe
     PRIVATE
+      sonitude_audio_alsa
       sonitude_core
   )
 endif()
@@ -339,23 +325,10 @@ if(SONITUDE_BUILD_TESTS)
 endif()
 
 if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
-  set(_sonitude_sanitizer_targets
-      sonitude_core
-      sonitude_realtime
-      sonitude_device_probe
-      sonitude_wav_replay
-      sonitude_stream_process
-      sonitude_binaural_bench
-      sonitude_mvdr_bench
-      sonitude_calibration_capture
-      sonitude_calibration_estimate
-      sonitude_unit_tests
-      sonitude_audio_alsa
-      sonitude_capture_check
-      sonitude_playback_check
-  )
+  get_property(_sonitude_sanitizer_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
   foreach(_tgt IN LISTS _sonitude_sanitizer_targets)
-    if(TARGET ${_tgt})
+    get_target_property(_type ${_tgt} TYPE)
+    if(_type STREQUAL "EXECUTABLE" OR _type STREQUAL "STATIC_LIBRARY" OR _type STREQUAL "SHARED_LIBRARY")
       target_compile_options(${_tgt} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
       target_link_options(${_tgt} PRIVATE -fsanitize=address,undefined)
     endif()
