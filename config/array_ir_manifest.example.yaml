@@ -1,0 +1,37 @@
+schema_version: 1
+sample_rate_hz: 44100
+layout: multichannel
+geometry_id: soundbubble_vertical_v1
+fft_size: 128
+hop_size: 32
+reference_mic: 2
+left_ear_mic: 0
+right_ear_mic: 5
+self_noise: 0.001
+max_weight_norm: 4.0
+# Optional M3 channel conditioner import. Only gain_linear and polarity are used.
+# delay_samples is intentionally ignored because synchronized IR phase already
+# contains per-channel delay.
+calibration_yaml: calibration_example.yaml
+
+# Optional direct overrides (length 6). If present, these override calibration_yaml.
+# gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+# polarity: [1, 1, 1, 1, 1, 1]
+
+directions:
+  # Multichannel layout: one 6-channel WAV/FLAC per direction.
+  - azimuth_deg: 0.0
+    path: irs/front_0deg.wav
+  - azimuth_deg: 30.0
+    path: irs/front_right_30deg.flac
+
+  # Per-mic layout override: six mono files in USB index order M0..M5.
+  - azimuth_deg: -30.0
+    layout: per_mic
+    channels:
+      - irs/left30/M0_left_ear.wav
+      - irs/left30/M1_left_arc.wav
+      - irs/left30/M2_left_top.wav
+      - irs/left30/M3_right_top.wav
+      - irs/left30/M4_right_arc.wav
+      - irs/left30/M5_right_ear.wav
