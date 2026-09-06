@@ -27,7 +27,8 @@ d_m(k, θ) = exp(j 2π k Δ_m(θ) / N)
 
 - Default reference: geometry channel index **2** (`M2_left_top`), matching `steering.reference_mic_index` in `config/default.yaml`.
 - Gain normalization: each channel is scaled so its RMS matches the reference microphone RMS in the calibration signal region.
-- Delay sign: positive `delay_samples` advances that channel relative to the reference in steering phase. GCC-PHAT lag is stored as the negative of measured lag so late channels receive compensating phase.
+- Delay sign: positive `delay_samples` advances that channel relative to the reference in **legacy geometric** steering phase. The channel diagnostic estimates a normalized time-domain correlation lag (not GCC-PHAT spectral weighting) and stores the negative of that lag so late channels receive compensating phase.
+- Production measured steering does **not** use `delay_samples`. Complex RTFs compiled from synchronized IRs already contain delay in their phase.
 
 ## Artifact schema (v2)
 
@@ -63,7 +64,7 @@ Schema v1 files (no `schema_version`) remain loadable.
 `sonitude_calibration_capture` writes a six-channel WAV with:
 
 1. **Silence region** (~0.5 s): DC offset estimation, ambient-noise check.
-2. **Common-source region** (~2 s): multi-tone signal for gain, polarity, and GCC-PHAT delay estimation.
+2. **Common-source region** (~2 s): multi-tone signal for gain, polarity, and normalized-correlation delay estimation.
 
 Channel order matches `config/geometry_soundbubble_initial.yaml` (USB indices 0..5).
 
@@ -124,5 +125,5 @@ Dual-slot Flash/CRC semantics belong to the embedded integration boundary and ar
 ## Limits and assumptions
 
 - Geometry in `config/geometry_soundbubble_initial.yaml` is provisional planar data (hardware-unverified).
-- Measurement FFT (offline GCC-PHAT) is separate from runtime MVDR FFT (128/32).
+- Measurement FFT (offline correlation diagnostic) is separate from runtime MVDR FFT (128/32). Spatial production calibration is the IR compiler, not this diagnostic.
 - Do not mark M3 `done` until hardware gate evidence is recorded in `docs/milestones.md`.

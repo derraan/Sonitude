@@ -2,19 +2,20 @@
 
 Unified tracker for Sonitude core: **global scope, guardrails, user veto checkboxes**, **DSP signal path**, directory layout, milestone reality, key interfaces, config schema, tests, conventions, ODAS posture, and CMake wiring. Treat this document as the living snapshot; `docs/milestones.md` **remains authoritative for milestone gates**. Unchecked scope vetoes are binding on Cursor; checked vetoes explicitly authorize otherwise-prohibited work.
 
-Last updated: 2026-08-30.
+Last updated: 2026-09-06.
 
 ### Implementation status snapshot (M4–M7)
 
 ```text
-capture -> calibration -> STFT MVDR target (+ internal guard spectra)
-  -> optional same-hop spectral NS, else conservative PCM / off
-  -> limiter -> binaural/ASRC -> playback
+capture -> channel conditioning -> STFT
+  -> adaptive geometric MVDR (comparison) OR fixed measured selective-binaural MVDR (opt-in, unqualified)
+  -> optional same-hop spectral NS on the adaptive path
+  -> limiter -> HRTF binaural only on the adaptive/HRTF route -> ASRC -> playback
 ```
 
 | Stage | Milestone | Current status | Notes |
 | --- | --- | --- | --- |
-| Stage 2 | M3 calibration | in_progress | `CalibrationApplier` live; GCC-PHAT offline estimator + v2 schema; HW sweep evidence pending |
+| Stage 2 | M3 calibration | in_progress | Channel conditioner live; normalized-correlation delay diagnostic + v2 schema; IR compiler (`tools/calibration/compile_array.py`) emits SMV3 artifacts; HW sweep evidence pending |
 | Stage 3 | M4 beamformer | in_progress | STFT-domain MVDR (128/32), delay-and-sum fallback, steering crossfade. SCOPE-3 vetoed for MVDR. |
 | Stage 4 | M7 suppression/limiter | in_progress | Conservative default. Spectral NS shares the MVDR 128/32 hop (guard spectra stay in the frequency domain). Experimental; not the shipping voice suppressor. |
 

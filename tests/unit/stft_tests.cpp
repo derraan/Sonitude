@@ -128,6 +128,35 @@ void TestFftRoundtrip()
   }
 }
 
+void TestForwardDelayedImpulsePhase()
+{
+  constexpr std::size_t n = 128;
+  constexpr std::size_t delay = 3;
+  sonitude::dsp::Radix2Fft fft;
+  Require(fft.prepare(n), "FFT prepare for delay-sign fixture");
+  std::vector<float> time(n, 0.0F);
+  time[delay] = 1.0F;
+  std::vector<float> re(n, 0.0F);
+  std::vector<float> im(n, 0.0F);
+  fft.forward(time.data(), re.data(), im.data());
+  for (std::size_t k = 1; k < (n / 2U); ++k)
+  {
+    const double expected = -2.0 * 3.14159265358979323846 * static_cast<double>(k) *
+                            static_cast<double>(delay) / static_cast<double>(n);
+    const double got = std::atan2(static_cast<double>(im[k]), static_cast<double>(re[k]));
+    double err = got - expected;
+    while (err > 3.14159265358979323846)
+    {
+      err -= 2.0 * 3.14159265358979323846;
+    }
+    while (err < -3.14159265358979323846)
+    {
+      err += 2.0 * 3.14159265358979323846;
+    }
+    Require(std::fabs(err) < 1.0e-4, "forward DFT of a delayed impulse must have negative phase slope");
+  }
+}
+
 void TestPrepareRejects()
 {
   sonitude::dsp::StreamingStft stft;
@@ -262,6 +291,7 @@ void TestReportedLookahead()
 void RunStftTests()
 {
   TestFftRoundtrip();
+  TestForwardDelayedImpulsePhase();
   TestPrepareRejects();
   TestUnityReconstruction({.fft_size = 128, .hop_size = 32}, kFs);
   TestUnityReconstruction({.fft_size = 256, .hop_size = 64}, kFs);

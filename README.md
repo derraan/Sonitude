@@ -274,6 +274,8 @@ cmake --preset default-debug
 cmake --build --preset build-debug
 ```
 
+CMake presets use schema 6 and therefore require **CMake 3.25+**. Debug and release presets use separate directories (`build/debug`, `build/release`). CI continues to configure an explicit `build/` tree without presets.
+
 
 
 ## Run

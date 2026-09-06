@@ -75,9 +75,11 @@
 #include "app/calibration_config.hpp"
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
+#include "dsp/array_profile.hpp"
 #include "dsp/beamformer.hpp"
 #include "dsp/binaural_renderer.hpp"
 #include "dsp/calibration_applier.hpp"
+#include "dsp/fixed_binaural_mvdr.hpp"
 #include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/suppression_stage.hpp"
@@ -141,7 +143,9 @@ void PrintCapabilities()
             << "\"protocol_version\":4,"
             << "\"suppression\":{\"modes\":[\"auto\",\"on\",\"off\"],"
                "\"backends\":[\"conservative\",\"spectral\"]},"
-            << "\"taps\":[\"processed\"],"
+            << "\"spatial\":{\"backends\":[\"adaptive_geometric\",\"fixed_measured\"],"
+               "\"note\":\"fixed_measured is selected at startup from YAML. Adaptive covariance "
+               "controls are ignored in that mode. Protocol remains version 4.\"},"
             << "\"binaural\":{"
             << "\"available\":true,"
             << "\"backends\":[\"array_downmix\",\"mono_reference\",\"itd_ild\",\"compact_hrtf\",\"full_hrtf_reference\"],"
@@ -481,11 +485,26 @@ int main(int argc, char** argv)
         calibration.channels, geometry_ids, sample_rate_hz, runtime.calibration_dc_block_hz);
 
     sonitude::dsp::MvdrBeamformer beamformer;
-    beamformer.configure(geometry,
-                         runtime.steering,
-                         calibration,
-                         sample_rate_hz,
-                         max_block_frames);
+    sonitude::dsp::FixedBinauralMvdr fixed_beamformer;
+    const bool use_fixed = runtime.spatial.backend == "fixed_measured";
+    if (use_fixed)
+    {
+      auto profile = sonitude::dsp::LoadArrayProfileFromFile(runtime.spatial.profile_path);
+      sonitude::dsp::FixedMvdrMaskParams mask;
+      mask.enabled = runtime.spatial.mask_enabled;
+      mask.eta_low_db = runtime.spatial.eta_low_db;
+      mask.eta_high_db = runtime.spatial.eta_high_db;
+      mask.smooth_sec = runtime.spatial.mask_smooth_sec;
+      fixed_beamformer.configure(profile, sample_rate_hz, max_block_frames, mask);
+    }
+    else
+    {
+      beamformer.configure(geometry,
+                           runtime.steering,
+                           calibration,
+                           sample_rate_hz,
+                           max_block_frames);
+    }
 
     const bool suppression_enabled = ResolveSuppression(suppression_mode, runtime.suppression.enabled);
     const std::string backend_name =
@@ -516,7 +535,10 @@ int main(int argc, char** argv)
                                        .hop_size = runtime.suppression.spectral.hop_size,
                                        .gain_floor_db = runtime.suppression.spectral.gain_floor_db,
                                        .confidence_threshold = runtime.suppression.confidence_threshold}});
-    beamformer.setSpectralPostfilter(suppressor.spectralFilter());
+    if (!use_fixed)
+    {
+      beamformer.setSpectralPostfilter(suppressor.spectralFilter());
+    }
     have_live_suppressor_params = true;
     last_live_suppressor = default_live_suppressor;
 
@@ -697,7 +719,14 @@ int main(int argc, char** argv)
       if (!have_target || std::fabs(target.azimuth_deg - last_target.azimuth_deg) > 0.01F ||
           std::fabs(target.elevation_deg - last_target.elevation_deg) > 0.01F)
       {
-        beamformer.setTarget(target);
+        if (use_fixed)
+        {
+          fixed_beamformer.setTarget(target);
+        }
+        else
+        {
+          beamformer.setTarget(target);
+        }
         last_target = target;
         have_target = true;
       }
@@ -711,7 +740,10 @@ int main(int argc, char** argv)
           .mvdr = {.diag_load = mvdr_diag_load,
                    .max_white_noise_gain = mvdr_max_wn_gain,
                    .cov_tau_sec = std::max(1.0F, mvdr_cov_tau_ms) * 0.001F}};
-      beamformer.setTuning(live_tuning.mvdr);
+      if (!use_fixed)
+      {
+        beamformer.setTuning(live_tuning.mvdr);
+      }
       if (suppression_enabled && suppression_backend == sonitude::dsp::SuppressionBackend::Spectral)
       {
         if (auto* spectral = suppressor.spectralFilter())
@@ -747,7 +779,18 @@ int main(int argc, char** argv)
       }
       const bool experimental_dual_reference_mvdr =
           runtime.steering.experimental_dual_reference_mvdr;
-      if (experimental_dual_reference_mvdr)
+      if (use_fixed)
+      {
+        fixed_beamformer.processStereo(
+            std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+            std::span<float>(left.data(), frame_count),
+            std::span<float>(right.data(), frame_count));
+        for (std::size_t i = 0; i < frame_count; ++i)
+        {
+          mono[i] = 0.5F * (left[i] + right[i]);
+        }
+      }
+      else if (experimental_dual_reference_mvdr)
       {
         static bool warned = false;
         if (!warned)
@@ -796,7 +839,7 @@ int main(int argc, char** argv)
 
       const bool protocol_binaural = (flags & kFlagBinauralEnabled) != 0;
       const bool binaural_active =
-          !experimental_dual_reference_mvdr && (protocol_binaural || runtime.binaural.enabled);
+          !use_fixed && !experimental_dual_reference_mvdr && (protocol_binaural || runtime.binaural.enabled);
       const bool follow_steering =
           protocol_binaural ? ((flags & kFlagBinauralFollowSteering) != 0)
                             : runtime.binaural.direction.follow_steering;
@@ -851,7 +894,7 @@ int main(int argc, char** argv)
         }
       }
 
-      if (!experimental_dual_reference_mvdr)
+      if (!experimental_dual_reference_mvdr && !use_fixed)
       {
         left.assign(frame_count, 0.0F);
         right.assign(frame_count, 0.0F);
@@ -896,7 +939,7 @@ int main(int argc, char** argv)
           out_flags |= kOutMonoReference;
         }
       }
-      else if (experimental_dual_reference_mvdr)
+      else if (experimental_dual_reference_mvdr || use_fixed)
       {
         if (!disable_limiter)
         {

@@ -47,6 +47,16 @@ struct GeometryConfig
   std::vector<GeometryMic> microphones;
 };
 
+struct SpatialConfig
+{
+  std::string backend = "adaptive_geometric";
+  std::string profile_path;
+  bool mask_enabled = true;
+  float eta_low_db = -3.0F;
+  float eta_high_db = 3.0F;
+  float mask_smooth_sec = 0.020F;
+};
+
 struct SteeringConfig
 {
   float speed_of_sound_mps = 343.0F;
@@ -151,6 +161,7 @@ struct RuntimeConfig
   float calibration_dc_block_hz = 20.0F;
   AsrcConfig asrc;
   SteeringConfig steering;
+  SpatialConfig spatial;
   SuppressionConfig suppression;
   StateMachineConfig state_machine;
   OdasConfig odas;

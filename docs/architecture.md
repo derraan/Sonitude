@@ -42,9 +42,14 @@ Pico USB ALSA capture (6 active channels)
 Audio path target order:
 
 ```text
-steering snapshot -> STFT-domain MVDR (optional same-hop spectral NS) -> conservative PCM if selected
--> binaural renderer -> linked stereo sample-peak limiter -> ASRC/drift control -> ALSA playback
+steering snapshot -> STFT-domain MVDR (adaptive geometric comparison backend)
+  or precomputed selective-binaural fixed MVDR (development option; not production-qualified)
+-> optional same-hop spectral NS on the adaptive path
+-> binaural renderer (adaptive/HRTF route only; not applied on top of fixed measured stereo)
+-> linked stereo sample-peak limiter -> ASRC/drift control -> ALSA playback
 ```
+
+`spatial.backend` selects the spatial core at startup (`adaptive_geometric` default, `fixed_measured` opt-in). Fixed mode loads an SMV3 coefficient artifact, performs one spatial inner product per bin, reconstructs both ears from the same target estimate, and blends physical ear-reference microphones with a residual dominance mask. It performs no covariance update or matrix solve on the audio thread. Do not treat a software-green PR as acoustic or latency qualification.
 
 The experimental spectral postfilter (`docs/spectral_postfilter.md`) shares the
 MVDR 128/32 hop. It is an alternative to the conservative PCM suppressor, off by

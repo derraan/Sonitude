@@ -12,6 +12,8 @@ void RunAsrcSimulationTests();
 void RunCalibrationTests();
 void RunBeamformerTests();
 void RunSteeringLutTests();
+void RunArrayProfileTests();
+void RunFixedMvdrTests();
 void RunLimiterTests();
 void RunStereoLimiterTests();
 void RunSnapshotTests();
@@ -291,6 +293,8 @@ int main()
     RunAsrcSimulationTests();
     RunCalibrationTests();
     RunBeamformerTests();
+    RunArrayProfileTests();
+    RunFixedMvdrTests();
     RunSteeringLutTests();
     RunSuppressorTests();
     RunStftTests();

@@ -79,7 +79,7 @@ void RemoveMeanInPlace(std::vector<float>& v)
   }
 }
 
-struct GccPhatResult
+struct NormalizedLagResult
 {
   double lag_samples = 0.0;
   float peak = 0.0F;
@@ -133,11 +133,11 @@ double NormalizedCorrelation(const std::vector<float>& reference,
   return sum / denom;
 }
 
-GccPhatResult EstimateDelayGccPhat(const std::vector<float>& reference,
-                                   const std::vector<float>& channel,
-                                   const std::size_t max_lag_samples)
+NormalizedLagResult EstimateNormalizedLag(const std::vector<float>& reference,
+                                          const std::vector<float>& channel,
+                                          const std::size_t max_lag_samples)
 {
-  GccPhatResult out{};
+  NormalizedLagResult out{};
   if (reference.empty() || channel.empty())
   {
     return out;
@@ -337,9 +337,9 @@ CalibrationEstimateOutput EstimateCalibrationFromCapture(
     }
     else
     {
-      const GccPhatResult delay =
-          EstimateDelayGccPhat(ref_work, ch_work, static_cast<std::size_t>(64U));
-      // Positive GCC lag means channel is late relative to reference; store negative correction.
+      const NormalizedLagResult delay =
+          EstimateNormalizedLag(ref_work, ch_work, static_cast<std::size_t>(64U));
+      // Positive lag means channel is late relative to reference; store negative correction.
       ch_report.delay_samples = static_cast<float>(-delay.lag_samples);
       ch_report.delay_us =
           ch_report.delay_samples * 1.0e6F / static_cast<float>(options.sample_rate_hz);

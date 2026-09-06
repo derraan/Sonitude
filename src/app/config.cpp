@@ -155,6 +155,36 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
     }
   }
 
+  const YAML::Node spatial = root["spatial"];
+  if (spatial)
+  {
+    if (spatial["backend"])
+    {
+      config.spatial.backend = RequireScalar<std::string>(spatial, "backend");
+    }
+    if (spatial["profile_path"])
+    {
+      config.spatial.profile_path =
+          ResolvePath(path, RequireScalar<std::string>(spatial, "profile_path"));
+    }
+    if (spatial["mask_enabled"])
+    {
+      config.spatial.mask_enabled = RequireScalar<bool>(spatial, "mask_enabled");
+    }
+    if (spatial["eta_low_db"])
+    {
+      config.spatial.eta_low_db = RequireScalar<float>(spatial, "eta_low_db");
+    }
+    if (spatial["eta_high_db"])
+    {
+      config.spatial.eta_high_db = RequireScalar<float>(spatial, "eta_high_db");
+    }
+    if (spatial["mask_smooth_sec"])
+    {
+      config.spatial.mask_smooth_sec = RequireScalar<float>(spatial, "mask_smooth_sec");
+    }
+  }
+
   const YAML::Node suppression = root["suppression"];
   config.suppression.enabled = RequireScalar<bool>(suppression, "enabled");
   config.suppression.fade_ms = RequireScalar<float>(suppression, "fade_ms");
@@ -356,6 +386,27 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   if (config.steering.source_distance_m <= 0.0F || config.steering.source_distance_m > 5.0F)
   {
     throw std::runtime_error("steering.source_distance_m is outside engineering guardrails");
+  }
+  if (config.spatial.backend != "adaptive_geometric" && config.spatial.backend != "fixed_measured")
+  {
+    throw std::runtime_error("spatial.backend must be adaptive_geometric or fixed_measured");
+  }
+  if (config.spatial.backend == "fixed_measured")
+  {
+    if (config.spatial.profile_path.empty())
+    {
+      throw std::runtime_error("spatial.backend=fixed_measured requires spatial.profile_path");
+    }
+    if (config.binaural.enabled)
+    {
+      throw std::runtime_error(
+          "fixed_measured backend already emits stereo; disable binaural.enabled to avoid a second HRTF renderer");
+    }
+    if (config.steering.experimental_dual_reference_mvdr)
+    {
+      throw std::runtime_error(
+          "fixed_measured cannot be combined with experimental_dual_reference_mvdr");
+    }
   }
   if (config.steering.left_ear_mic_index >= 6 || config.steering.right_ear_mic_index >= 6)
   {

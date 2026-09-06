@@ -9,10 +9,11 @@
 
 namespace sonitude::dsp
 {
-// Analytic near-field microphone-array steering.
+// Analytic near-field microphone-array geometry (not a KEMAR HRTF table).
 //   tau_m = (||s - p_m|| - ||s - p_ref||) / c,  D_m = fs * tau_m
-// HRTF direction lookup is confined to BinauralRenderer.
-class KemarSteeringLut
+// Amplitude ratios are available for diagnostics; adaptive MVDR uses delay-derived
+// unit-magnitude steering only. HRTF direction lookup is confined to BinauralRenderer.
+class GeometricSteeringLut
 {
  public:
   using DelayArray = std::array<double, audio::kMicChannels>;
@@ -32,4 +33,6 @@ class KemarSteeringLut
   float source_distance_m_ = 0.45F;
   std::array<std::array<double, 3>, audio::kMicChannels> mic_positions_{};
 };
+
+using KemarSteeringLut = GeometricSteeringLut;
 }  // namespace sonitude::dsp

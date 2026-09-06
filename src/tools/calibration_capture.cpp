@@ -43,8 +43,8 @@ void PrintUsage()
             << "  1. silence region (DC estimation)\n"
             << "  2. common-source tone region (gain/delay/polarity estimation)\n"
             << "\n"
-            << "Channel order matches config/geometry_soundbubble_initial.yaml (USB 0..5).\n"
-            << "Reference microphone defaults to index 2 (M2_left_top).\n";
+            << "Synthetic fixture for channel-calibration tests. Not a hardware recorder.\n"
+            << "Use --synthetic-test to inject known delay/gain/polarity errors.\n";
 }
 }  // namespace
 
@@ -121,7 +121,8 @@ int main(int argc, char** argv)
         synthetic_test ? std::array<float, kChannelCount>{1.0F, 0.85F, 1.0F, 1.12F, 0.93F, 1.05F}
                        : std::array<float, kChannelCount>{1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F};
     const std::array<int, kChannelCount> synthetic_polarity =
-        synthetic_test ? std::array<int, kChannelCount>{1, -1, 1, 1, 1, 1} : std::array<int, kChannelCount>{};
+        synthetic_test ? std::array<int, kChannelCount>{1, -1, 1, 1, 1, 1}
+                       : std::array<int, kChannelCount>{1, 1, 1, 1, 1, 1};
 
     sonitude::audio::WavData wav;
     wav.sample_rate_hz = sample_rate_hz;

@@ -89,7 +89,7 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
   - `ctest --test-dir build --output-on-failure`
 - Evidence/result:
   - Calibration config loader, applier, backup-safe YAML writer, and deterministic unit tests implemented.
-  - Offline estimator (`calibration_estimator`) estimates DC, relative gain (reference-normalized), GCC-PHAT fractional delay, and polarity (or UNRESOLVED); writes v2 YAML + quality report.
+  - Offline estimator (`calibration_estimator`) estimates DC, relative gain (reference-normalized), normalized time-domain correlation lag, and polarity (or UNRESOLVED); writes v2 YAML + quality report. This is a channel diagnostic, not the measured-RTF spatial compiler.
   - Synthetic acceptance tests cover unity, known gain/delay/polarity injection, and strengthened validation.
   - Hardware sweep/impulse capture validation pending Pi execution.
 

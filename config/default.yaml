@@ -49,6 +49,17 @@ suppression:
     hop_size: 32
     gain_floor_db: -12.0
 
+spatial:
+  backend: adaptive_geometric
+  # fixed_measured is an unqualified development option. It requires a compiled
+  # SMV3 profile and binaural.enabled: false so the HRTF renderer is not applied
+  # on top of the selective-binaural output.
+  profile_path: ""
+  mask_enabled: true
+  eta_low_db: -3.0
+  eta_high_db: 3.0
+  mask_smooth_sec: 0.020
+
 state_machine:
   activation_hold_ms: 400
   confirmation_hold_ms: 250

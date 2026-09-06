@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 project(
   sonitude
@@ -43,6 +43,8 @@ add_library(
   src/control/zones.cpp
   src/dsp/beamformer.cpp
   src/dsp/steering_lut.cpp
+  src/dsp/array_profile.cpp
+  src/dsp/fixed_binaural_mvdr.cpp
   src/dsp/binaural_renderer.cpp
   src/dsp/calibration_applier.cpp
   src/dsp/hrtf_table.cpp
@@ -275,10 +277,18 @@ target_link_libraries(
     sonitude_core
 )
 
+add_executable(
+  sonitude_mvdr_bench
+  src/tools/mvdr_bench.cpp
+)
+target_link_libraries(
+  sonitude_mvdr_bench
+  PRIVATE
+    sonitude_core
+)
+
 if(SONITUDE_BUILD_TESTS)
   enable_testing()
-
-  target_compile_definitions(sonitude_core PRIVATE SONITUDE_BEAMFORMER_TEST_HOOKS=1)
 
   add_executable(
     sonitude_unit_tests
@@ -289,6 +299,8 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/calibration_tests.cpp
     tests/unit/steering_lut_tests.cpp
     tests/unit/beamformer_tests.cpp
+    tests/unit/array_profile_tests.cpp
+    tests/unit/fixed_mvdr_tests.cpp
     tests/unit/limiter_tests.cpp
     tests/unit/stereo_limiter_tests.cpp
     tests/unit/snapshot_tests.cpp
@@ -318,16 +330,34 @@ if(SONITUDE_BUILD_TESTS)
     sonitude_unit_tests
     PRIVATE
       SONITUDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-      SONITUDE_BEAMFORMER_TEST_HOOKS=1
   )
 
   add_test(
     NAME sonitude_unit_tests
     COMMAND sonitude_unit_tests
   )
+endif()
 
-  if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
-    target_compile_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined)
-  endif()
+if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
+  set(_sonitude_sanitizer_targets
+      sonitude_core
+      sonitude_realtime
+      sonitude_device_probe
+      sonitude_wav_replay
+      sonitude_stream_process
+      sonitude_binaural_bench
+      sonitude_mvdr_bench
+      sonitude_calibration_capture
+      sonitude_calibration_estimate
+      sonitude_unit_tests
+      sonitude_audio_alsa
+      sonitude_capture_check
+      sonitude_playback_check
+  )
+  foreach(_tgt IN LISTS _sonitude_sanitizer_targets)
+    if(TARGET ${_tgt})
+      target_compile_options(${_tgt} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+      target_link_options(${_tgt} PRIVATE -fsanitize=address,undefined)
+    endif()
+  endforeach()
 endif()

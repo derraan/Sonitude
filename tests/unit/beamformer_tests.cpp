@@ -591,6 +591,55 @@ void TestSteeringTransitionStateMachine()
           "elevation changes must update the pending steering target");
   Require(bf.crossfadingForTest(), "elevation retarget must keep the crossfade active");
 }
+
+void TestResetRestoresCovarianceFloor()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 2048;
+  const auto geometry = BuildGeometry();
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::MvdrBeamformer fresh;
+  fresh.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  std::vector<float> a(kFrames, 0.0F);
+  fresh.process(mic, a);
+
+  sonitude::dsp::MvdrBeamformer warmed;
+  warmed.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  std::vector<float> discard(kFrames, 0.0F);
+  warmed.process(mic, discard);
+  warmed.resetStream();
+  std::vector<float> b(kFrames, 0.0F);
+  warmed.process(mic, b);
+  double err = 0.0;
+  for (std::size_t i = 256; i < kFrames; ++i)
+  {
+    err += static_cast<double>(a[i] - b[i]) * static_cast<double>(a[i] - b[i]);
+  }
+  err = std::sqrt(err / static_cast<double>(kFrames - 256));
+  Require(err < 1.0e-5, "reset must restore covariance floor and match a fresh configure");
+}
+
+void TestSingleFactorizationPerBin()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 1024;
+  const auto geometry = BuildGeometry();
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 900.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 15.0F, 0.0F, 343.0F);
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  bf.resetCovarianceDiagnosticsForTest();
+  std::vector<float> out(kFrames, 0.0F);
+  bf.process(mic, out);
+  const std::uint64_t hops = bf.covarianceUpdateHopsForTest();
+  Require(hops > 0, "processing must update covariance");
+  Require(bf.factorizationCountForTest() == hops * 63U,
+          "adaptive path must factor once per interior bin per hop");
+}
 }  // namespace
 
 void RunBeamformerTests()
@@ -608,4 +657,6 @@ void RunBeamformerTests()
   TestNearFieldElevationSteering();
   TestKemarLutFlagDoesNotAffectArraySteering();
   TestSteeringTransitionStateMachine();
+  TestResetRestoresCovarianceFloor();
+  TestSingleFactorizationPerBin();
 }

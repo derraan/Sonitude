@@ -29,24 +29,24 @@ double GuardedDistance(const double distance_m)
 }
 }  // namespace
 
-void KemarSteeringLut::configure(const app::GeometryConfig& geometry,
-                                 const app::SteeringConfig& steering,
-                                 const std::uint32_t sample_rate_hz)
+void GeometricSteeringLut::configure(const app::GeometryConfig& geometry,
+                                     const app::SteeringConfig& steering,
+                                     const std::uint32_t sample_rate_hz)
 {
   sample_rate_hz_ = sample_rate_hz;
   speed_of_sound_mps_ = steering.speed_of_sound_mps;
   source_distance_m_ = steering.source_distance_m;
   if (geometry.microphones.size() != audio::kMicChannels)
   {
-    throw std::runtime_error("KemarSteeringLut requires six microphones");
+    throw std::runtime_error("GeometricSteeringLut requires six microphones");
   }
   if (steering.reference_mic_index >= audio::kMicChannels)
   {
-    throw std::runtime_error("KemarSteeringLut reference_mic_index out of range");
+    throw std::runtime_error("GeometricSteeringLut reference_mic_index out of range");
   }
   if (source_distance_m_ <= 0.0F)
   {
-    throw std::runtime_error("KemarSteeringLut source_distance_m must be positive");
+    throw std::runtime_error("GeometricSteeringLut source_distance_m must be positive");
   }
   for (std::size_t i = 0; i < audio::kMicChannels; ++i)
   {
@@ -55,7 +55,7 @@ void KemarSteeringLut::configure(const app::GeometryConfig& geometry,
   }
 }
 
-KemarSteeringLut::DelayArray KemarSteeringLut::computeNearFieldDelays(
+GeometricSteeringLut::DelayArray GeometricSteeringLut::computeNearFieldDelays(
     const audio::BeamformerSteering target,
     const std::size_t reference_mic_index) const
 {
@@ -78,7 +78,7 @@ KemarSteeringLut::DelayArray KemarSteeringLut::computeNearFieldDelays(
   return out;
 }
 
-KemarSteeringLut::AmplitudeArray KemarSteeringLut::computeNearFieldAmplitudes(
+GeometricSteeringLut::AmplitudeArray GeometricSteeringLut::computeNearFieldAmplitudes(
     const audio::BeamformerSteering target,
     const std::size_t reference_mic_index) const
 {
