@@ -84,6 +84,34 @@ For deterministic software validation:
   --geometry config/geometry_soundbubble_initial.yaml --report build/calibration_report_synth.txt
 ```
 
+## Physical IR compiler (SMV3)
+
+`tools/calibration/compile_array.py` supports measured IR import via a JSON/YAML
+manifest and emits an SMV3 profile (`.bin`, `.npz`, `.csv`, `.report.json`)
+for `spatial.backend: fixed_measured`.
+
+- This tool assumes synchronized per-direction IR exports are already prepared.
+- It does not run REW/Audacity capture steps.
+- Supported layouts:
+  - one 6-channel WAV/FLAC per direction (`layout: multichannel`)
+  - six mono WAV/FLAC files per direction (`layout: per_mic`)
+  - mixed layouts by overriding `layout` per direction
+
+Example:
+
+```bash
+python tools/calibration/compile_array.py \
+  --manifest config/array_ir_manifest.example.yaml \
+  --output-prefix build/array_profile_measured
+```
+
+Notes:
+
+- Optional `calibration_yaml` import applies `gain_linear` and `polarity` only.
+- `delay_samples` is ignored because synchronized IR phase already encodes delay.
+- Sample-rate mismatch and channel-count mismatch are hard errors (no resampling).
+- Producing a measured SMV3 artifact does not satisfy the M3 hardware-evidence gate by itself.
+
 ### Hardware capture checklist (not yet executed)
 
 | Step | Purpose |

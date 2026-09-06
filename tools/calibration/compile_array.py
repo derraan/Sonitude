@@ -9,17 +9,27 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import struct
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+import soundfile as sf
 
 MAGIC = b"SMV3"
 HEADER_SIZE = 128
 FNV_OFFSET = 14695981039346656037
 FNV_PRIME = 1099511628211
 MICS = 6
+DEFAULT_GEOMETRY_ID = "soundbubble_vertical_v1"
+DEFAULT_FFT_SIZE = 128
+DEFAULT_HOP_SIZE = 32
+DEFAULT_REFERENCE_MIC = 2
+DEFAULT_LEFT_EAR_MIC = 0
+DEFAULT_RIGHT_EAR_MIC = 5
+MIC_ID_RE = re.compile(r"^M([0-5])(?:_|$)")
 
 
 def fnv1a64(data: bytes) -> int:
@@ -34,7 +44,7 @@ def dtft(h: np.ndarray, n_fft: int, n_bins: int) -> np.ndarray:
     n = np.arange(h.shape[0], dtype=np.float64)
     k = np.arange(n_bins, dtype=np.float64)
     phase = -2.0 * np.pi * np.outer(k, n) / float(n_fft)
-    return (np.exp(1j * phase) @ h.astype(np.complex128))
+    return np.exp(1j * phase) @ h.astype(np.complex128)
 
 
 def regularized_rtf(h: np.ndarray, ref: int, eps: float) -> tuple[np.ndarray, np.ndarray]:
@@ -102,6 +112,247 @@ def pack_profile(profile: dict) -> bytes:
     return bytes(header) + payload
 
 
+def _load_yaml(path: Path) -> Any:
+    try:
+        import yaml  # type: ignore
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError(
+            f"YAML file {path} requires PyYAML; use JSON or install PyYAML."
+        ) from exc
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _load_mapping(path: Path) -> dict[str, Any]:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    elif suffix in {".yaml", ".yml"}:
+        raw = _load_yaml(path)
+    else:
+        raise ValueError(f"Unsupported manifest format for {path}; use .json/.yaml/.yml")
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} must contain a top-level object")
+    return raw
+
+
+def _as_int(mapping: dict[str, Any], key: str, *, minimum: int | None = None) -> int:
+    value = mapping.get(key)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError(f"Manifest field '{key}' must be numeric")
+    out = int(value)
+    if float(out) != float(value):
+        raise ValueError(f"Manifest field '{key}' must be an integer")
+    if minimum is not None and out < minimum:
+        raise ValueError(f"Manifest field '{key}' must be >= {minimum}")
+    return out
+
+
+def _as_float(mapping: dict[str, Any], key: str, *, minimum: float | None = None) -> float:
+    value = mapping.get(key)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError(f"Manifest field '{key}' must be numeric")
+    out = float(value)
+    if not math.isfinite(out):
+        raise ValueError(f"Manifest field '{key}' must be finite")
+    if minimum is not None and out < minimum:
+        raise ValueError(f"Manifest field '{key}' must be >= {minimum}")
+    return out
+
+
+def _parse_vec6(value: Any, key: str) -> np.ndarray:
+    if value is None:
+        return np.ones(MICS, dtype=np.float64)
+    if not isinstance(value, list) or len(value) != MICS:
+        raise ValueError(f"Manifest field '{key}' must be a list of length 6")
+    vec = np.asarray(value, dtype=np.float64)
+    if not np.all(np.isfinite(vec)):
+        raise ValueError(f"Manifest field '{key}' must contain finite values")
+    return vec
+
+
+def load_manifest(path: str | Path) -> dict[str, Any]:
+    manifest_path = Path(path)
+    raw = _load_mapping(manifest_path)
+    schema_version = _as_int(raw, "schema_version", minimum=1)
+    if schema_version != 1:
+        raise ValueError(f"Unsupported manifest schema_version: {schema_version}")
+    layout = str(raw.get("layout", "")).strip()
+    if layout not in {"multichannel", "per_mic"}:
+        raise ValueError("Manifest field 'layout' must be 'multichannel' or 'per_mic'")
+    directions = raw.get("directions")
+    if not isinstance(directions, list) or not directions:
+        raise ValueError("Manifest field 'directions' must be a non-empty list")
+
+    manifest: dict[str, Any] = {
+        "schema_version": schema_version,
+        "layout": layout,
+        "sample_rate_hz": _as_int(raw, "sample_rate_hz", minimum=1),
+        "geometry_id": str(raw.get("geometry_id", DEFAULT_GEOMETRY_ID)),
+        "fft_size": int(raw.get("fft_size", DEFAULT_FFT_SIZE)),
+        "hop_size": int(raw.get("hop_size", DEFAULT_HOP_SIZE)),
+        "reference_mic": int(raw.get("reference_mic", DEFAULT_REFERENCE_MIC)),
+        "left_ear_mic": int(raw.get("left_ear_mic", DEFAULT_LEFT_EAR_MIC)),
+        "right_ear_mic": int(raw.get("right_ear_mic", DEFAULT_RIGHT_EAR_MIC)),
+        "self_noise": float(raw.get("self_noise", 1e-3)),
+        "max_weight_norm": float(raw.get("max_weight_norm", 4.0)),
+        "calibration_yaml": raw.get("calibration_yaml"),
+        "gains": raw.get("gains"),
+        "polarity": raw.get("polarity"),
+        "directions": directions,
+    }
+    for key in ("reference_mic", "left_ear_mic", "right_ear_mic"):
+        idx = int(manifest[key])
+        if idx < 0 or idx >= MICS:
+            raise ValueError(f"Manifest field '{key}' must be in [0,5]")
+    if manifest["fft_size"] <= 0 or manifest["hop_size"] <= 0:
+        raise ValueError("fft_size and hop_size must be positive")
+    if manifest["self_noise"] < 0.0 or manifest["max_weight_norm"] <= 0.0:
+        raise ValueError("self_noise must be >= 0 and max_weight_norm must be > 0")
+    return manifest
+
+
+def _resolve_path(base_dir: Path, raw: str) -> Path:
+    path = Path(raw)
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    return path
+
+
+def _load_audio(path: Path) -> tuple[np.ndarray, int]:
+    data, sr = sf.read(str(path), dtype="float64", always_2d=True)
+    if data.shape[0] == 0:
+        raise ValueError(f"IR file is empty: {path}")
+    return np.asarray(data, dtype=np.float64), int(sr)
+
+
+def _parse_direction_sources(manifest: dict[str, Any], base_dir: Path) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    seen_az: set[float] = set()
+    missing: list[Path] = []
+    default_layout = manifest["layout"]
+    for i, item in enumerate(manifest["directions"]):
+        if not isinstance(item, dict):
+            raise ValueError(f"directions[{i}] must be an object")
+        if "azimuth_deg" not in item:
+            raise ValueError(f"directions[{i}] missing azimuth_deg")
+        az = float(item["azimuth_deg"])
+        if not math.isfinite(az):
+            raise ValueError(f"directions[{i}].azimuth_deg must be finite")
+        if az in seen_az:
+            raise ValueError(f"Duplicate azimuth_deg in manifest: {az}")
+        seen_az.add(az)
+
+        layout = str(item.get("layout", default_layout))
+        if layout not in {"multichannel", "per_mic"}:
+            raise ValueError(f"directions[{i}].layout must be 'multichannel' or 'per_mic'")
+        if layout == "multichannel":
+            if "path" not in item:
+                raise ValueError(f"directions[{i}] missing path for multichannel layout")
+            p = _resolve_path(base_dir, str(item["path"]))
+            if not p.exists():
+                missing.append(p)
+            sources.append({"azimuth_deg": az, "layout": layout, "paths": [p]})
+        else:
+            channels = item.get("channels")
+            if not isinstance(channels, list) or len(channels) != MICS:
+                raise ValueError(f"directions[{i}].channels must be a list of 6 paths")
+            resolved = [_resolve_path(base_dir, str(c)) for c in channels]
+            for p in resolved:
+                if not p.exists():
+                    missing.append(p)
+            sources.append({"azimuth_deg": az, "layout": layout, "paths": resolved})
+
+    if missing:
+        listed = "\n".join(sorted(str(p) for p in missing))
+        raise ValueError(f"Manifest references missing files:\n{listed}")
+    return sources
+
+
+def load_ir_cube(manifest: dict[str, Any], base_dir: str | Path) -> tuple[np.ndarray, list[float], int]:
+    src = _parse_direction_sources(manifest, Path(base_dir))
+    expected_sr = int(manifest["sample_rate_hz"])
+    direction_waves: list[np.ndarray] = []
+    azimuths: list[float] = []
+    max_len = 0
+    for item in src:
+        if item["layout"] == "multichannel":
+            wav, sr = _load_audio(item["paths"][0])
+            if sr != expected_sr:
+                raise ValueError(f"Sample-rate mismatch for {item['paths'][0]}: {sr} != {expected_sr}")
+            if wav.shape[1] != MICS:
+                raise ValueError(f"{item['paths'][0]} must have exactly 6 channels")
+            per_dir = wav.T
+        else:
+            chans: list[np.ndarray] = []
+            for p in item["paths"]:
+                wav, sr = _load_audio(p)
+                if sr != expected_sr:
+                    raise ValueError(f"Sample-rate mismatch for {p}: {sr} != {expected_sr}")
+                if wav.shape[1] != 1:
+                    raise ValueError(f"{p} must be mono for per_mic layout")
+                chans.append(wav[:, 0])
+            per_dir = np.stack(chans, axis=0)
+        max_len = max(max_len, int(per_dir.shape[1]))
+        direction_waves.append(per_dir)
+        azimuths.append(float(item["azimuth_deg"]))
+
+    irs = np.zeros((len(direction_waves), MICS, max_len), dtype=np.float64)
+    for di, arr in enumerate(direction_waves):
+        irs[di, :, : arr.shape[1]] = arr
+    return irs, azimuths, expected_sr
+
+
+def _m3_channel_index(ch: dict[str, Any], fallback_index: int) -> int:
+    raw_id = ch.get("id")
+    if isinstance(raw_id, str):
+        match = MIC_ID_RE.match(raw_id)
+        if match:
+            return int(match.group(1))
+    return fallback_index
+
+
+def _load_m3_conditioner(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    raw = _load_mapping(path)
+    channels = raw.get("channels")
+    if not isinstance(channels, list):
+        raise ValueError(f"{path} missing channels list")
+    gains = np.ones(MICS, dtype=np.float64)
+    polarity = np.ones(MICS, dtype=np.float64)
+    seen: set[int] = set()
+    for i, ch_any in enumerate(channels):
+        if not isinstance(ch_any, dict):
+            continue
+        idx = _m3_channel_index(ch_any, i)
+        if idx < 0 or idx >= MICS or idx in seen:
+            continue
+        seen.add(idx)
+        if "gain_linear" in ch_any:
+            gains[idx] = float(ch_any["gain_linear"])
+        if "polarity" in ch_any:
+            polarity[idx] = float(ch_any["polarity"])
+    if len(seen) != MICS:
+        raise ValueError(f"{path} must define 6 unique channels for gain/polarity import")
+    if not np.all(np.isfinite(gains)) or not np.all(np.isfinite(polarity)):
+        raise ValueError(f"{path} contains non-finite gain/polarity values")
+    return gains, polarity
+
+
+def load_conditioner(manifest: dict[str, Any], base_dir: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    gains = np.ones(MICS, dtype=np.float64)
+    polarity = np.ones(MICS, dtype=np.float64)
+    calib = manifest.get("calibration_yaml")
+    if isinstance(calib, str) and calib.strip():
+        gains, polarity = _load_m3_conditioner(_resolve_path(Path(base_dir), calib))
+
+    g_override = manifest.get("gains")
+    if g_override is not None:
+        gains = _parse_vec6(g_override, "gains")
+    p_override = manifest.get("polarity")
+    if p_override is not None:
+        polarity = _parse_vec6(p_override, "polarity")
+    return gains, polarity
+
+
 def compile_from_irs(
     irs: np.ndarray,
     azimuths: list[float],
@@ -118,7 +369,7 @@ def compile_from_irs(
 ) -> dict:
     if irs.ndim != 3 or irs.shape[1] != MICS:
         raise ValueError("irs must be [dir, 6, time]")
-    n_dir, _, n_time = irs.shape
+    n_dir, _, _ = irs.shape
     n_bins = (fft_size // 2) + 1
     gains = np.ones(MICS) if gains is None else np.asarray(gains, dtype=np.float64)
     polarity = np.ones(MICS) if polarity is None else np.asarray(polarity, dtype=np.float64)
@@ -211,7 +462,7 @@ def write_outputs(profile: dict, out_prefix: Path) -> None:
                 )
     (out_prefix.with_suffix(".csv")).write_text("\n".join(rows) + "\n", encoding="utf-8")
     report = {
-        "synthetic": True,
+        "synthetic": bool(profile.get("synthetic", True)),
         "directions": int(profile["direction_count"]),
         "bins": int(profile["bin_count"]),
         "bytes": len(blob),
@@ -222,6 +473,7 @@ def write_outputs(profile: dict, out_prefix: Path) -> None:
 
 
 def make_synthetic_impulse_cube(sample_rate_hz: int, delays: list[list[float]]) -> np.ndarray:
+    _ = sample_rate_hz
     n = 512
     cube = np.zeros((len(delays), MICS, n), dtype=np.float64)
     t = np.arange(n)
@@ -231,15 +483,7 @@ def make_synthetic_impulse_cube(sample_rate_hz: int, delays: list[list[float]]) 
     return cube
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Sonitude array calibration compiler")
-    parser.add_argument("--synthetic", action="store_true", help="emit a labeled synthetic fixture")
-    parser.add_argument("--output-prefix", required=True)
-    parser.add_argument("--sample-rate", type=int, default=44100)
-    args = parser.parse_args(argv)
-    if not args.synthetic:
-        print("Physical IR import requires a manifest; use --synthetic for CI fixtures.", file=sys.stderr)
-        return 2
+def _compile_synthetic(args: argparse.Namespace) -> None:
     delays = [
         [0.0, 0.4, 0.8, 1.2, 1.6, 2.0],
         [0.5, 0.0, 0.4, 0.9, 1.3, 1.8],
@@ -248,6 +492,46 @@ def main(argv: list[str] | None = None) -> int:
     profile = compile_from_irs(irs, [0.0, 10.0], args.sample_rate)
     write_outputs(profile, Path(args.output_prefix))
     print(f"wrote synthetic profile prefix {args.output_prefix}")
+
+
+def _compile_manifest(args: argparse.Namespace) -> None:
+    manifest_path = Path(args.manifest).resolve()
+    manifest = load_manifest(manifest_path)
+    irs, azimuths, sample_rate_hz = load_ir_cube(manifest, manifest_path.parent)
+    gains, polarity = load_conditioner(manifest, manifest_path.parent)
+    profile = compile_from_irs(
+        irs,
+        azimuths,
+        sample_rate_hz,
+        fft_size=int(manifest["fft_size"]),
+        hop_size=int(manifest["hop_size"]),
+        reference_mic=int(manifest["reference_mic"]),
+        left_ear=int(manifest["left_ear_mic"]),
+        right_ear=int(manifest["right_ear_mic"]),
+        gains=gains,
+        polarity=polarity,
+        max_weight_norm=float(manifest["max_weight_norm"]),
+        self_noise=float(manifest["self_noise"]),
+    )
+    profile["synthetic"] = False
+    profile["geometry_id"] = str(manifest["geometry_id"])
+    write_outputs(profile, Path(args.output_prefix))
+    print(f"wrote physical profile prefix {args.output_prefix}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Sonitude array calibration compiler")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--synthetic", action="store_true", help="emit a labeled synthetic fixture")
+    mode.add_argument("--manifest", type=str, help="path to physical IR import manifest")
+    parser.add_argument("--output-prefix", required=True)
+    parser.add_argument("--sample-rate", type=int, default=44100)
+    args = parser.parse_args(argv)
+
+    if args.synthetic:
+        _compile_synthetic(args)
+    else:
+        _compile_manifest(args)
     return 0
 
 
