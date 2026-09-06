@@ -137,6 +137,16 @@ std::size_t AlsaPcmDevice::playbackQueuedFrames() const
   return static_cast<std::size_t>(queued);
 }
 
+void AlsaPcmDevice::dropStream() const
+{
+#if defined(__linux__)
+  if (pcm_ != nullptr)
+  {
+    (void)snd_pcm_drop(static_cast<snd_pcm_t*>(pcm_));
+  }
+#endif
+}
+
 void AlsaPcmDevice::configure(const app::DeviceConfig& config, const bool is_capture)
 {
 #if defined(__linux__)

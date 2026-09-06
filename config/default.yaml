@@ -71,15 +71,19 @@ zones:
   front_auto_focus:
     azimuth_min_deg: -45.0
     azimuth_max_deg: 45.0
+    policy: "focus"
   right_assist:
     azimuth_min_deg: 45.0
     azimuth_max_deg: 100.0
+    policy: "assist"
   left_assist:
     azimuth_min_deg: -100.0
     azimuth_max_deg: -45.0
+    policy: "assist"
   rear_ambient:
     azimuth_min_deg: 100.0
     azimuth_max_deg: 260.0
+    policy: "ambient"
 
 odas:
   enabled: false
@@ -91,6 +95,11 @@ telemetry:
   emit_csv: false
   emit_json: false
   stats_period_ms: 1000
+
+realtime:
+  capture_priority: 80
+  playback_priority: 78
+  enable_mlockall: true
 
 binaural:
   enabled: true

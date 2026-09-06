@@ -27,7 +27,6 @@ steering:
   ambient_floor_linear: 0.2
 suppression:
   enabled: false
-  backend: not_a_backend
   fade_ms: 120.0
   activity_threshold: 0.03
   confidence_threshold: 0.6
@@ -41,10 +40,11 @@ zones:
   front_auto_focus:
     azimuth_min_deg: -45.0
     azimuth_max_deg: 45.0
+    policy: "focus"
 odas:
   enabled: false
-  use_mock_provider: true
-  endpoint: "mock://odas"
+  use_mock_provider: false
+  endpoint: "tcp://127.0.0.1:9000"
 telemetry:
   log_human_readable: true
   emit_csv: false
@@ -53,4 +53,4 @@ telemetry:
 realtime:
   capture_priority: 80
   playback_priority: 78
-  enable_mlockall: true
+  enable_mlockall: false

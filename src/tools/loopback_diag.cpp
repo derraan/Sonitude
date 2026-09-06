@@ -36,14 +36,6 @@ int main(int argc, char** argv)
     pb.openPlayback(config.playback);
     const auto cap_params = cap.negotiated();
     const auto pb_params = pb.negotiated();
-    sonitude::app::ValidateRuntimeAudioContract(
-        config,
-        {.capture_sample_rate_hz = cap_params.sample_rate_hz,
-         .playback_sample_rate_hz = pb_params.sample_rate_hz,
-         .capture_channels = cap_params.channels,
-         .playback_buffer_frames = pb_params.buffer_frames,
-         .software_queue_frames = 0,
-         .minimum_asrc_headroom_frames = cap_params.period_frames});
 
     sonitude::rt::TelemetryCounters counters;
     sonitude::audio::alsa::CaptureWorker cap_worker(&cap, &config, &counters);
@@ -59,7 +51,29 @@ int main(int argc, char** argv)
     const bool asrc_enabled =
         config.asrc.enabled && !config.asrc.allow_bypass_for_locked_bench;
     sonitude::audio::alsa::PlaybackWorker pb_worker(
-        &pb, resampler.get(), &ctl, &counters, asrc_enabled);
+        &pb,
+        resampler.get(),
+        &ctl,
+        &counters,
+        asrc_enabled,
+        cap_params.period_frames,
+        config.asrc.max_ratio);
+    const std::size_t required_scratch_frames =
+        sonitude::audio::alsa::PlaybackWorker::CalculateRequiredScratchFrames(
+            cap_params.period_frames, pb_params.period_frames, config.asrc.max_ratio);
+    sonitude::app::ValidateRuntimeAudioContract(
+        config,
+        {.capture_sample_rate_hz = cap_params.sample_rate_hz,
+         .playback_sample_rate_hz = pb_params.sample_rate_hz,
+         .capture_channels = cap_params.channels,
+         .playback_buffer_frames = pb_params.buffer_frames,
+         .software_queue_frames = 0,
+         .minimum_asrc_headroom_frames = cap_params.period_frames,
+         .capture_period_frames = cap_params.period_frames,
+         .playback_period_frames = pb_params.period_frames,
+         .asrc_max_ratio = config.asrc.max_ratio,
+         .required_playback_scratch_frames = required_scratch_frames,
+         .negotiated_playback_scratch_frames = pb_worker.scratchCapacityFrames()});
 
     const std::size_t period_frames = cap_worker.periodFrames();
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);

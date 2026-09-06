@@ -148,7 +148,7 @@ std::vector<SourceObservation> OdasMessageParser::parseOneObject(const std::stri
         extractNumber(src_obj, "y", y) && extractNumber(src_obj, "z", z) &&
         extractNumber(src_obj, "activity", activity))
     {
-      const double az = std::atan2(x, y) * (180.0 / kPi);
+      const double az = std::atan2(y, x) * (180.0 / kPi);
       const double xy = std::sqrt((x * x) + (y * y));
       const double el = std::atan2(z, xy) * (180.0 / kPi);
       obs.source_id = id;
@@ -165,7 +165,29 @@ std::vector<SourceObservation> OdasMessageParser::parseOneObject(const std::stri
 
 std::vector<SourceObservation> OdasMessageParser::feed(const std::string_view bytes)
 {
+  const std::size_t max_buffer_bytes = std::max<std::size_t>(1, max_buffer_bytes_);
   buffer_.append(bytes.data(), bytes.size());
+  if (buffer_.size() > max_buffer_bytes)
+  {
+    const auto last_open = buffer_.rfind('{');
+    if (last_open == std::string::npos)
+    {
+      buffer_.clear();
+    }
+    else
+    {
+      const std::size_t bytes_from_last_open = buffer_.size() - last_open;
+      if (bytes_from_last_open <= max_buffer_bytes)
+      {
+        buffer_.erase(0, last_open);
+      }
+      else
+      {
+        buffer_.erase(0, buffer_.size() - max_buffer_bytes);
+      }
+    }
+    ++overflow_resync_count_;
+  }
   std::vector<SourceObservation> out;
 
   std::size_t start = 0;
@@ -183,6 +205,13 @@ std::vector<SourceObservation> OdasMessageParser::feed(const std::string_view by
       if (open > 0)
       {
         buffer_.erase(0, open);
+      }
+      else if (buffer_.size() >= max_buffer_bytes)
+      {
+        // The buffer is full and still starts with an unmatched '{', so drop one byte to
+        // guarantee forward progress on pathological streams.
+        buffer_.erase(0, 1);
+        ++overflow_resync_count_;
       }
       break;
     }

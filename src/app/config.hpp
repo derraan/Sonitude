@@ -7,11 +7,19 @@
 
 namespace sonitude::app
 {
+enum class ZonePolicy : std::uint8_t
+{
+  Focus = 0,
+  Assist = 1,
+  Ambient = 2
+};
+
 struct ZoneConfig
 {
   std::string name;
   float azimuth_min_deg = 0.0F;
   float azimuth_max_deg = 0.0F;
+  ZonePolicy policy = ZonePolicy::Focus;
 };
 
 struct DeviceConfig
@@ -151,6 +159,13 @@ struct BinauralConfig
   BinauralModelConfig model;
 };
 
+struct RealtimeConfig
+{
+  std::int32_t capture_priority = 80;
+  std::int32_t playback_priority = 78;
+  bool enable_mlockall = true;
+};
+
 struct RuntimeConfig
 {
   DeviceConfig capture;
@@ -167,6 +182,7 @@ struct RuntimeConfig
   OdasConfig odas;
   TelemetryConfig telemetry;
   BinauralConfig binaural;
+  RealtimeConfig realtime;
   std::vector<ZoneConfig> zones;
 };
 
@@ -178,6 +194,11 @@ struct RuntimeAudioContract
   std::size_t playback_buffer_frames = 0;
   std::size_t software_queue_frames = 0;
   std::size_t minimum_asrc_headroom_frames = 0;
+  std::size_t capture_period_frames = 0;
+  std::size_t playback_period_frames = 0;
+  double asrc_max_ratio = 0.0;
+  std::size_t required_playback_scratch_frames = 0;
+  std::size_t negotiated_playback_scratch_frames = 0;
 };
 
 RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path);

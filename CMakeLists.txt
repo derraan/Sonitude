@@ -297,6 +297,7 @@ if(SONITUDE_BUILD_TESTS)
     tests/support/alloc_counter.cpp
     tests/unit/odas_parser_tests.cpp
     tests/unit/control_loop_tests.cpp
+    tests/unit/source_tracker_tests.cpp
     tests/unit/zone_tests.cpp
     tests/unit/state_machine_tests.cpp
   )
