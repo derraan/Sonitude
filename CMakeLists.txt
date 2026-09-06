@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 project(
   sonitude
@@ -34,6 +34,7 @@ add_library(
   sonitude_core
   src/app/config.cpp
   src/app/calibration_config.cpp
+  src/app/calibration_estimator.cpp
   src/app/calibration_writer.cpp
   src/app/logging.cpp
   src/audio/wav_io.cpp
@@ -41,6 +42,9 @@ add_library(
   src/control/conversation_state_machine.cpp
   src/control/zones.cpp
   src/dsp/beamformer.cpp
+  src/dsp/steering_lut.cpp
+  src/dsp/array_profile.cpp
+  src/dsp/fixed_binaural_mvdr.cpp
   src/dsp/binaural_renderer.cpp
   src/dsp/calibration_applier.cpp
   src/dsp/hrtf_table.cpp
@@ -130,45 +134,31 @@ else()
   )
 endif()
 
-add_executable(
-  sonitude_realtime
-  src/main.cpp
-)
-
-target_link_libraries(
-  sonitude_realtime
-  PRIVATE
-    sonitude_core
-)
 if(SONITUDE_WITH_ALSA)
+  add_executable(
+    sonitude_realtime
+    src/main.cpp
+  )
   target_link_libraries(
     sonitude_realtime
     PRIVATE
-      sonitude_audio_alsa
-  )
-endif()
-
-target_compile_definitions(
-  sonitude_realtime
-  PRIVATE
-    SONITUDE_VERSION="${PROJECT_VERSION}"
-)
-
-add_executable(
-  sonitude_device_probe
-  src/tools/device_probe.cpp
-)
-if(SONITUDE_WITH_ALSA)
-  target_link_libraries(
-    sonitude_device_probe
-    PRIVATE
-      sonitude_audio_alsa
       sonitude_core
+      sonitude_audio_alsa
   )
-else()
+  target_compile_definitions(
+    sonitude_realtime
+    PRIVATE
+      SONITUDE_VERSION="${PROJECT_VERSION}"
+  )
+
+  add_executable(
+    sonitude_device_probe
+    src/tools/device_probe.cpp
+  )
   target_link_libraries(
     sonitude_device_probe
     PRIVATE
+      sonitude_audio_alsa
       sonitude_core
   )
 endif()
@@ -273,6 +263,16 @@ target_link_libraries(
     sonitude_core
 )
 
+add_executable(
+  sonitude_mvdr_bench
+  src/tools/mvdr_bench.cpp
+)
+target_link_libraries(
+  sonitude_mvdr_bench
+  PRIVATE
+    sonitude_core
+)
+
 if(SONITUDE_BUILD_TESTS)
   enable_testing()
 
@@ -283,7 +283,10 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/rt_tests.cpp
     tests/unit/asrc_sim_tests.cpp
     tests/unit/calibration_tests.cpp
+    tests/unit/steering_lut_tests.cpp
     tests/unit/beamformer_tests.cpp
+    tests/unit/array_profile_tests.cpp
+    tests/unit/fixed_mvdr_tests.cpp
     tests/unit/limiter_tests.cpp
     tests/unit/stereo_limiter_tests.cpp
     tests/unit/snapshot_tests.cpp
@@ -319,9 +322,15 @@ if(SONITUDE_BUILD_TESTS)
     NAME sonitude_unit_tests
     COMMAND sonitude_unit_tests
   )
+endif()
 
-  if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
-    target_compile_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options(sonitude_unit_tests PRIVATE -fsanitize=address,undefined)
-  endif()
+if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
+  get_property(_sonitude_sanitizer_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(_tgt IN LISTS _sonitude_sanitizer_targets)
+    get_target_property(_type ${_tgt} TYPE)
+    if(_type STREQUAL "EXECUTABLE" OR _type STREQUAL "STATIC_LIBRARY" OR _type STREQUAL "SHARED_LIBRARY")
+      target_compile_options(${_tgt} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+      target_link_options(${_tgt} PRIVATE -fsanitize=address,undefined)
+    endif()
+  endforeach()
 endif()

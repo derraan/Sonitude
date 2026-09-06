@@ -19,10 +19,12 @@
 #include "control/control_loop.hpp"
 #include "control/conversation_state_machine.hpp"
 #include "control/zones.hpp"
+#include "dsp/array_profile.hpp"
 #include "dsp/beamformer.hpp"
 #include "dsp/binaural_renderer.hpp"
 #include "dsp/hrtf_table.hpp"
 #include "dsp/asrc_controller.hpp"
+#include "dsp/fixed_binaural_mvdr.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/calibration_applier.hpp"
 #include "dsp/resampler.hpp"
@@ -284,8 +286,26 @@ int main(int argc, char** argv)
         &conversation);
 
     sonitude::dsp::MvdrBeamformer beamformer;
-    beamformer.configure(
-        geometry, runtime_config.steering, calibration, dsp_sample_rate_hz, 4096);
+    sonitude::dsp::FixedBinauralMvdr fixed_beamformer;
+    const bool use_fixed = runtime_config.spatial.backend == "fixed_measured";
+    if (use_fixed)
+    {
+      auto profile = sonitude::dsp::LoadArrayProfileFromFile(runtime_config.spatial.profile_path);
+      sonitude::dsp::FixedMvdrMaskParams mask;
+      mask.enabled = runtime_config.spatial.mask_enabled;
+      mask.eta_low_db = runtime_config.spatial.eta_low_db;
+      mask.eta_high_db = runtime_config.spatial.eta_high_db;
+      mask.smooth_sec = runtime_config.spatial.mask_smooth_sec;
+      fixed_beamformer.configure(profile, dsp_sample_rate_hz, 4096, mask);
+    }
+    else
+    {
+      beamformer.configure(geometry,
+                           runtime_config.steering,
+                           calibration,
+                           dsp_sample_rate_hz,
+                           4096);
+    }
     sonitude::dsp::SuppressionStage suppressor;
     const auto suppression_backend =
         sonitude::dsp::ParseSuppressionBackend(runtime_config.suppression.backend);
@@ -303,14 +323,19 @@ int main(int argc, char** argv)
                       .hop_size = runtime_config.suppression.spectral.hop_size,
                       .gain_floor_db = runtime_config.suppression.spectral.gain_floor_db,
                       .confidence_threshold = runtime_config.suppression.confidence_threshold}});
-    beamformer.setSpectralPostfilter(suppressor.spectralFilter());
+    if (!use_fixed)
+    {
+      beamformer.setSpectralPostfilter(suppressor.spectralFilter());
+    }
     sonitude::dsp::PeakLimiter limiter;
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
 
     constexpr std::size_t kPlaybackRingSlots = 16;
     const std::size_t period_frames = cap_worker.periodFrames();
 
-    const bool binaural_enabled = runtime_config.binaural.enabled;
+    const bool experimental_dual_reference_mvdr =
+        runtime_config.steering.experimental_dual_reference_mvdr;
+    const bool binaural_enabled = runtime_config.binaural.enabled && !use_fixed;
     const auto binaural_backend = ParseBinauralBackend(runtime_config.binaural.backend);
     std::unique_ptr<sonitude::dsp::HrtfTable> compact_hrtf;
     std::unique_ptr<sonitude::dsp::HrtfTable> reference_hrtf;
@@ -336,29 +361,31 @@ int main(int argc, char** argv)
            binaural_backend == sonitude::dsp::BinauralBackend::FullHrtfReference) &&
           (table == nullptr || table->empty()))
       {
-        std::cerr << "realtime: binaural backend requires HRTF table; falling back to mono L=R\n";
+        throw std::runtime_error("binaural backend requires HRTF table");
       }
-      else
-      {
-        try
-        {
-          binaural_renderer.configure({.sample_rate_hz = dsp_sample_rate_hz,
-                                       .backend = binaural_backend,
-                                       .transition_ms = runtime_config.binaural.transition.duration_ms,
-                                       .max_block_frames = period_frames,
-                                       .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
-                                                   .max_ild_db = runtime_config.binaural.model.max_ild_db},
-                                       .table = table,
-                                       .array_downmix = ArrayDownmixForGeometry(geometry)});
-          stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
-          binaural_renderer_ready = true;
-          std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
-        }
-        catch (const std::exception& ex)
-        {
-          std::cerr << "realtime: binaural configure failed: " << ex.what() << '\n';
-        }
-      }
+      binaural_renderer.configure({.sample_rate_hz = dsp_sample_rate_hz,
+                                   .backend = binaural_backend,
+                                   .transition_ms = runtime_config.binaural.transition.duration_ms,
+                                   .max_block_frames = period_frames,
+                                   .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
+                                               .max_ild_db = runtime_config.binaural.model.max_ild_db},
+                                   .table = table,
+                                   .array_downmix = ArrayDownmixForGeometry(geometry)});
+      binaural_renderer_ready = true;
+      std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
+    }
+    if (experimental_dual_reference_mvdr || use_fixed)
+    {
+      stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
+    }
+    if (experimental_dual_reference_mvdr)
+    {
+      std::cerr << "WARNING: steering.experimental_dual_reference_mvdr bypasses HRTF binaural "
+                   "renderer; dual-reference MVDR is not a complete binaural beamformer.\n";
+    }
+    if (use_fixed)
+    {
+      std::cout << "Spatial backend: fixed_measured (development, not a production-qualified profile)\n";
     }
 
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
@@ -433,7 +460,14 @@ int main(int argc, char** argv)
       std::size_t frame_count = 0;
       if (!cap_worker.readBlock(std::span<sonitude::audio::MicFrame>(mic_frames), &frame_count))
       {
-        beamformer.resetStream();
+        if (use_fixed)
+        {
+          fixed_beamformer.resetStream();
+        }
+        else
+        {
+          beamformer.resetStream();
+        }
         suppressor.reset();
         if (binaural_renderer_ready)
         {
@@ -462,7 +496,14 @@ int main(int argc, char** argv)
         if (!have_target || std::fabs(snapshot.target.azimuth_deg - last_target.azimuth_deg) > 0.01F ||
             std::fabs(snapshot.target.elevation_deg - last_target.elevation_deg) > 0.01F)
         {
-          beamformer.setTarget(snapshot.target);
+          if (use_fixed)
+          {
+            fixed_beamformer.setTarget(snapshot.target);
+          }
+          else
+          {
+            beamformer.setTarget(snapshot.target);
+          }
           last_target = snapshot.target;
           have_target = true;
         }
@@ -472,26 +513,36 @@ int main(int argc, char** argv)
         suppressor.setEstimatorHold(hold_estimator_after_xrun);
         hold_estimator_after_xrun = false;
         suppressor.setControl(focus_active, confidence);
-        beamformer.process(
-            std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
-            std::span<float>(mono.data(), frame_count));
-        suppressor.process(std::span<float>(mono.data(), frame_count));
-        limiter.process(std::span<float>(mono.data(), frame_count));
-        counters.suppressor_gain_milli.store(
-            static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),
-            std::memory_order_relaxed);
-        if (binaural_renderer_ready)
+        if (use_fixed)
         {
-          const sonitude::audio::BeamformerSteering binaural_dir =
-              runtime_config.binaural.direction.follow_steering
-                  ? snapshot.target
-                  : sonitude::audio::BeamformerSteering{
-                        runtime_config.binaural.direction.azimuth_deg,
-                        runtime_config.binaural.direction.elevation_deg};
-          binaural_renderer.setDirection(binaural_dir);
-          binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
-                                    std::span<float>(binaural_left.data(), frame_count),
-                                    std::span<float>(binaural_right.data(), frame_count));
+          fixed_beamformer.processStereo(
+              std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+              std::span<float>(binaural_left.data(), frame_count),
+              std::span<float>(binaural_right.data(), frame_count));
+          for (std::size_t i = 0; i < frame_count; ++i)
+          {
+            mono[i] = 0.5F * (binaural_left[i] + binaural_right[i]);
+          }
+          suppressor.process(std::span<float>(mono.data(), frame_count));
+          stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
+                                 std::span<float>(binaural_right.data(), frame_count));
+          for (std::size_t i = 0; i < frame_count; ++i)
+          {
+            stereo[i].left = binaural_left[i];
+            stereo[i].right = binaural_right[i];
+          }
+        }
+        else if (experimental_dual_reference_mvdr)
+        {
+          beamformer.processStereo(
+              std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+              std::span<float>(binaural_left.data(), frame_count),
+              std::span<float>(binaural_right.data(), frame_count));
+          for (std::size_t i = 0; i < frame_count; ++i)
+          {
+            mono[i] = 0.5F * (binaural_left[i] + binaural_right[i]);
+          }
+          suppressor.process(std::span<float>(mono.data(), frame_count));
           stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
                                  std::span<float>(binaural_right.data(), frame_count));
           for (std::size_t i = 0; i < frame_count; ++i)
@@ -502,12 +553,40 @@ int main(int argc, char** argv)
         }
         else
         {
-          for (std::size_t i = 0; i < frame_count; ++i)
+          beamformer.process(
+              std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+              std::span<float>(mono.data(), frame_count));
+          suppressor.process(std::span<float>(mono.data(), frame_count));
+          limiter.process(std::span<float>(mono.data(), frame_count));
+          if (binaural_renderer_ready)
           {
-            stereo[i].left = mono[i];
-            stereo[i].right = mono[i];
+            const sonitude::audio::BeamformerSteering binaural_dir =
+                runtime_config.binaural.direction.follow_steering
+                    ? snapshot.target
+                    : sonitude::audio::BeamformerSteering{
+                          runtime_config.binaural.direction.azimuth_deg,
+                          runtime_config.binaural.direction.elevation_deg};
+            binaural_renderer.setDirection(binaural_dir);
+            binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
+                                      std::span<float>(binaural_left.data(), frame_count),
+                                      std::span<float>(binaural_right.data(), frame_count));
+            stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
+                                   std::span<float>(binaural_right.data(), frame_count));
+            for (std::size_t i = 0; i < frame_count; ++i)
+            {
+              stereo[i].left = binaural_left[i];
+              stereo[i].right = binaural_right[i];
+            }
+          }
+          else
+          {
+            throw std::runtime_error(
+                "mono L=R playback path is disabled; enable binaural.enabled for HRTF output");
           }
         }
+        counters.suppressor_gain_milli.store(
+            static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),
+            std::memory_order_relaxed);
       }
 
       std::copy(stereo.begin(),

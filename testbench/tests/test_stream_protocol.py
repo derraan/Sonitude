@@ -19,9 +19,9 @@ from app.processing.protocol import (
 )
 
 
-def test_input_header_is_76_bytes_not_legacy_48() -> None:
-    assert INPUT_HEADER.size == 76
-    assert INPUT_HEADER.size != 48
+def test_input_header_is_108_bytes_not_legacy_76() -> None:
+    assert INPUT_HEADER.size == 108
+    assert INPUT_HEADER.size != 76
 
 
 def test_output_header_is_24_bytes_not_legacy_8() -> None:
@@ -47,6 +47,14 @@ def test_input_header_pack_unpack_round_trip() -> None:
         suppression_envelope_attack_coeff=0.4,
         suppression_envelope_release_coeff=0.008,
         suppression_confidence=0.95,
+        spectral_gain_floor_db=-18.0,
+        spectral_protect_ratio=3.0,
+        spectral_noise_overestimate=2.5,
+        spectral_tonal_ratio=5.0,
+        spectral_noise_rise_ms=300.0,
+        mvdr_max_wn_gain=8.0,
+        mvdr_cov_tau_ms=60.0,
+        mvdr_diag_load=0.05,
     )
     header = unpack_input_header(packed)
     assert header.magic == INPUT_MAGIC
@@ -58,6 +66,8 @@ def test_input_header_pack_unpack_round_trip() -> None:
     assert header.suppression_ambient_floor_linear == pytest.approx(0.2)
     assert header.suppression_fade_ms == pytest.approx(80.0)
     assert header.suppression_confidence == pytest.approx(0.95)
+    assert header.spectral_gain_floor_db == pytest.approx(-18.0)
+    assert header.mvdr_max_wn_gain == pytest.approx(8.0)
 
 
 def test_invalid_magic_is_rejected() -> None:

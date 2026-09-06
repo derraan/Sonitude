@@ -77,6 +77,50 @@ inline std::vector<audio::MicFrame> GeneratePlaneWave(const std::vector<float>& 
   return out;
 }
 
+inline std::vector<audio::MicFrame> GenerateSphericalPointSource(
+    const std::vector<float>& mono_source,
+    const app::GeometryConfig& geometry,
+    const std::uint32_t sample_rate_hz,
+    const std::size_t reference_mic_index,
+    const float azimuth_deg,
+    const float elevation_deg,
+    const float source_distance_m,
+    const float speed_of_sound_mps)
+{
+  const auto u = spatial::UnitVectorFromAzElDeg(azimuth_deg, elevation_deg);
+  const std::array<double, 3> source = {u[0] * static_cast<double>(source_distance_m),
+                                        u[1] * static_cast<double>(source_distance_m),
+                                        u[2] * static_cast<double>(source_distance_m)};
+  const auto mic_distance = [&](const app::GeometryMic& mic) {
+    const double dx = source[0] - mic.x;
+    const double dy = source[1] - mic.y;
+    const double dz = source[2] - mic.z;
+    return std::sqrt((dx * dx) + (dy * dy) + (dz * dz));
+  };
+  const double ref_dist =
+      std::max(1.0e-6, mic_distance(geometry.microphones[reference_mic_index]));
+  std::array<double, audio::kMicChannels> delays{};
+  std::array<double, audio::kMicChannels> amps{};
+  for (std::size_t m = 0; m < audio::kMicChannels; ++m)
+  {
+    const double dist_m = std::max(1.0e-6, mic_distance(geometry.microphones[m]));
+    const double tau_sec = (dist_m - ref_dist) / static_cast<double>(speed_of_sound_mps);
+    delays[m] = tau_sec * static_cast<double>(sample_rate_hz);
+    amps[m] = ref_dist / dist_m;
+  }
+  std::vector<audio::MicFrame> out(mono_source.size());
+  for (std::size_t i = 0; i < mono_source.size(); ++i)
+  {
+    audio::MicFrame frame{};
+    for (std::size_t m = 0; m < audio::kMicChannels; ++m)
+    {
+      frame[m] = static_cast<float>(amps[m]) * DelayReadLinear(mono_source, i, -delays[m]);
+    }
+    out[i] = frame;
+  }
+  return out;
+}
+
 inline double ComputeRms(const std::vector<float>& signal, const std::size_t skip = 0)
 {
   if (signal.empty() || skip >= signal.size())

@@ -2,19 +2,20 @@
 
 Unified tracker for Sonitude core: **global scope, guardrails, user veto checkboxes**, **DSP signal path**, directory layout, milestone reality, key interfaces, config schema, tests, conventions, ODAS posture, and CMake wiring. Treat this document as the living snapshot; `docs/milestones.md` **remains authoritative for milestone gates**. Unchecked scope vetoes are binding on Cursor; checked vetoes explicitly authorize otherwise-prohibited work.
 
-Last updated: 2026-08-30.
+Last updated: 2026-09-06.
 
 ### Implementation status snapshot (M4–M7)
 
 ```text
-capture -> calibration -> STFT MVDR target (+ internal guard spectra)
-  -> optional same-hop spectral NS, else conservative PCM / off
-  -> limiter -> binaural/ASRC -> playback
+capture -> channel conditioning -> STFT
+  -> adaptive geometric MVDR (comparison) OR fixed measured selective-binaural MVDR (opt-in, unqualified)
+  -> optional same-hop spectral NS on the adaptive path
+  -> limiter -> HRTF binaural only on the adaptive/HRTF route -> ASRC -> playback
 ```
 
 | Stage | Milestone | Current status | Notes |
 | --- | --- | --- | --- |
-| Stage 2 | M3 calibration | in_progress | `CalibrationApplier` live in runtime; HW sweep evidence still pending |
+| Stage 2 | M3 calibration | in_progress | Channel conditioner live; normalized-correlation delay diagnostic + v2 schema; IR compiler (`tools/calibration/compile_array.py`) emits SMV3 artifacts; HW sweep evidence pending |
 | Stage 3 | M4 beamformer | in_progress | STFT-domain MVDR (128/32), delay-and-sum fallback, steering crossfade. SCOPE-3 vetoed for MVDR. |
 | Stage 4 | M7 suppression/limiter | in_progress | Conservative default. Spectral NS shares the MVDR 128/32 hop (guard spectra stay in the frequency domain). Experimental; not the shipping voice suppressor. |
 
@@ -343,7 +344,7 @@ Sonitude/
 | `src/tools/device_probe.cpp`                                               | ALSA device probe CLI                                                          |
 | `src/tools/capture_check.cpp` / `playback_check.cpp` / `loopback_diag.cpp` | M1 ALSA diagnostics                                                            |
 | `src/tools/calibration_capture.cpp`                                        | Synthetic 6ch WAV (portable)                                                   |
-| `src/tools/calibration_estimate.cpp`                                       | DC/RMS→YAML estimator                                                          |
+| `src/tools/calibration_estimate.cpp`                                       | CLI wrapper for offline calibration estimator                                  |
 | `src/tools/latency_marker.cpp`                                             | M8 placeholder                                                                 |
 | `src/tools/wav_replay.cpp`                                                 | M4 offline renderer; taps, AUTO/ON/OFF suppression, `--output-binaural`, `--capabilities` |
 | `src/tools/stream_process.cpp`                                             | Protocol-v2 stdin/stdout DSP adapter (live capture, long-file batch, file preview) |
@@ -364,7 +365,7 @@ From `docs/milestones.md`:
 | **M0 Scaffold**      | `done`        | Config, types, CMake, CTest                             |
 | **M1 ALSA**          | `in_progress` | Probe/workers/tools built; Pi hardware evidence pending |
 | **M2 RT primitives** | `in_progress` | SPSC, pool, ASRC, resampler, passthrough; soak pending  |
-| **M3 Calibration**   | `in_progress` | Loader/applier/writer/WAV/tools/tests; HW sweep pending |
+| **M3 Calibration**   | `in_progress` | Loader/applier/writer, GCC-PHAT estimator, v2 schema, synthetic tests; HW sweep pending |
 | **M4 Beamformer**    | `in_progress` | STFT-domain MVDR, steering ramp, WAV replay; gate evidence pending |
 | **M5 ODAS control**  | `in_progress` | Mock provider, ODAS parser, source tracker; live ODAS soak pending |
 | **M6 State machine** | `in_progress` | Conversation SM, zones, control loop; scripted VAD harness pending |

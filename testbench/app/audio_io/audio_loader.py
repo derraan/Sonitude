@@ -7,6 +7,7 @@ does not treat a successful codec decode as a valid six-microphone input.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -224,3 +225,20 @@ find_wav_files = find_audio_files
 def load_wav(path: str | Path) -> tuple[np.ndarray, int]:
     data, metadata = load_audio(path)
     return data, metadata.sample_rate_hz
+
+
+def load_mono_wavs_parallel(paths: list[str | Path]) -> list[tuple[np.ndarray, int]]:
+    """Decode/read multiple WAVs concurrently; each returns (mono column-0, sample_rate_hz)."""
+    if not paths:
+        return []
+    if len(paths) == 1:
+        data, sample_rate = load_wav(paths[0])
+        return [(data[:, 0], sample_rate)]
+
+    def _load_mono(path: str | Path) -> tuple[np.ndarray, int]:
+        data, sample_rate = load_wav(path)
+        return data[:, 0], sample_rate
+
+    workers = min(len(paths), 4)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(_load_mono, paths))

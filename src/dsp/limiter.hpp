@@ -29,6 +29,8 @@ class PeakLimiter
 class StereoPeakLimiter
 {
  public:
+  // Linked stereo sample-peak limiter: one shared gain from max(|L|,|R|) per
+  // sample. No look-ahead and no inter-sample/true-peak detection.
   void configure(const LimiterConfig& config, std::uint32_t sample_rate_hz);
   void reset();
   void process(std::span<float> left, std::span<float> right);

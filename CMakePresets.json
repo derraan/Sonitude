@@ -2,7 +2,7 @@
   "version": 6,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 20,
+    "minor": 25,
     "patch": 0
   },
   "configurePresets": [
@@ -10,7 +10,7 @@
       "name": "default-debug",
       "displayName": "Default Debug",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "SONITUDE_BUILD_TESTS": "ON",
@@ -20,9 +20,12 @@
     {
       "name": "default-release",
       "displayName": "Default Release",
-      "inherits": "default-debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "SONITUDE_BUILD_TESTS": "ON",
+        "SONITUDE_FETCH_DEPS": "ON"
       }
     }
   ],

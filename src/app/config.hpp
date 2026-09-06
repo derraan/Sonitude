@@ -47,12 +47,33 @@ struct GeometryConfig
   std::vector<GeometryMic> microphones;
 };
 
+struct SpatialConfig
+{
+  std::string backend = "adaptive_geometric";
+  std::string profile_path;
+  bool mask_enabled = true;
+  float eta_low_db = -3.0F;
+  float eta_high_db = 3.0F;
+  float mask_smooth_sec = 0.020F;
+};
+
 struct SteeringConfig
 {
   float speed_of_sound_mps = 343.0F;
   std::size_t reference_mic_index = 0;
   float steering_ramp_ms = 150.0F;
   float ambient_floor_linear = 0.25F;
+  std::string model = "near_field";
+  float source_distance_m = 0.45F;
+  bool experimental_dual_reference_mvdr = false;
+  bool binaural_output = false;
+  std::size_t left_ear_mic_index = 0;
+  std::size_t right_ear_mic_index = 5;
+  struct KemarLutConfig
+  {
+    bool enabled = false;
+    std::string table_path;
+  } kemar_lut;
 };
 
 struct SpectralSuppressionConfig
@@ -140,6 +161,7 @@ struct RuntimeConfig
   float calibration_dc_block_hz = 20.0F;
   AsrcConfig asrc;
   SteeringConfig steering;
+  SpatialConfig spatial;
   SuppressionConfig suppression;
   StateMachineConfig state_machine;
   OdasConfig odas;

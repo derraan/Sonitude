@@ -47,3 +47,45 @@ jobs:
         run: |
           test -x "$SONITUDE_BUILD_DIR/sonitude_wav_replay"
           test -x "$SONITUDE_BUILD_DIR/sonitude_stream_process"
+          test -x "$SONITUDE_BUILD_DIR/sonitude_mvdr_bench"
+
+  sanitized:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config libasound2-dev libyaml-cpp-dev libspdlog-dev libsamplerate0-dev python3 python3-pip python3-venv libsndfile1 libsndfile1-dev libportaudio2 libgl1 libegl1 libxkbcommon0 libdbus-1-3
+      - name: Configure sanitized
+        run: >
+          cmake -S . -B build-san -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DSONITUDE_FETCH_DEPS=OFF
+          -DSONITUDE_WITH_ALSA=ON
+          -DSONITUDE_WITH_LIBSAMPLERATE=ON
+          -DSONITUDE_ENABLE_SANITIZERS=ON
+      - name: Build sanitized
+        run: cmake --build build-san --parallel
+      - name: CTest sanitized
+        run: ctest --test-dir build-san --output-on-failure
+
+  minimal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config libyaml-cpp-dev libspdlog-dev
+      - name: Configure minimal host
+        run: >
+          cmake -S . -B build-min -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DSONITUDE_FETCH_DEPS=OFF
+          -DSONITUDE_BUILD_TESTS=OFF
+          -DSONITUDE_WITH_ALSA=OFF
+          -DSONITUDE_WITH_LIBSAMPLERATE=OFF
+      - name: Build minimal
+        run: cmake --build build-min --parallel
+

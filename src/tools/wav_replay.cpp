@@ -16,9 +16,11 @@
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
 #include "audio/wav_io.hpp"
+#include "dsp/array_profile.hpp"
 #include "dsp/beamformer.hpp"
 #include "dsp/binaural_renderer.hpp"
 #include "dsp/calibration_applier.hpp"
+#include "dsp/fixed_binaural_mvdr.hpp"
 #include "dsp/hrtf_table.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/suppression_stage.hpp"
@@ -412,10 +414,29 @@ int main(int argc, char** argv)
         std::span<sonitude::audio::MicFrame>(calibrated.data(), calibrated.size()));
 
     const auto events = LoadSteeringScript(script_path, input_wav.sample_rate_hz);
+    const bool use_fixed = runtime.spatial.backend == "fixed_measured";
     sonitude::dsp::MvdrBeamformer beamformer;
-    beamformer.configure(
-        geometry, runtime.steering, calibration, input_wav.sample_rate_hz, runtime.capture.period_frames);
-    beamformer.setTarget(events.front().target);
+    sonitude::dsp::FixedBinauralMvdr fixed_beamformer;
+    if (use_fixed)
+    {
+      auto profile = sonitude::dsp::LoadArrayProfileFromFile(runtime.spatial.profile_path);
+      sonitude::dsp::FixedMvdrMaskParams mask;
+      mask.enabled = runtime.spatial.mask_enabled;
+      mask.eta_low_db = runtime.spatial.eta_low_db;
+      mask.eta_high_db = runtime.spatial.eta_high_db;
+      mask.smooth_sec = runtime.spatial.mask_smooth_sec;
+      fixed_beamformer.configure(profile, input_wav.sample_rate_hz, runtime.capture.period_frames, mask);
+      fixed_beamformer.setTarget(events.front().target);
+    }
+    else
+    {
+      beamformer.configure(geometry,
+                           runtime.steering,
+                           calibration,
+                           input_wav.sample_rate_hz,
+                           runtime.capture.period_frames);
+      beamformer.setTarget(events.front().target);
+    }
     float current_width_deg = events.front().width_deg;
     const bool suppression_enabled = ResolveSuppression(suppression_mode, runtime.suppression.enabled);
     const char* requested = suppression_mode == SuppressionMode::On
@@ -437,7 +458,7 @@ int main(int argc, char** argv)
 
     std::unique_ptr<sonitude::dsp::HrtfTable> hrtf_table;
     sonitude::dsp::BinauralRenderer binaural;
-    if (binaural_enabled)
+    if (binaural_enabled && !use_fixed)
     {
       backend = ParseBinauralBackend(binaural_backend);
       const std::string table_path = TablePathForBackend(runtime.binaural, backend);
@@ -481,7 +502,10 @@ int main(int argc, char** argv)
                                        .hop_size = runtime.suppression.spectral.hop_size,
                                        .gain_floor_db = runtime.suppression.spectral.gain_floor_db,
                                        .confidence_threshold = runtime.suppression.confidence_threshold}});
-    beamformer.setSpectralPostfilter(suppressor.spectralFilter());
+    if (!use_fixed)
+    {
+      beamformer.setSpectralPostfilter(suppressor.spectralFilter());
+    }
     std::cerr << "sonitude_resolved {\"protocol_version\":2,\"suppression_requested\":\"" << requested
               << "\",\"suppression_resolved\":" << (suppression_enabled ? "true" : "false")
               << ",\"suppression_backend_requested\":\"" << backend_name << "\""
@@ -499,7 +523,7 @@ int main(int argc, char** argv)
     sonitude::dsp::PeakLimiter limiter;
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
     sonitude::dsp::StereoPeakLimiter stereo_limiter;
-    if (binaural_enabled)
+    if (binaural_enabled || use_fixed)
     {
       stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, input_wav.sample_rate_hz);
     }
@@ -510,7 +534,7 @@ int main(int argc, char** argv)
     std::vector<float> beamformed_tap;
     std::vector<float> suppressed_tap;
     std::vector<float> binaural_tap;
-    if (binaural_enabled)
+    if (binaural_enabled || use_fixed)
     {
       left.assign(frames, 0.0F);
       right.assign(frames, 0.0F);
@@ -534,7 +558,14 @@ int main(int argc, char** argv)
     {
       while (event_index < events.size() && events[event_index].frame_index <= start)
       {
-        beamformer.setTarget(events[event_index].target);
+        if (use_fixed)
+        {
+          fixed_beamformer.setTarget(events[event_index].target);
+        }
+        else
+        {
+          beamformer.setTarget(events[event_index].target);
+        }
         if (binaural_enabled && binaural_follow)
         {
           binaural.setDirection(events[event_index].target);
@@ -547,8 +578,22 @@ int main(int argc, char** argv)
       {
         suppressor.setControl(true, 1.0F);
       }
-      beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
-                         std::span<float>(mono.data() + start, count));
+      if (use_fixed)
+      {
+        fixed_beamformer.processStereo(
+            std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
+            std::span<float>(left.data() + start, count),
+            std::span<float>(right.data() + start, count));
+        for (std::size_t i = 0; i < count; ++i)
+        {
+          mono[start + i] = 0.5F * (left[start + i] + right[start + i]);
+        }
+      }
+      else
+      {
+        beamformer.process(std::span<const sonitude::audio::MicFrame>(calibrated.data() + start, count),
+                           std::span<float>(mono.data() + start, count));
+      }
       if (current_width_deg > 0.0F)
       {
         const float blend = std::clamp(current_width_deg / kMaxWidthDeg, 0.0F, 1.0F);
@@ -580,7 +625,7 @@ int main(int argc, char** argv)
       {
         limiter.process(std::span<float>(mono.data() + start, count));
       }
-      if (binaural_enabled)
+      if (binaural_enabled && !use_fixed)
       {
         if (backend == sonitude::dsp::BinauralBackend::ArrayDownmix)
         {
@@ -594,6 +639,23 @@ int main(int argc, char** argv)
                            std::span<float>(left.data() + start, count),
                            std::span<float>(right.data() + start, count));
         }
+        if (!disable_limiter)
+        {
+          stereo_limiter.process(std::span<float>(left.data() + start, count),
+                                 std::span<float>(right.data() + start, count));
+        }
+        if (!binaural_tap.empty())
+        {
+          for (std::size_t i = 0; i < count; ++i)
+          {
+            const std::size_t out_index = (start + i) * 2U;
+            binaural_tap[out_index] = left[start + i];
+            binaural_tap[out_index + 1U] = right[start + i];
+          }
+        }
+      }
+      if (use_fixed)
+      {
         if (!disable_limiter)
         {
           stereo_limiter.process(std::span<float>(left.data() + start, count),

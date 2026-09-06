@@ -10,7 +10,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 INPUT_MAGIC = 0x32424253  # "SBB2"
 OUTPUT_MAGIC = 0x324F4253  # "SBO2"
 
@@ -47,7 +47,10 @@ BACKEND_NAMES = {
 # az f, el f, blend f, bin_az f, bin_el f, backend B, pad 3x,
 # suppressor: ambient_floor f, fade_ms f, activity f, confidence_thresh f,
 #             env_attack f, env_release f, confidence f
-INPUT_HEADER = struct.Struct("<IHHIIII fffff B3x7f")
+# spectral/mvdr live tuning: gain_floor_db f, protect_ratio f, noise_overestimate f,
+#             tonal_ratio f, noise_rise_ms f, mvdr_max_wn_gain f, mvdr_cov_tau_ms f,
+#             mvdr_diag_load f
+INPUT_HEADER = struct.Struct("<IHHIIII fffff B3x15f")
 # magic I, version H, type H, seq I, frames I, flags I, payload I
 OUTPUT_HEADER = struct.Struct("<IHHIIII")
 
@@ -81,6 +84,14 @@ class InputBlockHeader:
     suppression_envelope_attack_coeff: float
     suppression_envelope_release_coeff: float
     suppression_confidence: float
+    spectral_gain_floor_db: float
+    spectral_protect_ratio: float
+    spectral_noise_overestimate: float
+    spectral_tonal_ratio: float
+    spectral_noise_rise_ms: float
+    mvdr_max_wn_gain: float
+    mvdr_cov_tau_ms: float
+    mvdr_diag_load: float
 
 
 @dataclass
@@ -115,6 +126,14 @@ def pack_input_header(
     suppression_envelope_attack_coeff: float = 0.35,
     suppression_envelope_release_coeff: float = 0.01,
     suppression_confidence: float = 1.0,
+    spectral_gain_floor_db: float = -12.0,
+    spectral_protect_ratio: float = 4.0,
+    spectral_noise_overestimate: float = 2.0,
+    spectral_tonal_ratio: float = 6.0,
+    spectral_noise_rise_ms: float = 480.0,
+    mvdr_max_wn_gain: float = 4.0,
+    mvdr_cov_tau_ms: float = 80.0,
+    mvdr_diag_load: float = 0.08,
     message_type: int = MSG_AUDIO_BLOCK,
 ) -> bytes:
     flags = 0
@@ -146,6 +165,14 @@ def pack_input_header(
         float(suppression_envelope_attack_coeff),
         float(suppression_envelope_release_coeff),
         float(suppression_confidence),
+        float(spectral_gain_floor_db),
+        float(spectral_protect_ratio),
+        float(spectral_noise_overestimate),
+        float(spectral_tonal_ratio),
+        float(spectral_noise_rise_ms),
+        float(mvdr_max_wn_gain),
+        float(mvdr_cov_tau_ms),
+        float(mvdr_diag_load),
     )
 
 

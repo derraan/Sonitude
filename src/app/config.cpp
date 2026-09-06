@@ -115,6 +115,75 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
       RequireScalar<std::size_t>(steering, "reference_mic_index");
   config.steering.steering_ramp_ms = RequireScalar<float>(steering, "steering_ramp_ms");
   config.steering.ambient_floor_linear = RequireScalar<float>(steering, "ambient_floor_linear");
+  if (steering["model"])
+  {
+    config.steering.model = RequireScalar<std::string>(steering, "model");
+  }
+  if (steering["source_distance_m"])
+  {
+    config.steering.source_distance_m = RequireScalar<float>(steering, "source_distance_m");
+  }
+  if (steering["experimental_dual_reference_mvdr"])
+  {
+    config.steering.experimental_dual_reference_mvdr =
+        RequireScalar<bool>(steering, "experimental_dual_reference_mvdr");
+  }
+  else if (steering["binaural_output"])
+  {
+    config.steering.experimental_dual_reference_mvdr =
+        RequireScalar<bool>(steering, "binaural_output");
+  }
+  if (steering["left_ear_mic_index"])
+  {
+    config.steering.left_ear_mic_index = RequireScalar<std::size_t>(steering, "left_ear_mic_index");
+  }
+  if (steering["right_ear_mic_index"])
+  {
+    config.steering.right_ear_mic_index = RequireScalar<std::size_t>(steering, "right_ear_mic_index");
+  }
+  if (steering["kemar_lut"])
+  {
+    const YAML::Node kemar = steering["kemar_lut"];
+    if (kemar["enabled"])
+    {
+      config.steering.kemar_lut.enabled = kemar["enabled"].as<bool>();
+    }
+    if (kemar["table_path"])
+    {
+      config.steering.kemar_lut.table_path =
+          ResolvePath(path, RequireScalar<std::string>(kemar, "table_path"));
+    }
+  }
+
+  const YAML::Node spatial = root["spatial"];
+  if (spatial)
+  {
+    if (spatial["backend"])
+    {
+      config.spatial.backend = RequireScalar<std::string>(spatial, "backend");
+    }
+    if (spatial["profile_path"])
+    {
+      config.spatial.profile_path =
+          ResolvePath(path, RequireScalar<std::string>(spatial, "profile_path"));
+    }
+    if (spatial["mask_enabled"])
+    {
+      config.spatial.mask_enabled = RequireScalar<bool>(spatial, "mask_enabled");
+    }
+    if (spatial["eta_low_db"])
+    {
+      config.spatial.eta_low_db = RequireScalar<float>(spatial, "eta_low_db");
+    }
+    if (spatial["eta_high_db"])
+    {
+      config.spatial.eta_high_db = RequireScalar<float>(spatial, "eta_high_db");
+    }
+    if (spatial["mask_smooth_sec"])
+    {
+      config.spatial.mask_smooth_sec = RequireScalar<float>(spatial, "mask_smooth_sec");
+    }
+  }
 
   const YAML::Node suppression = root["suppression"];
   config.suppression.enabled = RequireScalar<bool>(suppression, "enabled");
@@ -310,7 +379,39 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error("ambient_floor_linear must be in [0, 1]");
   }
-
+  if (config.steering.model != "near_field" && config.steering.model != "far_field")
+  {
+    throw std::runtime_error("steering.model must be near_field or far_field");
+  }
+  if (config.steering.source_distance_m <= 0.0F || config.steering.source_distance_m > 5.0F)
+  {
+    throw std::runtime_error("steering.source_distance_m is outside engineering guardrails");
+  }
+  if (config.spatial.backend != "adaptive_geometric" && config.spatial.backend != "fixed_measured")
+  {
+    throw std::runtime_error("spatial.backend must be adaptive_geometric or fixed_measured");
+  }
+  if (config.spatial.backend == "fixed_measured")
+  {
+    if (config.spatial.profile_path.empty())
+    {
+      throw std::runtime_error("spatial.backend=fixed_measured requires spatial.profile_path");
+    }
+    if (config.binaural.enabled)
+    {
+      throw std::runtime_error(
+          "fixed_measured backend already emits stereo; disable binaural.enabled to avoid a second HRTF renderer");
+    }
+    if (config.steering.experimental_dual_reference_mvdr)
+    {
+      throw std::runtime_error(
+          "fixed_measured cannot be combined with experimental_dual_reference_mvdr");
+    }
+  }
+  if (config.steering.left_ear_mic_index >= 6 || config.steering.right_ear_mic_index >= 6)
+  {
+    throw std::runtime_error("steering ear mic index out of range");
+  }
   if (config.suppression.fade_ms < 1.0F || config.suppression.fade_ms > 1000.0F)
   {
     throw std::runtime_error("suppression.fade_ms must be in [1, 1000]");

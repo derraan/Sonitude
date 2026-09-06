@@ -93,7 +93,7 @@ class BinauralRequest:
 
 @dataclass
 class SuppressorRequest:
-    """Live conservative suppressor tuning (protocol v3 per audio block)."""
+    """Live conservative suppressor tuning (protocol v4 per audio block)."""
 
     ambient_floor_linear: float = 0.25
     fade_ms: float = 120.0
@@ -103,6 +103,14 @@ class SuppressorRequest:
     envelope_release_coeff: float = 0.01
     confidence: float = 1.0
     focus_active: bool = True
+    spectral_gain_floor_db: float = -12.0
+    spectral_protect_ratio: float = 4.0
+    spectral_noise_overestimate: float = 2.0
+    spectral_tonal_ratio: float = 6.0
+    spectral_noise_rise_ms: float = 480.0
+    mvdr_max_wn_gain: float = 4.0
+    mvdr_cov_tau_ms: float = 80.0
+    mvdr_diag_load: float = 0.08
 
     def as_dict(self) -> dict:
         return {
@@ -114,6 +122,14 @@ class SuppressorRequest:
             "envelope_release_coeff": self.envelope_release_coeff,
             "confidence": self.confidence,
             "focus_active": self.focus_active,
+            "spectral_gain_floor_db": self.spectral_gain_floor_db,
+            "spectral_protect_ratio": self.spectral_protect_ratio,
+            "spectral_noise_overestimate": self.spectral_noise_overestimate,
+            "spectral_tonal_ratio": self.spectral_tonal_ratio,
+            "spectral_noise_rise_ms": self.spectral_noise_rise_ms,
+            "mvdr_max_wn_gain": self.mvdr_max_wn_gain,
+            "mvdr_cov_tau_ms": self.mvdr_cov_tau_ms,
+            "mvdr_diag_load": self.mvdr_diag_load,
         }
 
 

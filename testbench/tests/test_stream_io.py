@@ -6,10 +6,12 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from app.audio_io import audio_loader
 from app.audio_io.stream_io import (
     estimated_pcm_bytes,
     iter_mapped_blocks,
     load_file_overview,
+    load_file_overviews_parallel,
     load_plot_preview,
     should_stream_batch,
 )
@@ -79,3 +81,41 @@ def test_file_overview_uses_true_duration_and_nyquist(tmp_path: Path, sample_rat
     assert overview.spectrogram_freqs is not None
     assert overview.spectrogram_freqs[-1] == pytest.approx(sample_rate / 2.0)
     assert overview.spectrogram_db.shape[1] == 32
+
+
+def test_load_file_overviews_parallel(tmp_path: Path, sample_rate: int) -> None:
+    duration_s = 1.0
+    n = int(sample_rate * duration_s)
+    t = np.linspace(0, duration_s, n, endpoint=False)
+    tone = (0.2 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)
+    paths = {}
+    for name in ("processed", "raw", "residual"):
+        data = np.stack([tone, tone * 0.5], axis=1)
+        path = tmp_path / f"{name}.wav"
+        sf.write(str(path), data, sample_rate, subtype="FLOAT")
+        paths[name] = path
+    specs = {
+        "processed": (paths["processed"], {}),
+        "raw": (paths["raw"], {"n_spec": 0}),
+        "residual": (paths["residual"], {"n_spec": 0}),
+    }
+    overviews = load_file_overviews_parallel(specs)
+    assert set(overviews) == {"processed", "raw", "residual"}
+    assert overviews["processed"].spectrogram_db is not None
+    assert overviews["raw"].spectrogram_db is None
+
+
+def test_load_mono_wavs_parallel(tmp_path: Path, sample_rate: int) -> None:
+    n = sample_rate
+    paths = []
+    for ch in range(3):
+        data = np.full((n, 1), float(ch), dtype=np.float32)
+        path = tmp_path / f"mono_{ch}.wav"
+        sf.write(str(path), data, sample_rate, subtype="FLOAT")
+        paths.append(path)
+    loaded = audio_loader.load_mono_wavs_parallel(paths)
+    assert len(loaded) == 3
+    for idx, (mono, sr) in enumerate(loaded):
+        assert sr == sample_rate
+        assert mono.shape == (n,)
+        assert mono[0] == pytest.approx(float(idx))

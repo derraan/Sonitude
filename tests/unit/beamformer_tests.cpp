@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -10,6 +11,7 @@
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/steering_lut.hpp"
 #include "dsp/spectral_postfilter.hpp"
 #include "tests/support/synth_signals.hpp"
 
@@ -52,6 +54,7 @@ sonitude::app::CalibrationConfig BuildCalibration(const std::vector<float>& dela
 sonitude::app::SteeringConfig BuildSteering()
 {
   sonitude::app::SteeringConfig s;
+  s.model = "far_field";
   s.speed_of_sound_mps = 343.0F;
   s.reference_mic_index = 0;
   s.steering_ramp_ms = 100.0F;
@@ -319,6 +322,324 @@ void TestMvdrNullsOffAxisInterferer()
           "MVDR target look should suppress some off-axis interferer energy");
   Require(out_rms > target_rms * 0.4, "MVDR should not cancel the look direction");
 }
+void TestCovarianceAdaptsDuringLongSteeringTransition()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr float kTransitionMs = 400.0F;
+  constexpr std::size_t kHopSize = 32;
+  const std::size_t ramp =
+      std::max<std::size_t>(1U, static_cast<std::size_t>((kTransitionMs * 0.001F) * kFs));
+  const std::size_t warmup = 512;
+  const std::size_t frames = warmup + ramp + 256;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  const auto source = sonitude::tests::support::GenerateSine(frames, kFs, 720.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> out(frames, 0.0F);
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data(), warmup),
+             std::span<float>(out.data(), warmup));
+
+  bf.resetCovarianceDiagnosticsForTest();
+  bf.setTarget({35.0F, 0.0F});
+  Require(bf.crossfadingForTest(), "setTarget must enter steering crossfade");
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + warmup, ramp),
+             std::span<float>(out.data() + warmup, ramp));
+
+  Require(bf.covarianceUpdateHopsForTest() >= (ramp / kHopSize) / 2U,
+          "covariance must keep adapting through a long steering crossfade");
+}
+
+void TestRepeatedTargetUpdatesDoNotStarveAdaptation()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr float kTransitionMs = 300.0F;
+  constexpr std::size_t kRetargetInterval = 64;
+  const std::size_t frames = 8192;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  const auto source = sonitude::tests::support::GenerateSine(frames, kFs, 680.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> out(frames, 0.0F);
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data(), 512),
+             std::span<float>(out.data(), 512));
+
+  bf.resetCovarianceDiagnosticsForTest();
+  float azimuth = 10.0F;
+  for (std::size_t start = 512; start < frames; start += kRetargetInterval)
+  {
+    bf.setTarget({azimuth, 0.0F});
+    azimuth += 12.0F;
+    const std::size_t count = std::min(kRetargetInterval, frames - start);
+    bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + start, count),
+               std::span<float>(out.data() + start, count));
+  }
+
+  Require(bf.covarianceUpdateHopsForTest() >= (frames - 512) / 64U,
+          "repeated steering retargets must not freeze covariance adaptation");
+}
+
+void TestMovingNoiseStatisticsUpdateDuringCrossfade()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 6144;
+  constexpr float kTransitionMs = 250.0F;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  sonitude::dsp::MvdrTuningParams tuning{};
+  tuning.cov_tau_sec = 0.020F;
+
+  const auto target_src = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto early_noise = sonitude::tests::support::GenerateSine(kFrames, kFs, 950.0);
+  const auto late_noise = sonitude::tests::support::GenerateSine(kFrames, kFs, 1250.0);
+  auto mic = sonitude::tests::support::GeneratePlaneWave(
+      target_src, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+  const auto early_interf = sonitude::tests::support::GeneratePlaneWave(
+      early_noise, geometry, kFs, 0, 90.0F, 0.0F, 343.0F);
+  const auto late_interf = sonitude::tests::support::GeneratePlaneWave(
+      late_noise, geometry, kFs, 0, -75.0F, 0.0F, 343.0F);
+  const std::size_t scene_switch = 2048;
+  for (std::size_t i = 0; i < kFrames; ++i)
+  {
+    const auto& noise = (i < scene_switch) ? early_interf : late_interf;
+    for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+    {
+      mic[i][ch] += noise[i][ch];
+    }
+  }
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  bf.setTuning(tuning);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> out(kFrames, 0.0F);
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data(), scene_switch),
+             std::span<float>(out.data(), scene_switch));
+
+  bf.resetCovarianceDiagnosticsForTest();
+  bf.setTarget({40.0F, 0.0F});
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + scene_switch, kFrames - scene_switch),
+             std::span<float>(out.data() + scene_switch, kFrames - scene_switch));
+
+  Require(bf.covarianceUpdateHopsForTest() > 0U,
+          "moving interferer statistics must update while output steering crossfades");
+
+  const double out_rms = sonitude::tests::support::ComputeRms(out, 1024);
+  const double target_rms = sonitude::tests::support::ComputeRms(target_src, 1024);
+  const double late_noise_rms = sonitude::tests::support::ComputeRms(late_noise, 1024);
+  Require(out_rms < (target_rms + late_noise_rms) * 0.90,
+          "MVDR should track scene changes that occur during steering transition");
+  Require(out_rms > target_rms * 0.35, "MVDR should retain on-axis target energy");
+}
+
+void TestNearFieldElevationSteering()
+{
+  constexpr std::uint32_t kFs = 16000;
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.model = "near_field";
+  steering.source_distance_m = 0.45F;
+
+  sonitude::dsp::KemarSteeringLut model;
+  model.configure(geometry, steering, kFs);
+  const auto elevated =
+      model.computeNearFieldDelays({30.0F, 17.5F}, steering.reference_mic_index);
+  const auto horizontal =
+      model.computeNearFieldDelays({30.0F, 0.0F}, steering.reference_mic_index);
+  bool differs = false;
+  for (std::size_t m = 0; m < sonitude::audio::kMicChannels; ++m)
+  {
+    if (std::fabs(elevated[m] - horizontal[m]) > 1.0e-6)
+    {
+      differs = true;
+      break;
+    }
+  }
+  Require(differs, "near-field steering must use requested elevation in delay model");
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  bf.setTarget({30.0F, 17.5F});
+  Require(std::fabs(bf.pendingTargetForTest().elevation_deg - 17.5F) < 1.0e-3F,
+          "beamformer must preserve requested elevation target");
+}
+
+
+void TestKemarLutFlagDoesNotAffectArraySteering()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 4096;
+  const auto geometry = BuildGeometry();
+  auto steering_off = BuildSteering();
+  steering_off.model = "near_field";
+  steering_off.source_distance_m = 0.45F;
+  steering_off.kemar_lut.enabled = false;
+  auto steering_on = steering_off;
+  steering_on.kemar_lut.enabled = true;
+  steering_on.kemar_lut.table_path = "unused.shrf";
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 850.0);
+  const auto mic = sonitude::tests::support::GenerateSphericalPointSource(
+      source, geometry, kFs, 0, 30.0F, 17.5F, steering_off.source_distance_m, steering_off.speed_of_sound_mps);
+  sonitude::dsp::MvdrBeamformer without_lut;
+  without_lut.configure(geometry, steering_off, BuildCalibration(), kFs, kFrames);
+  without_lut.setTarget({30.0F, 17.5F});
+  std::vector<float> out_off(kFrames, 0.0F);
+  without_lut.process(mic, out_off);
+  sonitude::dsp::MvdrBeamformer with_lut_flag;
+  with_lut_flag.configure(geometry, steering_on, BuildCalibration(), kFs, kFrames);
+  with_lut_flag.setTarget({30.0F, 17.5F});
+  std::vector<float> out_on(kFrames, 0.0F);
+  with_lut_flag.process(mic, out_on);
+  double max_diff = 0.0;
+  for (std::size_t i = 512; i < kFrames; ++i)
+  {
+    max_diff = std::max(max_diff, std::fabs(static_cast<double>(out_off[i] - out_on[i])));
+  }
+  Require(max_diff < 1.0e-5, "kemar_lut flag must not change analytic array steering output");
+}
+
+void TestSteeringTransitionStateMachine()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr float kTransitionMs = 200.0F;
+  const std::size_t ramp =
+      std::max<std::size_t>(1U, static_cast<std::size_t>((kTransitionMs * 0.001F) * kFs));
+  const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.steering_ramp_ms = kTransitionMs;
+  const auto source = sonitude::tests::support::GenerateSine(ramp * 3U, kFs, 620.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, steering, BuildCalibration(), kFs, 256);
+  bf.setTarget({0.0F, 0.0F});
+  std::vector<float> out(ramp * 3U, 0.0F);
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data(), ramp / 2U),
+             std::span<float>(out.data(), ramp / 2U));
+  Require(!bf.crossfadingForTest(), "identical initial target must not start a crossfade");
+
+  bf.setTarget({40.0F, 0.0F});
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + ramp / 2U, ramp / 4U),
+             std::span<float>(out.data() + ramp / 2U, ramp / 4U));
+  Require(bf.crossfadingForTest(), "new target must start crossfade");
+  const std::size_t cursor_mid = bf.fadeCursorForTest();
+  Require(cursor_mid > 0U && cursor_mid < ramp, "fade cursor must advance during transition");
+
+  bf.setTarget({40.05F, 0.0F});
+  Require(bf.fadeCursorForTest() == cursor_mid,
+          "sub-deadband jitter must not restart the steering crossfade");
+
+  bf.setTarget({40.0F, 0.0F});
+  Require(bf.fadeCursorForTest() == cursor_mid,
+          "repeated identical pending target must not restart the crossfade");
+
+  const std::size_t retarget_at = ramp / 2U + ramp / 4U;
+  const float sample_before = out[retarget_at > 0U ? retarget_at - 1U : 0U];
+  const std::size_t cursor_before_retarget = bf.fadeCursorForTest();
+  bf.setTarget({-25.0F, 0.0F});
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + retarget_at, 1U),
+             std::span<float>(out.data() + retarget_at, 1U));
+  Require(bf.fadeCursorForTest() > 0U && bf.fadeCursorForTest() < ramp,
+          "mid-fade retarget must preserve the inverted crossfade progress");
+  Require(bf.fadeCursorForTest() != cursor_before_retarget,
+          "mid-fade retarget must pivot crossfade progress");
+  Require(std::fabs(bf.activeTargetForTest().azimuth_deg - 40.0F) < 1.0e-3F,
+          "active target must track the audible blend start after pivot");
+  Require(std::fabs(bf.pendingTargetForTest().azimuth_deg + 25.0F) < 1.0e-3F,
+          "pending target must reflect the latest command");
+  Require(std::fabs(out[retarget_at] - sample_before) < 0.35F,
+          "mid-fade retarget must continue from the current acoustic state");
+
+  const std::array<float, 4> rapid_az = {10.0F, 28.0F, 52.0F, 70.0F};
+  std::size_t cursor = 0;
+  for (const float az : rapid_az)
+  {
+    bf.setTarget({az, 0.0F});
+    const std::size_t chunk = std::min<std::size_t>(ramp / 8U, out.size() - cursor);
+    bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + cursor, chunk),
+               std::span<float>(out.data() + cursor, chunk));
+    cursor += chunk;
+  }
+  Require(sonitude::tests::support::MaxSecondDifference(out) < 0.8,
+          "rapid steering changes must stay click-free");
+
+  bf.setTarget({179.8F, 0.0F});
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data(), ramp / 4U),
+             std::span<float>(out.data(), ramp / 4U));
+  const std::size_t wrap_cursor = bf.fadeCursorForTest();
+  bf.setTarget({-179.9F, 0.0F});
+  Require(bf.fadeCursorForTest() == wrap_cursor,
+          "180 wraparound within deadband must not restart crossfade");
+
+  bf.setTarget({179.8F, 12.0F});
+  bf.process(std::span<const sonitude::audio::MicFrame>(mic.data() + ramp / 4U, ramp / 4U),
+             std::span<float>(out.data() + ramp / 4U, ramp / 4U));
+  Require(std::fabs(bf.pendingTargetForTest().elevation_deg - 12.0F) < 1.0e-3F,
+          "elevation changes must update the pending steering target");
+  Require(bf.crossfadingForTest(), "elevation retarget must keep the crossfade active");
+}
+
+void TestResetRestoresCovarianceFloor()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 2048;
+  const auto geometry = BuildGeometry();
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
+
+  sonitude::dsp::MvdrBeamformer fresh;
+  fresh.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  std::vector<float> a(kFrames, 0.0F);
+  fresh.process(mic, a);
+
+  sonitude::dsp::MvdrBeamformer warmed;
+  warmed.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  std::vector<float> discard(kFrames, 0.0F);
+  warmed.process(mic, discard);
+  warmed.resetStream();
+  std::vector<float> b(kFrames, 0.0F);
+  warmed.process(mic, b);
+  double err = 0.0;
+  for (std::size_t i = 256; i < kFrames; ++i)
+  {
+    err += static_cast<double>(a[i] - b[i]) * static_cast<double>(a[i] - b[i]);
+  }
+  err = std::sqrt(err / static_cast<double>(kFrames - 256));
+  Require(err < 1.0e-5, "reset must restore covariance floor and match a fresh configure");
+}
+
+void TestSingleFactorizationPerBin()
+{
+  constexpr std::uint32_t kFs = 16000;
+  constexpr std::size_t kFrames = 1024;
+  const auto geometry = BuildGeometry();
+  const auto source = sonitude::tests::support::GenerateSine(kFrames, kFs, 900.0);
+  const auto mic = sonitude::tests::support::GeneratePlaneWave(
+      source, geometry, kFs, 0, 15.0F, 0.0F, 343.0F);
+  sonitude::dsp::MvdrBeamformer bf;
+  bf.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  bf.resetCovarianceDiagnosticsForTest();
+  std::vector<float> out(kFrames, 0.0F);
+  bf.process(mic, out);
+  const std::uint64_t hops = bf.covarianceUpdateHopsForTest();
+  Require(hops > 0, "processing must update covariance");
+  Require(bf.factorizationCountForTest() == hops * 63U,
+          "adaptive path must factor once per interior bin per hop");
+}
 }  // namespace
 
 void RunBeamformerTests()
@@ -330,4 +651,12 @@ void RunBeamformerTests()
   TestLeftRightAzimuthConvention();
   TestSpectralSharesSingleStftDelay();
   TestMvdrNullsOffAxisInterferer();
+  TestCovarianceAdaptsDuringLongSteeringTransition();
+  TestRepeatedTargetUpdatesDoNotStarveAdaptation();
+  TestMovingNoiseStatisticsUpdateDuringCrossfade();
+  TestNearFieldElevationSteering();
+  TestKemarLutFlagDoesNotAffectArraySteering();
+  TestSteeringTransitionStateMachine();
+  TestResetRestoresCovarianceFloor();
+  TestSingleFactorizationPerBin();
 }
