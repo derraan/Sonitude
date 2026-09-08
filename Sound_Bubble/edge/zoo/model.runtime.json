@@ -1,0 +1,27 @@
+{
+  "model_sr": 24000,
+  "model_num_ch": 6,
+  "model_chunk": 192,
+  "model_pad": 96,
+  "frame_len": 288,
+  "expected_input_channels": 8,
+  "expected_channel_map": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "notes": "Auto-generated from experiment config used during ONNX export.",
+  "model_class": "src.models.tfgridnet_realtime_clean_dis_embd3.net.Net",
+  "supported_radii": [
+    1.0,
+    1.5,
+    2.0
+  ],
+  "source_config": "C:\\Users\\darre\\Sound_Bubble\\TFG_S_big_newdis_v3_pt_fix_MutiLoss\\config.json",
+  "source_run_dir": "C:\\Users\\darre\\Sound_Bubble\\TFG_S_big_newdis_v3_pt_fix_MutiLoss",
+  "source_checkpoint": "C:\\Users\\darre\\Sound_Bubble\\TFG_S_big_newdis_v3_pt_fix_MutiLoss\\checkpoints\\best.pt",
+  "trained_epochs": 115
+}
