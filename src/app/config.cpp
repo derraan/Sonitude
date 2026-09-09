@@ -110,6 +110,11 @@ std::string ResolvePath(const std::string& base_file, const std::string& candida
   const std::filesystem::path base_path(base_file);
   return (base_path.parent_path() / candidate_path).lexically_normal().string();
 }
+
+bool IsKnownEqType(const std::string& type)
+{
+  return type == "PK" || type == "LS" || type == "HS" || type == "LP" || type == "HP";
+}
 }  // namespace
 
 RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
@@ -301,6 +306,35 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
       const YAML::Node model = binaural["model"];
       config.binaural.model.head_radius_m = RequireScalar<float>(model, "head_radius_m");
       config.binaural.model.max_ild_db = RequireScalar<float>(model, "max_ild_db");
+    }
+  }
+
+  if (root["common_eq"])
+  {
+    const YAML::Node eq = root["common_eq"];
+    if (eq["enabled"])
+    {
+      config.common_eq.enabled = RequireScalar<bool>(eq, "enabled");
+    }
+    if (eq["sections"])
+    {
+      const YAML::Node sections = eq["sections"];
+      if (!sections.IsSequence())
+      {
+        throw std::runtime_error("common_eq.sections must be a sequence");
+      }
+      for (const YAML::Node& s : sections)
+      {
+        EqSectionConfig sec;
+        sec.type = RequireScalar<std::string>(s, "type");
+        sec.freq_hz = RequireScalar<float>(s, "freq_hz");
+        if (s["gain_db"])
+        {
+          sec.gain_db = s["gain_db"].as<float>();
+        }
+        sec.q = RequireScalar<float>(s, "q");
+        config.common_eq.sections.push_back(sec);
+      }
     }
   }
 
@@ -556,6 +590,30 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   if (config.binaural.profile.id.empty())
   {
     throw std::runtime_error("binaural.profile.id cannot be empty");
+  }
+
+  if (config.common_eq.sections.size() > 24U)
+  {
+    throw std::runtime_error("common_eq supports at most 24 sections");
+  }
+  for (const auto& sec : config.common_eq.sections)
+  {
+    if (!IsKnownEqType(sec.type))
+    {
+      throw std::runtime_error("common_eq section type must be PK/LS/HS/LP/HP");
+    }
+    if (!(sec.freq_hz > 0.0F && sec.freq_hz < (0.5F * static_cast<float>(config.capture.sample_rate_hz))))
+    {
+      throw std::runtime_error("common_eq.freq_hz out of range");
+    }
+    if (!(sec.q > 0.0F && sec.q <= 20.0F))
+    {
+      throw std::runtime_error("common_eq.q must be in (0, 20]");
+    }
+    if (std::fabs(sec.gain_db) > 24.0F)
+    {
+      throw std::runtime_error("common_eq.gain_db out of range");
+    }
   }
 }
 

@@ -1,1 +1,1 @@
-# Sonitude offline array calibration compiler.
+"""Sonitude offline calibration compiler."""

@@ -159,6 +159,20 @@ struct BinauralConfig
   BinauralModelConfig model;
 };
 
+struct EqSectionConfig
+{
+  std::string type = "PK";
+  float freq_hz = 1000.0F;
+  float gain_db = 0.0F;
+  float q = 0.707F;
+};
+
+struct EqConfig
+{
+  bool enabled = false;
+  std::vector<EqSectionConfig> sections;
+};
+
 struct RealtimeConfig
 {
   std::int32_t capture_priority = 80;
@@ -182,6 +196,7 @@ struct RuntimeConfig
   OdasConfig odas;
   TelemetryConfig telemetry;
   BinauralConfig binaural;
+  EqConfig common_eq;
   RealtimeConfig realtime;
   std::vector<ZoneConfig> zones;
 };

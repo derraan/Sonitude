@@ -54,3 +54,6 @@ realtime:
   capture_priority: 80
   playback_priority: 78
   enable_mlockall: true
+common_eq:
+  enabled: false
+  sections: []

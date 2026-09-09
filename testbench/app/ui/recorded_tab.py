@@ -33,6 +33,7 @@ from app.audio_io.stream_io import FileOverview, load_file_overviews_parallel
 from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.batch_controller import BatchWorker
 from app.controller.file_preview_controller import FilePreviewWorker
+from app.controller.upload_controller import DspCommitSnapshot
 from app.processing.capabilities import query_tool_capabilities
 from app.storage.models import SteeringEvent, SuppressorRequest
 from app.storage.result_store import ResultStore
@@ -47,6 +48,7 @@ from app.ui.layout_persist import (
     save_splitter,
 )
 from app.ui.metrics_panel import MetricsPanel
+from app.ui.pipeline_config_picker import PipelineConfigPicker, recorded_session_yaml
 from app.ui.playback_panel import PlaybackPanel
 from app.ui.secondary_note import apply_secondary_note
 from app.ui.steering_controls import SteeringControls
@@ -212,8 +214,12 @@ class RecordedDataTab(QWidget):
         steering_test_layout.addRow(self._steering_test_checkbox)
         steering_test_layout.addRow("Expected source direction:", self._expected_azimuth_spin)
 
+        self._pipeline = PipelineConfigPicker(recorded_session_yaml())
+        self._pipeline.selectionChanged.connect(self._on_pipeline_changed)
+
         config_inner = QWidget()
         config_layout = QVBoxLayout(config_inner)
+        config_layout.addWidget(self._pipeline)
         config_layout.addWidget(self._steering)
         config_layout.addWidget(self._beamformer)
         config_layout.addWidget(self._live_dsp)
@@ -326,6 +332,7 @@ class RecordedDataTab(QWidget):
 
         outer = QVBoxLayout(self)
         outer.addWidget(self._main_splitter)
+        self._sync_config_path()
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -337,6 +344,42 @@ class RecordedDataTab(QWidget):
     def save_layout(self) -> None:
         save_splitter(self._main_splitter, KEY_RECORDED_H)
         save_splitter(self._inspect_splitter, KEY_RECORDED_V)
+
+    def set_runtime_config_path(self, path: Path) -> None:
+        self.apply_pipeline_files(Path(path))
+
+    def apply_pipeline_files(
+        self,
+        runtime_yaml: Path,
+        calibration_yaml: Path | None = None,
+        *,
+        restart_if_running: bool = False,
+    ) -> None:
+        self._pipeline.set_selection(Path(runtime_yaml), calibration_yaml)
+        self._sync_config_path()
+        row = self._file_list.currentRow()
+        if 0 <= row < len(self._selected_paths):
+            self._show_metadata(self._selected_paths[row])
+
+    def _sync_config_path(self) -> None:
+        self._config_path = self._pipeline.materialize_config()
+
+    def _on_pipeline_changed(self) -> None:
+        self._sync_config_path()
+        row = self._file_list.currentRow()
+        if 0 <= row < len(self._selected_paths):
+            self._show_metadata(self._selected_paths[row])
+        if self._preview is not None and self._preview.isRunning():
+            self._on_live_stop()
+            self._on_live_play()
+
+    def dsp_commit_snapshot(self) -> DspCommitSnapshot:
+        return DspCommitSnapshot(
+            suppression_mode=self._suppressor.suppression_mode(),
+            suppression_backend=self._suppressor.suppression_backend(),
+            suppressor=self._suppressor.request(),
+            binaural=self._binaural.request(),
+        )
 
     def _on_select_file(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Select 6-channel audio file(s)", filter=_AUDIO_FILTER)
@@ -417,6 +460,7 @@ class RecordedDataTab(QWidget):
         self._progress_bar.setRange(0, 100 if len(paths) == 1 else len(paths))
         self._progress_bar.setValue(0)
         self._status_label.setText(f"Processing 0/{len(paths)}...")
+        self._sync_config_path()
 
         expected_azimuth = (
             self._expected_azimuth_spin.value() if self._steering_test_checkbox.isChecked() else None
@@ -524,6 +568,7 @@ class RecordedDataTab(QWidget):
         if path is None:
             QMessageBox.warning(self, "No file selected", "Select a 6-channel recording first.")
             return
+        self._sync_config_path()
         try:
             config = read_runtime_config_summary(self._config_path)
         except Exception as exc:  # noqa: BLE001

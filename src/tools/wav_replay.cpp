@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -19,6 +20,7 @@
 #include "dsp/array_profile.hpp"
 #include "dsp/beamformer.hpp"
 #include "dsp/binaural_renderer.hpp"
+#include "dsp/biquad_cascade.hpp"
 #include "dsp/calibration_applier.hpp"
 #include "dsp/fixed_binaural_mvdr.hpp"
 #include "dsp/hrtf_table.hpp"
@@ -139,6 +141,42 @@ std::string TablePathForBackend(const sonitude::app::BinauralConfig& binaural,
     return binaural.profile.table_path;
   }
   return {};
+}
+
+std::vector<sonitude::dsp::BiquadSectionSpec> BuildEqSpecs(
+    const std::vector<sonitude::app::CalibrationChannel::EqSection>& sections)
+{
+  std::vector<sonitude::dsp::BiquadSectionSpec> out;
+  out.reserve(sections.size());
+  for (const auto& sec : sections)
+  {
+    out.push_back({
+        .type = sonitude::dsp::BiquadCascade::ParseType(sec.type),
+        .freq_hz = sec.freq_hz,
+        .gain_db = sec.gain_db,
+        .q = sec.q,
+        .enabled = true,
+    });
+  }
+  return out;
+}
+
+std::vector<sonitude::dsp::BiquadSectionSpec> BuildEqSpecs(
+    const std::vector<sonitude::app::EqSectionConfig>& sections)
+{
+  std::vector<sonitude::dsp::BiquadSectionSpec> out;
+  out.reserve(sections.size());
+  for (const auto& sec : sections)
+  {
+    out.push_back({
+        .type = sonitude::dsp::BiquadCascade::ParseType(sec.type),
+        .freq_hz = sec.freq_hz,
+        .gain_db = sec.gain_db,
+        .q = sec.q,
+        .enabled = true,
+    });
+  }
+  return out;
 }
 
 void PrintCapabilities()
@@ -409,9 +447,34 @@ int main(int argc, char** argv)
     }
     sonitude::dsp::CalibrationApplier calibration_applier(
         calibration.channels, geometry_ids, runtime.capture.sample_rate_hz, runtime.calibration_dc_block_hz);
+    std::array<sonitude::dsp::BiquadCascade, sonitude::audio::kMicChannels> per_mic_eq{};
+    std::array<bool, sonitude::audio::kMicChannels> per_mic_eq_enabled{};
+    for (std::size_t i = 0; i < sonitude::audio::kMicChannels; ++i)
+    {
+      const auto specs = BuildEqSpecs(calibration.channels[i].eq.sections);
+      per_mic_eq[i].configure(
+          runtime.capture.sample_rate_hz, specs, 1U, calibration.channels[i].eq.enabled && !specs.empty());
+      per_mic_eq_enabled[i] = calibration.channels[i].eq.enabled && !specs.empty();
+    }
+    sonitude::dsp::BiquadCascade common_eq;
+    const auto common_eq_specs = BuildEqSpecs(runtime.common_eq.sections);
+    common_eq.configure(runtime.capture.sample_rate_hz,
+                        common_eq_specs,
+                        1U,
+                        runtime.common_eq.enabled && !common_eq_specs.empty());
     calibration_applier.processBlock(
         std::span<const sonitude::audio::MicFrame>(mic.data(), mic.size()),
         std::span<sonitude::audio::MicFrame>(calibrated.data(), calibrated.size()));
+    for (auto& frame : calibrated)
+    {
+      for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+      {
+        if (per_mic_eq_enabled[ch])
+        {
+          frame[ch] = per_mic_eq[ch].processSample(0U, frame[ch]);
+        }
+      }
+    }
 
     const auto events = LoadSteeringScript(script_path, input_wav.sample_rate_hz);
     const bool use_fixed = runtime.spatial.backend == "fixed_measured";
@@ -620,6 +683,10 @@ int main(int argc, char** argv)
         std::copy(mono.begin() + static_cast<std::ptrdiff_t>(start),
                   mono.begin() + static_cast<std::ptrdiff_t>(start + count),
                   suppressed_tap.begin() + static_cast<std::ptrdiff_t>(start));
+      }
+      if (common_eq.enabled())
+      {
+        common_eq.processMono(std::span<float>(mono.data() + start, count));
       }
       if (!disable_limiter)
       {

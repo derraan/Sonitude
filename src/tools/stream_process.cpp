@@ -55,6 +55,7 @@
 // and emits L=R of directional mono (protocol-defined fallback).
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -78,6 +79,7 @@
 #include "dsp/array_profile.hpp"
 #include "dsp/beamformer.hpp"
 #include "dsp/binaural_renderer.hpp"
+#include "dsp/biquad_cascade.hpp"
 #include "dsp/calibration_applier.hpp"
 #include "dsp/fixed_binaural_mvdr.hpp"
 #include "dsp/hrtf_table.hpp"
@@ -396,6 +398,42 @@ sonitude::dsp::ArrayDownmixWeights ArrayDownmixForGeometry(
   }
   return sonitude::dsp::MakeArrayDownmixWeights(mic_x);
 }
+
+std::vector<sonitude::dsp::BiquadSectionSpec> BuildEqSpecs(
+    const std::vector<sonitude::app::CalibrationChannel::EqSection>& sections)
+{
+  std::vector<sonitude::dsp::BiquadSectionSpec> out;
+  out.reserve(sections.size());
+  for (const auto& sec : sections)
+  {
+    out.push_back({
+        .type = sonitude::dsp::BiquadCascade::ParseType(sec.type),
+        .freq_hz = sec.freq_hz,
+        .gain_db = sec.gain_db,
+        .q = sec.q,
+        .enabled = true,
+    });
+  }
+  return out;
+}
+
+std::vector<sonitude::dsp::BiquadSectionSpec> BuildEqSpecs(
+    const std::vector<sonitude::app::EqSectionConfig>& sections)
+{
+  std::vector<sonitude::dsp::BiquadSectionSpec> out;
+  out.reserve(sections.size());
+  for (const auto& sec : sections)
+  {
+    out.push_back({
+        .type = sonitude::dsp::BiquadCascade::ParseType(sec.type),
+        .freq_hz = sec.freq_hz,
+        .gain_db = sec.gain_db,
+        .q = sec.q,
+        .enabled = true,
+    });
+  }
+  return out;
+}
 }  // namespace
 
 int main(int argc, char** argv)
@@ -483,6 +521,21 @@ int main(int argc, char** argv)
 
     sonitude::dsp::CalibrationApplier calibration_applier(
         calibration.channels, geometry_ids, sample_rate_hz, runtime.calibration_dc_block_hz);
+    std::array<sonitude::dsp::BiquadCascade, sonitude::audio::kMicChannels> per_mic_eq{};
+    std::array<bool, sonitude::audio::kMicChannels> per_mic_eq_enabled{};
+    for (std::size_t i = 0; i < sonitude::audio::kMicChannels; ++i)
+    {
+      const auto specs = BuildEqSpecs(calibration.channels[i].eq.sections);
+      per_mic_eq[i].configure(
+          sample_rate_hz, specs, 1U, calibration.channels[i].eq.enabled && !specs.empty());
+      per_mic_eq_enabled[i] = calibration.channels[i].eq.enabled && !specs.empty();
+    }
+    sonitude::dsp::BiquadCascade common_eq;
+    const auto common_eq_specs = BuildEqSpecs(runtime.common_eq.sections);
+    common_eq.configure(sample_rate_hz,
+                        common_eq_specs,
+                        1U,
+                        runtime.common_eq.enabled && !common_eq_specs.empty());
 
     sonitude::dsp::MvdrBeamformer beamformer;
     sonitude::dsp::FixedBinauralMvdr fixed_beamformer;
@@ -714,6 +767,16 @@ int main(int argc, char** argv)
       calibration_applier.processBlock(
           std::span<const sonitude::audio::MicFrame>(mic_frames.data(), frame_count),
           std::span<sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count));
+      for (std::size_t i = 0; i < frame_count; ++i)
+      {
+        for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+        {
+          if (per_mic_eq_enabled[ch])
+          {
+            calibrated_frames[i][ch] = per_mic_eq[ch].processSample(0U, calibrated_frames[i][ch]);
+          }
+        }
+      }
 
       const sonitude::audio::BeamformerSteering target{azimuth_deg, elevation_deg};
       if (!have_target || std::fabs(target.azimuth_deg - last_target.azimuth_deg) > 0.01F ||
@@ -835,6 +898,10 @@ int main(int argc, char** argv)
       {
         suppressor.process(std::span<float>(mono.data(), frame_count));
         out_flags |= kOutSuppressionApplied;
+      }
+      if (common_eq.enabled())
+      {
+        common_eq.processMono(std::span<float>(mono.data(), frame_count));
       }
 
       const bool protocol_binaural = (flags & kFlagBinauralEnabled) != 0;

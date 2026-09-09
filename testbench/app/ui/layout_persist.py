@@ -11,11 +11,15 @@ APP = "AudioAlgorithmTestBench"
 KEY_RECORDED_H = "layout/recorded/horizontal"
 KEY_RECORDED_V = "layout/recorded/vertical"
 KEY_REALTIME_H = "layout/realtime/horizontal"
+KEY_CALIBRATION_H = "layout/calibration/horizontal"
+KEY_UPLOAD_H = "layout/upload/vertical"
 
 # Initial recorded horizontal split: ~38% controls / 62% inspection at 1280 px.
 RECORDED_H_DEFAULT = (486, 794)
 RECORDED_V_DEFAULT = (420, 220)
 REALTIME_H_DEFAULT = (460, 820)
+CALIBRATION_H_DEFAULT = (540, 740)
+UPLOAD_H_DEFAULT = (540, 220)
 
 
 def settings() -> QSettings:

@@ -49,6 +49,7 @@ add_library(
   src/dsp/array_profile.cpp
   src/dsp/fixed_binaural_mvdr.cpp
   src/dsp/binaural_renderer.cpp
+  src/dsp/biquad_cascade.cpp
   src/dsp/calibration_applier.cpp
   src/dsp/hrtf_table.cpp
   src/dsp/limiter.cpp
@@ -318,6 +319,7 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/calibration_tests.cpp
     tests/unit/steering_lut_tests.cpp
     tests/unit/beamformer_tests.cpp
+    tests/unit/biquad_tests.cpp
     tests/unit/array_profile_tests.cpp
     tests/unit/fixed_mvdr_tests.cpp
     tests/unit/limiter_tests.cpp

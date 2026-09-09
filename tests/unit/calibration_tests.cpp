@@ -340,6 +340,39 @@ void TestEstimatorLowSignalIsUnresolved()
   Require(out.report.overall_status == sonitude::app::CalibrationQualityStatus::Unresolved,
           "silent capture should fail closed as unresolved");
 }
+
+void TestCalibrationEqValidation()
+{
+  sonitude::app::CalibrationConfig calibration;
+  calibration.sample_rate_hz = 44100;
+  const auto ids = GeometryIds();
+  for (const auto& id : ids)
+  {
+    sonitude::app::CalibrationChannel ch;
+    ch.id = id;
+    sonitude::app::CalibrationChannel::EqSection sec;
+    sec.type = "PK";
+    sec.freq_hz = 2000.0F;
+    sec.gain_db = 2.0F;
+    sec.q = 1.2F;
+    ch.eq.enabled = true;
+    ch.eq.sections.push_back(sec);
+    calibration.channels.push_back(ch);
+  }
+  sonitude::app::ValidateCalibrationConfig(calibration, ids, 44100);
+
+  calibration.channels[0].eq.sections[0].type = "BAD";
+  bool rejected = false;
+  try
+  {
+    sonitude::app::ValidateCalibrationConfig(calibration, ids, 44100);
+  }
+  catch (const std::runtime_error&)
+  {
+    rejected = true;
+  }
+  Require(rejected, "unknown EQ type must be rejected");
+}
 }  // namespace
 
 void RunCalibrationTests()
@@ -354,6 +387,7 @@ void RunCalibrationTests()
   TestCalibrationRejectsBadReference();
   TestDcBlockerCutoff();
   TestWriter();
+  TestCalibrationEqValidation();
   TestEstimatorUnity();
   TestEstimatorKnownMismatch();
   TestEstimatorLowSignalIsUnresolved();

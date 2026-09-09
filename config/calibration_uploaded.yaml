@@ -1,0 +1,90 @@
+sample_rate_hz: 44100
+channels:
+- id: M0_left_ear
+  polarity: 1
+  gain_linear: 0.8904297037634552
+  delay_samples: -1.989314984180206
+  dc_offset: 0.0
+  eq:
+    enabled: false
+    sections: []
+- id: M1_left_arc
+  polarity: 1
+  gain_linear: 0.8849123913414519
+  delay_samples: -2.9072536105346947
+  dc_offset: 0.0
+  eq:
+    enabled: false
+    sections:
+    - type: PK
+      freq_hz: 2000.0
+      gain_db: -0.5198573579261314
+      q: 1.2
+- id: M2_left_top
+  polarity: 1
+  gain_linear: 0.9172587655664407
+  delay_samples: 0.0
+  dc_offset: 0.0
+  eq:
+    enabled: false
+    sections: []
+- id: M3_right_top
+  polarity: 1
+  gain_linear: 1.093398631779487
+  delay_samples: 9.636200135959168
+  dc_offset: 0.0
+  eq:
+    enabled: false
+    sections:
+    - type: PK
+      freq_hz: 650.0
+      gain_db: -0.890678415907019
+      q: 1.2
+    - type: PK
+      freq_hz: 2000.0
+      gain_db: 1.8075788943838578
+      q: 1.2
+    - type: PK
+      freq_hz: 5200.0
+      gain_db: 2.4073845830196667
+      q: 1.2
+- id: M4_right_arc
+  polarity: 1
+  gain_linear: 1.1773661474511838
+  delay_samples: 19.048835883477235
+  dc_offset: 0.0
+  eq:
+    enabled: false
+    sections:
+    - type: PK
+      freq_hz: 650.0
+      gain_db: -0.5115636371612575
+      q: 1.2
+    - type: PK
+      freq_hz: 2000.0
+      gain_db: 2.2029125120242563
+      q: 1.2
+    - type: PK
+      freq_hz: 5200.0
+      gain_db: 3.280768561803722
+      q: 1.2
+- id: M5_right_ear
+  polarity: -1
+  gain_linear: 1.0747764530702004
+  delay_samples: 23.27239147812781
+  dc_offset: 0.0
+  eq:
+    enabled: false
+    sections:
+    - type: PK
+      freq_hz: 650.0
+      gain_db: -0.9651927811552913
+      q: 1.2
+    - type: PK
+      freq_hz: 2000.0
+      gain_db: 2.336751405334714
+      q: 1.2
+    - type: PK
+      freq_hz: 5200.0
+      gain_db: 1.6294714162430144
+      q: 1.2

@@ -1,0 +1,168 @@
+"""Helpers for committing testbench settings into runtime YAML."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from shutil import copy2
+from typing import Any
+
+import yaml
+
+from app.config_reader import DEFAULT_CONFIG_PATH
+from app.processing.suppression import SuppressionMode, parse_suppression_mode
+from app.storage.models import BinauralRequest, SuppressorRequest
+
+__all__ = [
+    "CalibrationCommitSnapshot",
+    "DspCommitSnapshot",
+    "UploadCommitResult",
+    "commit_runtime_config",
+]
+
+_UPLOADED_CALIBRATION_NAME = "calibration_uploaded.yaml"
+
+
+@dataclass(frozen=True)
+class CalibrationCommitSnapshot:
+    variant: str
+    variant_yaml: Path | None
+    common_eq_enabled: bool
+    common_eq_sections: list[dict[str, Any]] | None
+
+
+@dataclass(frozen=True)
+class DspCommitSnapshot:
+    suppression_mode: str
+    suppression_backend: str | None
+    suppressor: SuppressorRequest
+    binaural: BinauralRequest
+
+
+@dataclass(frozen=True)
+class UploadCommitResult:
+    committed_config_path: Path
+    calibration_copy_path: Path
+    backup_path: Path
+    resolved_suppression_enabled: bool
+    suppression_mode: SuppressionMode
+
+
+def _timestamp_backup_name(config_path: Path) -> str:
+    stem = config_path.stem
+    suffix = config_path.suffix or ".yaml"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{stem}_{ts}{suffix}"
+
+
+def _next_backup_path(config_path: Path) -> Path:
+    backup_dir = config_path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    candidate = backup_dir / _timestamp_backup_name(config_path)
+    if not candidate.exists():
+        return candidate
+    for idx in range(1, 1000):
+        with_suffix = backup_dir / f"{candidate.stem}_{idx}{candidate.suffix}"
+        if not with_suffix.exists():
+            return with_suffix
+    raise RuntimeError("Could not allocate unique backup filename in config/backups.")
+
+
+def _normalize_common_eq_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for section in sections:
+        normalized.append(
+            {
+                "type": str(section.get("type", section.get("ftype", "PK"))),
+                "freq_hz": float(section["freq_hz"]),
+                "gain_db": float(section.get("gain_db", 0.0)),
+                "q": float(section["q"]),
+            }
+        )
+    return normalized
+
+
+def commit_runtime_config(
+    dest: str | Path = DEFAULT_CONFIG_PATH,
+    *,
+    base_config: str | Path = DEFAULT_CONFIG_PATH,
+    calibration_src: str | Path,
+    common_eq_enabled: bool = False,
+    common_eq_sections: list[dict[str, Any]] | None = None,
+    dsp: DspCommitSnapshot,
+) -> UploadCommitResult:
+    """Commit calibration + DSP knob selections into runtime YAML for next start."""
+    dest_path = Path(dest)
+    base_path = Path(base_config)
+    calibration_src_path = Path(calibration_src)
+    if not calibration_src_path.is_file():
+        raise FileNotFoundError(f"Calibration YAML does not exist: {calibration_src_path}")
+    if not base_path.is_file():
+        raise FileNotFoundError(f"Base runtime config does not exist: {base_path}")
+
+    with open(base_path, encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle)
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"Runtime config is not a mapping: {base_path}")
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path = _next_backup_path(dest_path)
+    if not dest_path.is_file():
+        raise FileNotFoundError(f"Destination runtime config does not exist: {dest_path}")
+    copy2(dest_path, backup_path)
+
+    calibration_copy_path = dest_path.parent / _UPLOADED_CALIBRATION_NAME
+    copy2(calibration_src_path, calibration_copy_path)
+    raw["calibration_path"] = _UPLOADED_CALIBRATION_NAME
+
+    suppression = raw.setdefault("suppression", {})
+    if not isinstance(suppression, dict):
+        raise RuntimeError("Runtime config field 'suppression' must be a mapping.")
+    mode = parse_suppression_mode(dsp.suppression_mode)
+    yaml_enabled = bool(suppression.get("enabled", False))
+    if mode is SuppressionMode.ON:
+        suppression["enabled"] = True
+    elif mode is SuppressionMode.OFF:
+        suppression["enabled"] = False
+    else:
+        suppression["enabled"] = yaml_enabled
+
+    if dsp.suppression_backend:
+        suppression["backend"] = dsp.suppression_backend
+    suppression["fade_ms"] = float(dsp.suppressor.fade_ms)
+    suppression["activity_threshold"] = float(dsp.suppressor.activity_threshold)
+    suppression["confidence_threshold"] = float(dsp.suppressor.confidence_threshold)
+
+    steering = raw.setdefault("steering", {})
+    if not isinstance(steering, dict):
+        raise RuntimeError("Runtime config field 'steering' must be a mapping.")
+    steering["ambient_floor_linear"] = float(dsp.suppressor.ambient_floor_linear)
+
+    binaural = raw.setdefault("binaural", {})
+    if not isinstance(binaural, dict):
+        raise RuntimeError("Runtime config field 'binaural' must be a mapping.")
+    direction = binaural.setdefault("direction", {})
+    if not isinstance(direction, dict):
+        raise RuntimeError("Runtime config field 'binaural.direction' must be a mapping.")
+    binaural["enabled"] = bool(dsp.binaural.enabled)
+    if dsp.binaural.backend:
+        binaural["backend"] = dsp.binaural.backend
+    direction["follow_steering"] = bool(dsp.binaural.follow_beamformer_steering)
+    direction["azimuth_deg"] = float(dsp.binaural.azimuth_deg)
+    direction["elevation_deg"] = float(dsp.binaural.elevation_deg)
+
+    if common_eq_sections is not None:
+        raw["common_eq"] = {
+            "enabled": bool(common_eq_enabled),
+            "sections": _normalize_common_eq_sections(common_eq_sections),
+        }
+
+    dest_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return UploadCommitResult(
+        committed_config_path=dest_path,
+        calibration_copy_path=calibration_copy_path,
+        backup_path=backup_path,
+        resolved_suppression_enabled=bool(suppression["enabled"]),
+        suppression_mode=mode,
+    )

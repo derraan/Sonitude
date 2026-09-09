@@ -25,3 +25,6 @@ data/hrtf_cache/
 
 # Local capture files for test-bench replay (large; do not commit)
 /test_data/
+
+# Local backups from Upload tab commits
+/config/backups/

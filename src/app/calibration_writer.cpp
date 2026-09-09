@@ -78,6 +78,21 @@ void WriteCalibrationYamlBackupSafe(const std::string& path,
     ch["gain_linear"] = channel.gain_linear;
     ch["delay_samples"] = channel.delay_samples;
     ch["dc_offset"] = channel.dc_offset;
+    if (channel.eq.enabled || !channel.eq.sections.empty())
+    {
+      YAML::Node eq;
+      eq["enabled"] = channel.eq.enabled;
+      for (const auto& sec : channel.eq.sections)
+      {
+        YAML::Node sec_node;
+        sec_node["type"] = sec.type;
+        sec_node["freq_hz"] = sec.freq_hz;
+        sec_node["gain_db"] = sec.gain_db;
+        sec_node["q"] = sec.q;
+        eq["sections"].push_back(sec_node);
+      }
+      ch["eq"] = eq;
+    }
     root["channels"].push_back(ch);
   }
 

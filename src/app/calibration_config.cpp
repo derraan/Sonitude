@@ -20,6 +20,11 @@ T RequireScalar(const YAML::Node& node, const char* key)
   return node[key].as<T>();
 }
 
+bool IsKnownEqType(const std::string& type)
+{
+  return type == "PK" || type == "LS" || type == "HS" || type == "LP" || type == "HP";
+}
+
 bool IsFiniteFloat(const float value)
 {
   return std::isfinite(value);
@@ -133,6 +138,34 @@ CalibrationConfig LoadCalibrationFromFile(const std::string& path)
     {
       channel.dc_offset = item["dc_offset"].as<float>();
     }
+    if (item["eq"])
+    {
+      const YAML::Node eq = item["eq"];
+      if (eq["enabled"])
+      {
+        channel.eq.enabled = eq["enabled"].as<bool>();
+      }
+      if (eq["sections"])
+      {
+        const YAML::Node sections = eq["sections"];
+        if (!sections.IsSequence())
+        {
+          throw std::runtime_error("calibration eq.sections must be a sequence");
+        }
+        for (const YAML::Node& s : sections)
+        {
+          CalibrationChannel::EqSection sec;
+          sec.type = RequireScalar<std::string>(s, "type");
+          sec.freq_hz = RequireScalar<float>(s, "freq_hz");
+          if (s["gain_db"])
+          {
+            sec.gain_db = s["gain_db"].as<float>();
+          }
+          sec.q = RequireScalar<float>(s, "q");
+          channel.eq.sections.push_back(sec);
+        }
+      }
+    }
     calibration.channels.push_back(channel);
   }
   return calibration;
@@ -200,6 +233,29 @@ void ValidateCalibrationConfig(const CalibrationConfig& calibration,
     if (std::fabs(channel.delay_samples) > 256.0F)
     {
       throw std::runtime_error("calibration delay_samples out of range");
+    }
+    if (channel.eq.sections.size() > 24U)
+    {
+      throw std::runtime_error("calibration eq exceeds max 24 sections");
+    }
+    for (const auto& section : channel.eq.sections)
+    {
+      if (!IsKnownEqType(section.type))
+      {
+        throw std::runtime_error("calibration eq type must be one of PK/LS/HS/LP/HP");
+      }
+      if (!(section.freq_hz > 0.0F && section.freq_hz < (0.5F * static_cast<float>(expected_sample_rate_hz))))
+      {
+        throw std::runtime_error("calibration eq freq_hz out of range");
+      }
+      if (!(section.q > 0.0F && section.q <= 20.0F))
+      {
+        throw std::runtime_error("calibration eq q must be in (0, 20]");
+      }
+      if (std::fabs(section.gain_db) > 24.0F)
+      {
+        throw std::runtime_error("calibration eq gain_db out of range");
+      }
     }
   }
   if (calibration_id_set.size() != geometry_id_set.size())
