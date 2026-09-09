@@ -71,3 +71,7 @@ zones:
   front_auto_focus:
     azimuth_min_deg: -45.0
     azimuth_max_deg: 45.0
+realtime:
+  capture_priority: 80
+  playback_priority: 78
+  enable_mlockall: true

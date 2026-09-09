@@ -11,6 +11,9 @@ option(SONITUDE_BUILD_TESTS "Build Sonitude unit tests" ON)
 option(SONITUDE_FETCH_DEPS "Fetch dependencies when not found locally" ON)
 option(SONITUDE_WITH_LIBSAMPLERATE "Enable libsamplerate-backed resampler" ON)
 option(SONITUDE_ENABLE_SANITIZERS "Enable address/UB sanitizers" OFF)
+option(SONITUDE_BUILD_FUZZERS "Build Sonitude libFuzzer harnesses" OFF)
+set(SONITUDE_SANITIZER "none" CACHE STRING "Sanitizer mode: none,address,thread")
+set_property(CACHE SONITUDE_SANITIZER PROPERTY STRINGS none address thread)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   option(SONITUDE_WITH_ALSA "Enable ALSA audio modules" ON)
 else()
@@ -58,6 +61,7 @@ add_library(
   src/dsp/suppression_stage.cpp
   src/dsp/suppressor.cpp
   src/rt/rt_thread.cpp
+  src/rt/wake_event.cpp
   src/spatial/mock_doa_provider.cpp
   src/spatial/odas_message_parser.cpp
   src/spatial/odas_provider.cpp
@@ -273,6 +277,35 @@ target_link_libraries(
     sonitude_core
 )
 
+if(SONITUDE_BUILD_FUZZERS)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "SONITUDE_BUILD_FUZZERS requires clang/clang++")
+  endif()
+
+  foreach(fuzz_target IN ITEMS odas_parser wav_io)
+    add_executable(
+      fuzz_${fuzz_target}
+      tests/fuzz/${fuzz_target}_fuzz.cpp
+    )
+    target_link_libraries(
+      fuzz_${fuzz_target}
+      PRIVATE
+        sonitude_core
+    )
+    target_compile_options(
+      fuzz_${fuzz_target}
+      PRIVATE
+        -fsanitize=fuzzer,address,undefined
+        -fno-omit-frame-pointer
+    )
+    target_link_options(
+      fuzz_${fuzz_target}
+      PRIVATE
+        -fsanitize=fuzzer,address,undefined
+    )
+  endforeach()
+endif()
+
 if(SONITUDE_BUILD_TESTS)
   enable_testing()
 
@@ -297,6 +330,7 @@ if(SONITUDE_BUILD_TESTS)
     tests/support/alloc_counter.cpp
     tests/unit/odas_parser_tests.cpp
     tests/unit/control_loop_tests.cpp
+    tests/unit/source_tracker_tests.cpp
     tests/unit/zone_tests.cpp
     tests/unit/state_machine_tests.cpp
   )
@@ -317,6 +351,13 @@ if(SONITUDE_BUILD_TESTS)
     PRIVATE
       SONITUDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
   )
+  if(SONITUDE_SANITIZER STREQUAL "thread")
+    target_compile_definitions(
+      sonitude_unit_tests
+      PRIVATE
+        SONITUDE_DISABLE_ALLOC_COUNTER_GLOBAL_NEW=1
+    )
+  endif()
 
   add_test(
     NAME sonitude_unit_tests
@@ -324,13 +365,26 @@ if(SONITUDE_BUILD_TESTS)
   )
 endif()
 
-if(SONITUDE_ENABLE_SANITIZERS AND NOT MSVC)
+if(NOT MSVC)
+  if(SONITUDE_SANITIZER STREQUAL "address")
+    set(_sonitude_sanitize_compile_flags -fsanitize=address,undefined -fno-omit-frame-pointer)
+    set(_sonitude_sanitize_link_flags -fsanitize=address,undefined)
+  elseif(SONITUDE_SANITIZER STREQUAL "thread")
+    set(_sonitude_sanitize_compile_flags -fsanitize=thread -fno-omit-frame-pointer)
+    set(_sonitude_sanitize_link_flags -fsanitize=thread)
+  elseif(SONITUDE_ENABLE_SANITIZERS)
+    set(_sonitude_sanitize_compile_flags -fsanitize=address,undefined -fno-omit-frame-pointer)
+    set(_sonitude_sanitize_link_flags -fsanitize=address,undefined)
+  endif()
+endif()
+
+if(DEFINED _sonitude_sanitize_compile_flags)
   get_property(_sonitude_sanitizer_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
   foreach(_tgt IN LISTS _sonitude_sanitizer_targets)
     get_target_property(_type ${_tgt} TYPE)
     if(_type STREQUAL "EXECUTABLE" OR _type STREQUAL "STATIC_LIBRARY" OR _type STREQUAL "SHARED_LIBRARY")
-      target_compile_options(${_tgt} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
-      target_link_options(${_tgt} PRIVATE -fsanitize=address,undefined)
+      target_compile_options(${_tgt} PRIVATE ${_sonitude_sanitize_compile_flags})
+      target_link_options(${_tgt} PRIVATE ${_sonitude_sanitize_link_flags})
     endif()
   endforeach()
 endif()

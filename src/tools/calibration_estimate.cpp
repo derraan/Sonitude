@@ -1,5 +1,7 @@
 #include <filesystem>
 #include <iostream>
+#include <cstdlib>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -20,6 +22,7 @@ void PrintUsage()
             << "  --silence-frames <N>        silence region length (default: auto)\n"
             << "  --signal-start <N>          signal region start frame (default: after silence)\n"
             << "  --signal-frames <N>         signal region length (default: remainder)\n"
+            << "  --min-correlation <V>       minimum delay/polarity confidence [0,1]\n"
             << "  --hardware-evidence         mark output as hardware-evidence-backed\n";
 }
 
@@ -52,6 +55,7 @@ int main(int argc, char** argv)
   std::size_t silence_frames = 0;
   std::size_t signal_start = 0;
   std::size_t signal_frames = 0;
+  float min_correlation = -1.0F;
   bool hardware_evidence = false;
 
   for (int i = 3; i < argc; ++i)
@@ -84,6 +88,21 @@ int main(int argc, char** argv)
     else if (arg == "--hardware-evidence")
     {
       hardware_evidence = true;
+    }
+    else if (arg == "--min-correlation" && i + 1 < argc)
+    {
+      char* parse_end = nullptr;
+      min_correlation = std::strtof(argv[++i], &parse_end);
+      if (parse_end == argv[i] || (parse_end != nullptr && *parse_end != '\0'))
+      {
+        std::cerr << "--min-correlation must be a float literal\n";
+        return 1;
+      }
+      if (!std::isfinite(min_correlation) || min_correlation < 0.0F || min_correlation > 1.0F)
+      {
+        std::cerr << "--min-correlation must be in [0,1]\n";
+        return 1;
+      }
     }
     else if (arg == "--help" || arg == "-h")
     {
@@ -118,18 +137,19 @@ int main(int argc, char** argv)
     options.signal_frame_count = signal_frames;
     options.geometry_id = geometry.profile_name;
     options.hardware_evidence = hardware_evidence;
+    if (min_correlation >= 0.0F)
+    {
+      options.delay_confidence_threshold = min_correlation;
+      options.polarity_correlation_threshold = min_correlation;
+    }
 
     const auto estimate = sonitude::app::EstimateCalibrationFromCapture(
         std::span<const float>(wav.interleaved.data(), wav.interleaved.size()), wav.channels, options);
 
-    const std::filesystem::path out_dir = std::filesystem::path(out_path).parent_path();
-    if (!out_dir.empty())
-    {
-      std::filesystem::create_directories(out_dir);
-    }
+    const bool failed_closed =
+        estimate.report.overall_status == sonitude::app::CalibrationQualityStatus::Invalid ||
+        estimate.report.overall_status == sonitude::app::CalibrationQualityStatus::Unresolved;
 
-    sonitude::app::WriteCalibrationYamlBackupSafe(out_path, estimate.calibration, true);
-    std::cout << "Wrote calibration YAML: " << out_path << "\n";
     std::cout << "overall_status: "
               << sonitude::app::CalibrationQualityStatusToString(estimate.report.overall_status)
               << "\n";
@@ -139,6 +159,20 @@ int main(int argc, char** argv)
       sonitude::app::WriteCalibrationReport(report_path, estimate.report);
       std::cout << "Wrote calibration report: " << report_path << "\n";
     }
+
+    const std::filesystem::path out_dir = std::filesystem::path(out_path).parent_path();
+    if (!out_dir.empty())
+    {
+      std::filesystem::create_directories(out_dir);
+    }
+    if (failed_closed)
+    {
+      std::cout << "Calibration is not usable; refusing to write YAML output.\n";
+      return 2;
+    }
+
+    sonitude::app::WriteCalibrationYamlBackupSafe(out_path, estimate.calibration, true);
+    std::cout << "Wrote calibration YAML: " << out_path << "\n";
 
     for (const auto& ch : estimate.report.channels)
     {
@@ -151,7 +185,7 @@ int main(int argc, char** argv)
       std::cout << " conf=" << ch.delay_confidence << "\n";
     }
 
-    return estimate.report.overall_status == sonitude::app::CalibrationQualityStatus::Invalid ? 2 : 0;
+    return 0;
   }
   catch (const std::exception& ex)
   {

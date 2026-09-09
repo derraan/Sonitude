@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <stdexcept>
 #include <unordered_set>
@@ -68,6 +70,30 @@ std::vector<ZoneConfig> ParseZones(const YAML::Node& node)
     zone.name = it.first.as<std::string>();
     zone.azimuth_min_deg = RequireScalar<float>(it.second, "azimuth_min_deg");
     zone.azimuth_max_deg = RequireScalar<float>(it.second, "azimuth_max_deg");
+    if (it.second["policy"])
+    {
+      std::string policy = it.second["policy"].as<std::string>();
+      std::transform(policy.begin(), policy.end(), policy.begin(), [](const unsigned char c)
+      {
+        return static_cast<char>(std::tolower(c));
+      });
+      if (policy == "focus")
+      {
+        zone.policy = ZonePolicy::Focus;
+      }
+      else if (policy == "assist")
+      {
+        zone.policy = ZonePolicy::Assist;
+      }
+      else if (policy == "ambient")
+      {
+        zone.policy = ZonePolicy::Ambient;
+      }
+      else
+      {
+        throw std::runtime_error("zone policy must be one of: focus, assist, ambient");
+      }
+    }
     out.push_back(zone);
   }
   return out;
@@ -232,6 +258,11 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
   config.telemetry.emit_json = RequireScalar<bool>(telemetry, "emit_json");
   config.telemetry.stats_period_ms = RequireScalar<std::uint32_t>(telemetry, "stats_period_ms");
 
+  const YAML::Node realtime = root["realtime"];
+  config.realtime.capture_priority = RequireScalar<std::int32_t>(realtime, "capture_priority");
+  config.realtime.playback_priority = RequireScalar<std::int32_t>(realtime, "playback_priority");
+  config.realtime.enable_mlockall = RequireScalar<bool>(realtime, "enable_mlockall");
+
   if (root["binaural"])
   {
     const YAML::Node binaural = root["binaural"];
@@ -354,6 +385,11 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error("ASRC ratio bounds are invalid");
   }
+  if (!std::isfinite(config.asrc.min_ratio) || !std::isfinite(config.asrc.max_ratio) ||
+      !std::isfinite(config.asrc.pi_kp) || !std::isfinite(config.asrc.pi_ki))
+  {
+    throw std::runtime_error("ASRC scalar values must be finite");
+  }
 
   if (config.asrc.target_buffer_frames == 0)
   {
@@ -373,6 +409,10 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   if (config.steering.steering_ramp_ms < 10.0F || config.steering.steering_ramp_ms > 500.0F)
   {
     throw std::runtime_error("steering_ramp_ms is outside safe bounds");
+  }
+  if (!std::isfinite(config.steering.steering_ramp_ms))
+  {
+    throw std::runtime_error("steering_ramp_ms must be finite");
   }
 
   if (config.steering.ambient_floor_linear < 0.0F || config.steering.ambient_floor_linear > 1.0F)
@@ -476,6 +516,25 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
     }
   }
 
+  if (!config.odas.enabled && !config.odas.use_mock_provider)
+  {
+    throw std::runtime_error(
+        "odas.enabled=false requires odas.use_mock_provider=true to avoid contradictory provider settings");
+  }
+  if (config.telemetry.stats_period_ms == 0)
+  {
+    throw std::runtime_error("telemetry.stats_period_ms must be non-zero");
+  }
+
+  if (config.realtime.capture_priority < 1 || config.realtime.capture_priority > 99)
+  {
+    throw std::runtime_error("realtime.capture_priority must be in [1, 99]");
+  }
+  if (config.realtime.playback_priority < 1 || config.realtime.playback_priority > 99)
+  {
+    throw std::runtime_error("realtime.playback_priority must be in [1, 99]");
+  }
+
   static const std::array<const char*, 5> kKnownBinauralBackends = {
       "mono_reference", "itd_ild", "compact_hrtf", "full_hrtf_reference", "array_downmix"};
   const bool known_backend = std::any_of(
@@ -513,6 +572,23 @@ void ValidateRuntimeAudioContract(const RuntimeConfig& config, const RuntimeAudi
   if (contract.capture_channels == 0)
   {
     throw std::runtime_error("negotiated capture channel count must be non-zero");
+  }
+  if (contract.capture_period_frames == 0 || contract.playback_period_frames == 0)
+  {
+    throw std::runtime_error("negotiated capture/playback periods must be non-zero");
+  }
+  if (contract.asrc_max_ratio <= 0.0)
+  {
+    throw std::runtime_error("negotiated ASRC max ratio must be positive");
+  }
+  if (contract.asrc_max_ratio > config.asrc.max_ratio)
+  {
+    throw std::runtime_error("negotiated ASRC max ratio exceeds configured ASRC max ratio");
+  }
+  if (contract.required_playback_scratch_frames > contract.negotiated_playback_scratch_frames)
+  {
+    throw std::runtime_error(
+        "playback scratch capacity is below the negotiated minimum for capture/playback periods");
   }
   for (const std::size_t channel : config.active_channel_map)
   {

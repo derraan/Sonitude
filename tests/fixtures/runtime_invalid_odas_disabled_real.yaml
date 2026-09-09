@@ -1,0 +1,56 @@
+capture:
+  alsa_device: "hw:in,0"
+  sample_rate_hz: 44100
+  period_frames: 64
+  periods: 3
+playback:
+  alsa_device: "hw:out,0"
+  sample_rate_hz: 44100
+  period_frames: 64
+  periods: 3
+active_channel_map: [0, 1, 2, 3, 4, 5]
+geometry_path: "geometry_valid.yaml"
+calibration_path: "../../config/calibration_example.yaml"
+calibration_dc_block_hz: 20.0
+asrc:
+  enabled: true
+  allow_bypass_for_locked_bench: false
+  min_ratio: 0.995
+  max_ratio: 1.005
+  target_buffer_frames: 128
+  pi_kp: 0.0002
+  pi_ki: 0.00001
+steering:
+  speed_of_sound_mps: 343.0
+  reference_mic_index: 0
+  steering_ramp_ms: 150.0
+  ambient_floor_linear: 0.2
+suppression:
+  enabled: false
+  fade_ms: 120.0
+  activity_threshold: 0.03
+  confidence_threshold: 0.6
+state_machine:
+  activation_hold_ms: 400
+  confirmation_hold_ms: 250
+  release_hold_ms: 1500
+  hold_direction_ms: 1000
+  zone_direction_stability_deg: 15.0
+zones:
+  front_auto_focus:
+    azimuth_min_deg: -45.0
+    azimuth_max_deg: 45.0
+    policy: "focus"
+odas:
+  enabled: false
+  use_mock_provider: false
+  endpoint: "tcp://127.0.0.1:9000"
+telemetry:
+  log_human_readable: true
+  emit_csv: false
+  emit_json: false
+  stats_period_ms: 1000
+realtime:
+  capture_priority: 80
+  playback_priority: 78
+  enable_mlockall: false
