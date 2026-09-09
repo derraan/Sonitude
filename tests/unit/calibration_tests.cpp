@@ -345,7 +345,7 @@ void TestCalibrationEqValidation()
 {
   sonitude::app::CalibrationConfig calibration;
   calibration.sample_rate_hz = 44100;
-  const auto ids = ChannelIds();
+  const auto ids = GeometryIds();
   for (const auto& id : ids)
   {
     sonitude::app::CalibrationChannel ch;
