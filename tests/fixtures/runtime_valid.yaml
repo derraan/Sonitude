@@ -49,3 +49,6 @@ telemetry:
   emit_csv: false
   emit_json: false
   stats_period_ms: 1000
+common_eq:
+  enabled: false
+  sections: []

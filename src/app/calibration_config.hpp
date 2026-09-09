@@ -13,6 +13,19 @@ struct CalibrationChannel
   float gain_linear = 1.0F;
   float delay_samples = 0.0F;
   float dc_offset = 0.0F;
+  struct EqSection
+  {
+    std::string type = "PK";
+    float freq_hz = 1000.0F;
+    float gain_db = 0.0F;
+    float q = 0.707F;
+  };
+  struct EqConfig
+  {
+    bool enabled = false;
+    std::vector<EqSection> sections;
+  };
+  EqConfig eq;
 };
 
 struct CalibrationConfig

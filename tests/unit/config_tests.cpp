@@ -22,6 +22,7 @@ void RunSuppressorTests();
 void RunStftTests();
 void RunSpectralPostfilterTests();
 void RunBinauralTests();
+void RunBiquadTests();
 
 namespace
 {
@@ -48,6 +49,7 @@ void TestRuntimeConfigValid()
   Require(config.suppression.backend == "conservative",
           "omitted suppression.backend must default to conservative");
   Require(config.calibration_dc_block_hz > 0.0F, "calibration_dc_block_hz should parse from runtime YAML");
+  Require(config.common_eq.sections.empty(), "common_eq should parse empty section list");
 }
 
 void TestRuntimeConfigDuplicateChannelFails()
@@ -270,6 +272,32 @@ void TestAudioTypeInvariants()
   sonitude::audio::MicFrame frame{};
   Require(frame.size() == sonitude::audio::kMicChannels, "MicFrame width must match channel count");
 }
+
+void TestRuntimeConfigCommonEqValidation()
+{
+  auto config =
+      sonitude::app::LoadRuntimeConfigFromFile(FixturePath("tests/fixtures/runtime_valid.yaml"));
+  sonitude::app::EqSectionConfig sec;
+  sec.type = "PK";
+  sec.freq_hz = 1000.0F;
+  sec.gain_db = 2.0F;
+  sec.q = 1.2F;
+  config.common_eq.enabled = true;
+  config.common_eq.sections.push_back(sec);
+  sonitude::app::ValidateRuntimeConfig(config);
+
+  config.common_eq.sections[0].type = "bad";
+  bool threw = false;
+  try
+  {
+    sonitude::app::ValidateRuntimeConfig(config);
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "invalid common_eq section type should throw");
+}
 }  // namespace
 
 int main()
@@ -285,6 +313,7 @@ int main()
     TestGeometryValid();
     TestGeometryInvalidCountFails();
     TestAudioTypeInvariants();
+    TestRuntimeConfigCommonEqValidation();
     RunAudioSupportTests();
     RunRtPrimitiveTests();
     RunAsrcSimulationTests();
@@ -296,6 +325,7 @@ int main()
     RunLimiterTests();
     RunStereoLimiterTests();
     RunBinauralTests();
+    RunBiquadTests();
     RunSnapshotTests();
     RunOdasParserTests();
     RunControlLoopTests();

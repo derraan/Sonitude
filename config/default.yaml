@@ -90,3 +90,7 @@ binaural:
   model:
     head_radius_m: 0.0875
     max_ild_db: 6.0
+
+common_eq:
+  enabled: false
+  sections: []

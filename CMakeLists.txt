@@ -42,6 +42,7 @@ add_library(
   src/control/zones.cpp
   src/dsp/beamformer.cpp
   src/dsp/binaural_renderer.cpp
+  src/dsp/biquad_cascade.cpp
   src/dsp/calibration_applier.cpp
   src/dsp/hrtf_table.cpp
   src/dsp/limiter.cpp
@@ -284,6 +285,7 @@ if(SONITUDE_BUILD_TESTS)
     tests/unit/asrc_sim_tests.cpp
     tests/unit/calibration_tests.cpp
     tests/unit/beamformer_tests.cpp
+    tests/unit/biquad_tests.cpp
     tests/unit/limiter_tests.cpp
     tests/unit/stereo_limiter_tests.cpp
     tests/unit/snapshot_tests.cpp

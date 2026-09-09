@@ -1,4 +1,5 @@
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <csignal>
 #include <exception>
@@ -20,6 +21,7 @@
 #include "control/conversation_state_machine.hpp"
 #include "control/zones.hpp"
 #include "dsp/beamformer.hpp"
+#include "dsp/biquad_cascade.hpp"
 #include "dsp/binaural_renderer.hpp"
 #include "dsp/hrtf_table.hpp"
 #include "dsp/asrc_controller.hpp"
@@ -119,6 +121,42 @@ const sonitude::dsp::HrtfTable* TableFor(const sonitude::dsp::HrtfTable* compact
     return reference;
   }
   return nullptr;
+}
+
+std::vector<sonitude::dsp::BiquadSectionSpec> BuildEqSpecs(
+    const std::vector<sonitude::app::CalibrationChannel::EqSection>& sections)
+{
+  std::vector<sonitude::dsp::BiquadSectionSpec> out;
+  out.reserve(sections.size());
+  for (const auto& sec : sections)
+  {
+    out.push_back({
+        .type = sonitude::dsp::BiquadCascade::ParseType(sec.type),
+        .freq_hz = sec.freq_hz,
+        .gain_db = sec.gain_db,
+        .q = sec.q,
+        .enabled = true,
+    });
+  }
+  return out;
+}
+
+std::vector<sonitude::dsp::BiquadSectionSpec> BuildEqSpecs(
+    const std::vector<sonitude::app::EqSectionConfig>& sections)
+{
+  std::vector<sonitude::dsp::BiquadSectionSpec> out;
+  out.reserve(sections.size());
+  for (const auto& sec : sections)
+  {
+    out.push_back({
+        .type = sonitude::dsp::BiquadCascade::ParseType(sec.type),
+        .freq_hz = sec.freq_hz,
+        .gain_db = sec.gain_db,
+        .q = sec.q,
+        .enabled = true,
+    });
+  }
+  return out;
 }
 #endif
 
@@ -255,6 +293,21 @@ int main(int argc, char** argv)
                                                           geometry_ids,
                                                           dsp_sample_rate_hz,
                                                           runtime_config.calibration_dc_block_hz);
+    std::array<sonitude::dsp::BiquadCascade, sonitude::audio::kMicChannels> per_mic_eq{};
+    std::array<bool, sonitude::audio::kMicChannels> per_mic_eq_enabled{};
+    for (std::size_t i = 0; i < sonitude::audio::kMicChannels; ++i)
+    {
+      const auto specs = BuildEqSpecs(calibration.channels[i].eq.sections);
+      per_mic_eq[i].configure(
+          dsp_sample_rate_hz, specs, 1U, calibration.channels[i].eq.enabled && !specs.empty());
+      per_mic_eq_enabled[i] = calibration.channels[i].eq.enabled && !specs.empty();
+    }
+    sonitude::dsp::BiquadCascade common_eq;
+    const auto common_eq_specs = BuildEqSpecs(runtime_config.common_eq.sections);
+    common_eq.configure(dsp_sample_rate_hz,
+                        common_eq_specs,
+                        1U,
+                        runtime_config.common_eq.enabled && !common_eq_specs.empty());
 
     std::unique_ptr<sonitude::spatial::IDoaProvider> provider;
     std::vector<sonitude::spatial::MockDoaEvent> mock_events;
@@ -446,6 +499,13 @@ int main(int argc, char** argv)
       for (std::size_t i = 0; i < frame_count; ++i)
       {
         calibrated_frames[i] = calibration_applier.process(mic_frames[i]);
+        for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+        {
+          if (per_mic_eq_enabled[ch])
+          {
+            calibrated_frames[i][ch] = per_mic_eq[ch].processSample(0U, calibrated_frames[i][ch]);
+          }
+        }
       }
 
       if (mode == "passthrough")
@@ -476,6 +536,10 @@ int main(int argc, char** argv)
             std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
             std::span<float>(mono.data(), frame_count));
         suppressor.process(std::span<float>(mono.data(), frame_count));
+        if (common_eq.enabled())
+        {
+          common_eq.processMono(std::span<float>(mono.data(), frame_count));
+        }
         limiter.process(std::span<float>(mono.data(), frame_count));
         counters.suppressor_gain_milli.store(
             static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),
