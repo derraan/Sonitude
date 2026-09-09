@@ -5,6 +5,7 @@ output live, and optionally save raw/processed recordings."""
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -30,6 +31,7 @@ from app.audio_io.block_queue import DEFAULT_CAPACITY
 from app.audio_io.device_manager import InputDeviceInfo, list_input_devices
 from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.realtime_controller import RealtimeWorker
+from app.controller.upload_controller import DspCommitSnapshot
 from app.processing.capabilities import query_tool_capabilities
 from app.ui.binaural_controls import BinauralControls
 from app.ui.layout_persist import KEY_REALTIME_H, REALTIME_H_DEFAULT, restore_splitter, save_splitter
@@ -220,6 +222,17 @@ class RealtimeTab(QWidget):
 
     def save_layout(self) -> None:
         save_splitter(self._main_splitter, KEY_REALTIME_H)
+
+    def set_runtime_config_path(self, path: Path) -> None:
+        self._config_path = Path(path)
+
+    def dsp_commit_snapshot(self) -> DspCommitSnapshot:
+        return DspCommitSnapshot(
+            suppression_mode=self._suppressor.suppression_mode(),
+            suppression_backend=self._suppressor.suppression_backend(),
+            suppressor=self._suppressor.request(),
+            binaural=self._binaural.request(),
+        )
 
     def _push_binaural(self) -> None:
         if self._worker is not None:

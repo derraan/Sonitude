@@ -32,6 +32,7 @@ from app.audio_io.stream_io import load_file_overview
 from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.batch_controller import BatchWorker
 from app.controller.file_preview_controller import FilePreviewWorker
+from app.controller.upload_controller import DspCommitSnapshot
 from app.processing.capabilities import query_tool_capabilities
 from app.storage.models import SteeringEvent
 from app.storage.result_store import ResultStore
@@ -312,6 +313,20 @@ class RecordedDataTab(QWidget):
     def save_layout(self) -> None:
         save_splitter(self._main_splitter, KEY_RECORDED_H)
         save_splitter(self._inspect_splitter, KEY_RECORDED_V)
+
+    def set_runtime_config_path(self, path: Path) -> None:
+        self._config_path = Path(path)
+        row = self._file_list.currentRow()
+        if 0 <= row < len(self._selected_paths):
+            self._show_metadata(self._selected_paths[row])
+
+    def dsp_commit_snapshot(self) -> DspCommitSnapshot:
+        return DspCommitSnapshot(
+            suppression_mode=self._suppressor.suppression_mode(),
+            suppression_backend=self._suppressor.suppression_backend(),
+            suppressor=self._suppressor.request(),
+            binaural=self._binaural.request(),
+        )
 
     def _on_select_file(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Select 6-channel audio file(s)", filter=_AUDIO_FILTER)

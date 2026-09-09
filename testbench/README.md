@@ -156,6 +156,73 @@ RESTART remain usable. RECORD streams to named temp WAV files, not RAM.
 This path is for **correctness**, not the production latency budget in
 `docs/architecture.md`.
 
+## Mode 3 — Calibration
+
+The **Calibration** tab is a GUI for `python -m tools.calibration`. It does
+not run production DSP in Python.
+
+Array azimuth table (bypassable checkboxes):
+
+`0°, +30°, +60°, +90°, +120°, +140°, +160°, +180°, -30°, -60°, -90°, -120°, -140°, -160°, -180°`
+
+Default: only **0°** enabled. Import a 6-channel WAV per enabled row. Unchecked
+rows are skipped. **Primary azimuth** (defaults to 0°) feeds the runtime YAML;
+other enabled angles are estimated into the report only.
+
+Also import:
+
+- six same-position mono element sweeps (`M0`…`M5`)
+- geometry YAML (defaults to the path in `config/default.yaml`)
+- optional REW `filter-wholearray-formatted.txt`
+- optional REW `.mdat` (parses delay / peak / FR summary notes into the table)
+- **played stimulus WAV** for absolute TOF (default delay mode)
+
+Controls match the compiler CLI: primary azimuth, delay mode (absolute TOF /
+relative), elevation / distance, wavefront model, max lag / max TOF, polarity
+threshold, gain source, REW Q/boost/min frequency, and the M5 invert-test flag.
+
+**Compile calibration** writes `calibration_<tag>_{A–E}.yaml`,
+`calibration_report.json`, and `calibration_report.md` under
+`testbench/data/calibration/` (or a folder you choose).
+
+**Apply variant to Recorded / Real-Time** writes `runtime_config_overlay.yaml`
+in that folder, points `calibration_path` at the selected variant, rewrites
+relative runtime paths so they still resolve, and optionally injects guarded
+REW `common_eq` sections. The other two tabs then use that overlay for the
+next batch / live / real-time start.
+
+## Mode 4 - Upload
+
+The **Upload** tab commits the selected compiled calibration and DSP knobs to
+`config/default.yaml` for the next process start.
+
+- It always backs up the current runtime YAML to `config/backups/` first.
+- It copies the selected calibration variant to
+  `config/calibration_uploaded.yaml`.
+- It patches `default.yaml` fields used by the C++ runtime: `calibration_path`,
+  `suppression.{enabled,backend,fade_ms,activity_threshold,confidence_threshold}`,
+  `steering.ambient_floor_linear`, and
+  `binaural.{enabled,backend,direction.follow_steering,direction.azimuth_deg,direction.elevation_deg}`.
+- It preserves unrelated keys (device selection, geometry path, ASRC, zones,
+  ODAS, spectral FFT/hop, HRTF table path).
+
+Suppression mode mapping during Upload:
+
+- `ON` forces `suppression.enabled: true`
+- `OFF` forces `suppression.enabled: false`
+- `AUTO` preserves the existing `suppression.enabled` value in `default.yaml`
+
+Upload does not hot-reload running Recorded / Real-Time sessions; restart is
+required for calibration/YAML changes to take effect.
+
+**Apply vs Upload**
+
+- **Apply variant** (Calibration tab): preview path for Recorded / Real-Time
+  only via `runtime_config_overlay.yaml`.
+- **Upload**: production commit path into `config/default.yaml` (+ backup), so
+  `sonitude_realtime --config config/default.yaml` and testbench restarts use
+  the same committed settings.
+
 ## Metric definitions
 
 ### Residual
