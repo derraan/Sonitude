@@ -1,20 +1,23 @@
 capture:
-  alsa_device: "hw:PicoMic,0"
+  alsa_device: hw:PicoMic,0
   sample_rate_hz: 44100
   period_frames: 64
   periods: 3
-
 playback:
-  alsa_device: "hw:Creative,0"
+  alsa_device: hw:Creative,0
   sample_rate_hz: 44100
   period_frames: 64
   periods: 3
-
-active_channel_map: [0, 1, 2, 3, 4, 5]
-geometry_path: "geometry_soundbubble_initial.yaml"
-calibration_path: "calibration_example.yaml"
+active_channel_map:
+- 0
+- 1
+- 2
+- 3
+- 4
+- 5
+geometry_path: geometry_soundbubble_initial.yaml
+calibration_path: calibration_uploaded.yaml
 calibration_dc_block_hz: 20.0
-
 asrc:
   enabled: true
   allow_bypass_for_locked_bench: false
@@ -22,8 +25,7 @@ asrc:
   max_ratio: 1.005
   target_buffer_frames: 128
   pi_kp: 0.0002
-  pi_ki: 0.00001
-
+  pi_ki: 1.0e-05
 steering:
   speed_of_sound_mps: 343.0
   reference_mic_index: 2
@@ -36,8 +38,7 @@ steering:
   right_ear_mic_index: 5
   kemar_lut:
     enabled: true
-    table_path: "../data/hrtf/generic_sadie2_d2/compact_32.shrf"
-
+    table_path: ../data/hrtf/generic_sadie2_d2/compact_32.shrf
 suppression:
   enabled: false
   backend: conservative
@@ -48,59 +49,49 @@ suppression:
     fft_size: 128
     hop_size: 32
     gain_floor_db: -12.0
-
 spatial:
   backend: adaptive_geometric
-  # fixed_measured is an unqualified development option. It requires a compiled
-  # SMV3 profile and binaural.enabled: false so the HRTF renderer is not applied
-  # on top of the selective-binaural output.
-  profile_path: ""
+  profile_path: ''
   mask_enabled: true
   eta_low_db: -3.0
   eta_high_db: 3.0
-  mask_smooth_sec: 0.020
-
+  mask_smooth_sec: 0.02
 state_machine:
   activation_hold_ms: 400
   confirmation_hold_ms: 250
   release_hold_ms: 1500
   hold_direction_ms: 1000
   zone_direction_stability_deg: 15.0
-
 zones:
   front_auto_focus:
     azimuth_min_deg: -45.0
     azimuth_max_deg: 45.0
-    policy: "focus"
+    policy: focus
   right_assist:
     azimuth_min_deg: 45.0
     azimuth_max_deg: 100.0
-    policy: "assist"
+    policy: assist
   left_assist:
     azimuth_min_deg: -100.0
     azimuth_max_deg: -45.0
-    policy: "assist"
+    policy: assist
   rear_ambient:
     azimuth_min_deg: 100.0
     azimuth_max_deg: 260.0
-    policy: "ambient"
-
+    policy: ambient
 odas:
   enabled: false
   use_mock_provider: true
-  endpoint: "unix:///tmp/odas.sock"
-
+  endpoint: unix:///tmp/odas.sock
 telemetry:
   log_human_readable: true
   emit_csv: false
   emit_json: false
   stats_period_ms: 1000
-
 realtime:
   capture_priority: 80
   playback_priority: 78
   enable_mlockall: true
-
 binaural:
   enabled: true
   backend: compact_hrtf
@@ -112,13 +103,10 @@ binaural:
     duration_ms: 150.0
   profile:
     id: generic_sadie2_d2
-    # Experimental compact-HRIR candidate (raw 32-sample prefix). Not a
-    # selected Pico/STM32 representation; no reference-error study yet.
-    table_path: "../data/hrtf/generic_sadie2_d2/compact_32.shrf"
+    table_path: ../data/hrtf/generic_sadie2_d2/compact_32.shrf
   model:
     head_radius_m: 0.0875
     max_ild_db: 6.0
-
 common_eq:
-  enabled: false
+  enabled: true
   sections: []
