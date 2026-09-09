@@ -36,13 +36,41 @@ int main(int argc, char** argv)
       stereo[(i * 2U) + 1U] = s;
     }
     const auto bytes = sonitude::audio::FloatToInterleaved(stereo, negotiated.format);
-    const std::int64_t written = dev.writeInterleaved(bytes.data(), static_cast<std::uint32_t>(frames));
-    if (written < 0)
+    const std::size_t frame_bytes = 2U * sonitude::audio::BytesPerSample(negotiated.format);
+    std::size_t written_total = 0;
+    std::size_t stall_count = 0;
+    std::size_t recoveries = 0;
+    while (written_total < frames)
     {
-      std::cerr << "Initial write failed; recover=" << dev.recoverXrun(static_cast<int>(written)) << '\n';
-      return 1;
+      const std::size_t remaining = frames - written_total;
+      const auto* cursor = bytes.data() + (written_total * frame_bytes);
+      const std::int64_t written = dev.writeInterleaved(
+          cursor, static_cast<std::uint32_t>(std::min<std::size_t>(remaining, negotiated.period_frames)));
+      if (written < 0)
+      {
+        const int recovered = dev.recoverXrun(static_cast<int>(written));
+        ++recoveries;
+        if (recovered < 0)
+        {
+          std::cerr << "Playback write failed and could not recover xrun: " << recovered << '\n';
+          return 1;
+        }
+        continue;
+      }
+      if (written == 0)
+      {
+        ++stall_count;
+        if (stall_count > 50U)
+        {
+          std::cerr << "Playback device did not accept the full buffer after repeated retries.\n";
+          return 1;
+        }
+        continue;
+      }
+      stall_count = 0;
+      written_total += static_cast<std::size_t>(written);
     }
-    std::cout << "Playback check wrote " << written << " frames.\n";
+    std::cout << "Playback check wrote " << written_total << " frames (recoveries=" << recoveries << ").\n";
     return 0;
   }
   catch (const std::exception& ex)

@@ -120,6 +120,49 @@ void TestOdasParserBoundedEdgeCases()
   }
 }
 
+void TestOdasParserRejectsNonFiniteOrMalformedNumbers()
+{
+  {
+    sonitude::spatial::OdasMessageParser parser;
+    const std::string non_finite =
+        R"({"timeStamp":1.0,"src":[{"id":1,"x":NaN,"y":0.0,"z":0.0,"activity":0.8}]})";
+    const auto out = parser.feed(non_finite);
+    Require(out.empty(), "NaN coordinate should be rejected");
+  }
+
+  {
+    sonitude::spatial::OdasMessageParser parser;
+    const std::string infinities =
+        R"({"timeStamp":1.0,"src":[{"id":1,"x":inf,"y":-inf,"z":0.0,"activity":0.8}]})";
+    const auto out = parser.feed(infinities);
+    Require(out.empty(), "infinite coordinates should be rejected");
+  }
+
+  {
+    sonitude::spatial::OdasMessageParser parser;
+    const std::string trailing_junk =
+        R"({"timeStamp":1.0,"src":[{"id":1,"x":1.0junk,"y":0.0,"z":0.0,"activity":0.8}]})";
+    const auto out = parser.feed(trailing_junk);
+    Require(out.empty(), "numbers with trailing junk should be rejected");
+  }
+
+  {
+    sonitude::spatial::OdasMessageParser parser;
+    const std::string incomplete_exponent =
+        R"({"timeStamp":1.0,"src":[{"id":1,"x":1e,"y":0.0,"z":0.0,"activity":0.8}]})";
+    const auto out = parser.feed(incomplete_exponent);
+    Require(out.empty(), "incomplete exponent should be rejected");
+  }
+
+  {
+    sonitude::spatial::OdasMessageParser parser;
+    const std::string overflow =
+        R"({"timeStamp":1e999,"src":[{"id":18446744073709551616,"x":1.0,"y":0.0,"z":0.0,"activity":0.8}]})";
+    const auto out = parser.feed(overflow);
+    Require(out.empty(), "overflowing timestamp and id should be rejected");
+  }
+}
+
 void TestMockDoaProviderScript()
 {
   std::vector<sonitude::spatial::MockDoaEvent> events;
@@ -213,6 +256,7 @@ void RunOdasParserTests()
   TestOdasParserGarbageResync();
   TestOdasParserOverflowCapResync();
   TestOdasParserBoundedEdgeCases();
+  TestOdasParserRejectsNonFiniteOrMalformedNumbers();
   TestMockDoaProviderScript();
   TestOdasProviderUnreachableEndpointFailsClosed();
 #if defined(__linux__)

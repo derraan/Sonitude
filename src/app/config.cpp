@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <stdexcept>
 #include <unordered_set>
@@ -384,6 +385,11 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error("ASRC ratio bounds are invalid");
   }
+  if (!std::isfinite(config.asrc.min_ratio) || !std::isfinite(config.asrc.max_ratio) ||
+      !std::isfinite(config.asrc.pi_kp) || !std::isfinite(config.asrc.pi_ki))
+  {
+    throw std::runtime_error("ASRC scalar values must be finite");
+  }
 
   if (config.asrc.target_buffer_frames == 0)
   {
@@ -403,6 +409,10 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   if (config.steering.steering_ramp_ms < 10.0F || config.steering.steering_ramp_ms > 500.0F)
   {
     throw std::runtime_error("steering_ramp_ms is outside safe bounds");
+  }
+  if (!std::isfinite(config.steering.steering_ramp_ms))
+  {
+    throw std::runtime_error("steering_ramp_ms must be finite");
   }
 
   if (config.steering.ambient_floor_linear < 0.0F || config.steering.ambient_floor_linear > 1.0F)
@@ -510,6 +520,10 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error(
         "odas.enabled=false requires odas.use_mock_provider=true to avoid contradictory provider settings");
+  }
+  if (config.telemetry.stats_period_ms == 0)
+  {
+    throw std::runtime_error("telemetry.stats_period_ms must be non-zero");
   }
 
   if (config.realtime.capture_priority < 1 || config.realtime.capture_priority > 99)

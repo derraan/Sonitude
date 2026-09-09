@@ -137,6 +137,80 @@ std::size_t AlsaPcmDevice::playbackQueuedFrames() const
   return static_cast<std::size_t>(queued);
 }
 
+int AlsaPcmDevice::pollDescriptorCount() const
+{
+#if defined(__linux__)
+  if (pcm_ == nullptr)
+  {
+    return -1;
+  }
+  return snd_pcm_poll_descriptors_count(static_cast<snd_pcm_t*>(pcm_));
+#else
+  return -1;
+#endif
+}
+
+bool AlsaPcmDevice::fillPollDescriptors(pollfd* const descriptors, const int count) const
+{
+#if defined(__linux__)
+  if (pcm_ == nullptr || descriptors == nullptr || count <= 0)
+  {
+    return false;
+  }
+  return snd_pcm_poll_descriptors(
+             static_cast<snd_pcm_t*>(pcm_), descriptors, static_cast<unsigned int>(count)) == count;
+#else
+  (void)descriptors;
+  (void)count;
+  return false;
+#endif
+}
+
+bool AlsaPcmDevice::pollRevents(pollfd* const descriptors, const int count, unsigned short* const revents) const
+{
+#if defined(__linux__)
+  if (pcm_ == nullptr || descriptors == nullptr || revents == nullptr || count <= 0)
+  {
+    return false;
+  }
+  return snd_pcm_poll_descriptors_revents(static_cast<snd_pcm_t*>(pcm_),
+                                          descriptors,
+                                          static_cast<unsigned int>(count),
+                                          revents) == 0;
+#else
+  (void)descriptors;
+  (void)count;
+  (void)revents;
+  return false;
+#endif
+}
+
+int AlsaPcmDevice::prepare() const
+{
+#if defined(__linux__)
+  if (pcm_ == nullptr)
+  {
+    return -1;
+  }
+  return snd_pcm_prepare(static_cast<snd_pcm_t*>(pcm_));
+#else
+  return -1;
+#endif
+}
+
+int AlsaPcmDevice::start() const
+{
+#if defined(__linux__)
+  if (pcm_ == nullptr)
+  {
+    return -1;
+  }
+  return snd_pcm_start(static_cast<snd_pcm_t*>(pcm_));
+#else
+  return -1;
+#endif
+}
+
 void AlsaPcmDevice::dropStream() const
 {
 #if defined(__linux__)

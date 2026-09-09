@@ -321,6 +321,25 @@ void TestEstimatorKnownMismatch()
   }
   Require(out.report.channels[1].polarity == -1, "inverted channel polarity should be detected");
 }
+
+void TestEstimatorLowSignalIsUnresolved()
+{
+  constexpr std::uint32_t kFs = 44100;
+  constexpr std::size_t kFrames = 4096;
+  std::vector<float> interleaved(kFrames * 6U, 0.0F);
+
+  sonitude::app::CalibrationEstimateOptions options;
+  options.channel_ids = GeometryIds();
+  options.reference_channel_index = 0;
+  options.sample_rate_hz = kFs;
+  options.signal_start_frame = 0;
+  options.signal_frame_count = kFrames;
+  options.min_signal_rms = 1.0e-4F;
+
+  const auto out = sonitude::app::EstimateCalibrationFromCapture(interleaved, 6, options);
+  Require(out.report.overall_status == sonitude::app::CalibrationQualityStatus::Unresolved,
+          "silent capture should fail closed as unresolved");
+}
 }  // namespace
 
 void RunCalibrationTests()
@@ -337,4 +356,5 @@ void RunCalibrationTests()
   TestWriter();
   TestEstimatorUnity();
   TestEstimatorKnownMismatch();
+  TestEstimatorLowSignalIsUnresolved();
 }

@@ -115,6 +115,51 @@ void TestRuntimeConfigOdasContradictionFails()
   Require(threw, "odas.enabled=false with use_mock_provider=false should throw");
 }
 
+void TestRuntimeConfigAsrcNanFails()
+{
+  bool threw = false;
+  try
+  {
+    (void)sonitude::app::LoadRuntimeConfigFromFile(
+        FixturePath("tests/fixtures/runtime_invalid_asrc_nan.yaml"));
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "non-finite ASRC scalars should throw");
+}
+
+void TestRuntimeConfigTelemetryPeriodZeroFails()
+{
+  bool threw = false;
+  try
+  {
+    (void)sonitude::app::LoadRuntimeConfigFromFile(
+        FixturePath("tests/fixtures/runtime_invalid_telemetry_period_zero.yaml"));
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "zero telemetry period should throw");
+}
+
+void TestRuntimeConfigSteeringRampNanFails()
+{
+  bool threw = false;
+  try
+  {
+    (void)sonitude::app::LoadRuntimeConfigFromFile(
+        FixturePath("tests/fixtures/runtime_invalid_steering_speed_zero.yaml"));
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "non-finite steering ramp should throw");
+}
+
 void TestRuntimeAudioContract()
 {
   auto config =
@@ -343,6 +388,9 @@ int main()
     TestRuntimeConfigUnknownBinauralBackendFails();
     TestRuntimeConfigUnknownSuppressionBackendFails();
     TestRuntimeConfigOdasContradictionFails();
+    TestRuntimeConfigAsrcNanFails();
+    TestRuntimeConfigTelemetryPeriodZeroFails();
+    TestRuntimeConfigSteeringRampNanFails();
     TestRuntimeAudioContract();
     TestRuntimeAudioContractHeadroom();
     TestGeometryValid();

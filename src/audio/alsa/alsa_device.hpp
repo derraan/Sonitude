@@ -6,6 +6,8 @@
 #include "app/config.hpp"
 #include "audio/format_convert.hpp"
 
+struct pollfd;
+
 namespace sonitude::audio::alsa
 {
 struct NegotiatedParams
@@ -36,6 +38,11 @@ class AlsaPcmDevice
   std::int64_t availFrames() const;
   std::size_t playbackQueuedFrames() const;
   void dropStream() const;
+  int pollDescriptorCount() const;
+  bool fillPollDescriptors(pollfd* descriptors, int count) const;
+  bool pollRevents(pollfd* descriptors, int count, unsigned short* revents) const;
+  int prepare() const;
+  int start() const;
 
  private:
   void configure(const app::DeviceConfig& config, bool is_capture);

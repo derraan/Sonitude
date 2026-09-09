@@ -35,6 +35,7 @@
 #include "rt/param_snapshot.hpp"
 #include "rt/rt_thread.hpp"
 #include "rt/telemetry.hpp"
+#include "rt/wake_event.hpp"
 #include "spatial/mock_doa_provider.hpp"
 #include "spatial/odas_provider.hpp"
 
@@ -42,8 +43,16 @@ namespace
 {
 #if defined(__linux__)
 std::atomic<bool> g_running{true};
+std::atomic<sonitude::rt::WakeEvent*> g_shutdown_wake{nullptr};
 
-void SignalStop(const int) { g_running.store(false, std::memory_order_relaxed); }
+void SignalStop(const int)
+{
+  g_running.store(false, std::memory_order_relaxed);
+  if (auto* wake = g_shutdown_wake.load(std::memory_order_relaxed); wake != nullptr)
+  {
+    wake->signal();
+  }
+}
 
 enum class RuntimeFailure : std::uint8_t
 {
@@ -229,6 +238,13 @@ int main(int argc, char** argv)
 
     sonitude::rt::TelemetryCounters counters;
     sonitude::audio::alsa::CaptureWorker cap_worker(&cap, &runtime_config, &counters);
+    const double period_seconds = cap_params.sample_rate_hz > 0U
+                                      ? static_cast<double>(cap_params.period_frames) /
+                                            static_cast<double>(cap_params.sample_rate_hz)
+                                      : 0.0;
+    const int wait_timeout_ms =
+        std::max(10, static_cast<int>(std::llround(period_seconds * 1000.0 * 8.0)));
+    const bool can_wait = cap_worker.prepareWaiting();
     auto resampler = sonitude::dsp::CreateSrcResampler();
     sonitude::dsp::AsrcController ctl({
         .min_ratio = runtime_config.asrc.min_ratio,
@@ -429,6 +445,8 @@ int main(int argc, char** argv)
     {
       std::cerr << "Warning: mlockall failed; realtime memory locking is unavailable.\n";
     }
+    sonitude::rt::WakeEvent shutdown_wake;
+    g_shutdown_wake.store(&shutdown_wake, std::memory_order_relaxed);
     std::jthread control_thread;
     if (mode == "beamform")
     {
@@ -547,6 +565,7 @@ int main(int argc, char** argv)
             runtime_failure.store(RuntimeFailure::PlaybackWrite, std::memory_order_release);
             g_running.store(false, std::memory_order_relaxed);
             telemetry_cv.notify_all();
+            shutdown_wake.signal();
           }
         }
         else
@@ -558,6 +577,7 @@ int main(int argc, char** argv)
           runtime_failure.store(RuntimeFailure::PlaybackBlockRelease, std::memory_order_release);
           g_running.store(false, std::memory_order_relaxed);
           telemetry_cv.notify_all();
+          shutdown_wake.signal();
         }
       }
     });
@@ -565,30 +585,36 @@ int main(int argc, char** argv)
     {
       std::cerr << "Warning: playback thread realtime scheduling was not applied.\n";
     }
-
-    std::jthread capture_unblock_thread([&](std::stop_token stop_token)
-    {
-      while (g_running.load(std::memory_order_relaxed) && !stop_token.stop_requested())
-      {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      }
-      if (!stop_token.stop_requested())
-      {
-        cap.dropStream();
-      }
-    });
-    if (!sonitude::rt::TryConfigureOtherScheduling(capture_unblock_thread))
-    {
-      std::cerr << "Warning: capture-unblock thread SCHED_OTHER pinning was not applied.\n";
-    }
     if (!sonitude::rt::TryConfigureCurrentThreadRtScheduling(runtime_config.realtime.capture_priority))
     {
       std::cerr << "Warning: capture/DSP thread realtime scheduling was not applied.\n";
     }
+    sonitude::rt::PrefaultStack(256U * 1024U);
 
     bool hold_estimator_after_xrun = false;
     while (g_running.load(std::memory_order_relaxed))
     {
+      if (can_wait)
+      {
+        const auto wait_result = cap_worker.waitForData(shutdown_wake.fd(), wait_timeout_ms);
+        if (wait_result == sonitude::audio::alsa::CaptureWait::Interrupted)
+        {
+          break;
+        }
+        if (wait_result == sonitude::audio::alsa::CaptureWait::Timeout)
+        {
+          continue;
+        }
+        if (wait_result == sonitude::audio::alsa::CaptureWait::Error)
+        {
+          std::cerr << "Capture wait failed; stopping realtime loop.\n";
+          g_running.store(false, std::memory_order_relaxed);
+          telemetry_cv.notify_all();
+          shutdown_wake.signal();
+          break;
+        }
+      }
+
       std::size_t frame_count = 0;
       if (!cap_worker.readBlock(std::span<sonitude::audio::MicFrame>(mic_frames), &frame_count))
       {
@@ -742,14 +768,16 @@ int main(int argc, char** argv)
         runtime_failure.store(RuntimeFailure::PlaybackQueuePublish, std::memory_order_release);
         g_running.store(false, std::memory_order_relaxed);
         telemetry_cv.notify_all();
+        shutdown_wake.signal();
       }
     }
     g_running.store(false, std::memory_order_relaxed);
     telemetry_cv.notify_all();
+    shutdown_wake.signal();
+    g_shutdown_wake.store(nullptr, std::memory_order_relaxed);
     control_thread.request_stop();
     telemetry_thread.request_stop();
     playback_thread.request_stop();
-    capture_unblock_thread.request_stop();
     return 0;
 #else
     std::cout << "Passthrough mode is Linux-only (ALSA).\n";

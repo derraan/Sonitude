@@ -15,7 +15,9 @@ jobs:
       matrix:
         libsamplerate: [ON, OFF]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -52,7 +54,9 @@ jobs:
   sanitized:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -64,16 +68,36 @@ jobs:
           -DSONITUDE_FETCH_DEPS=OFF
           -DSONITUDE_WITH_ALSA=ON
           -DSONITUDE_WITH_LIBSAMPLERATE=ON
-          -DSONITUDE_ENABLE_SANITIZERS=ON
+          -DSONITUDE_SANITIZER=address
       - name: Build sanitized
         run: cmake --build build-san --parallel
       - name: CTest sanitized
         run: ctest --test-dir build-san --output-on-failure
 
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install sanitizer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config clang-18 libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
+      - name: Run unit tests under ThreadSanitizer
+        run: >
+          bash scripts/run_sanitizer_tests.sh thread
+          -G Ninja
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DSONITUDE_FETCH_DEPS=OFF
+          -DSONITUDE_WITH_LIBSAMPLERATE=ON
+
   minimal:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -83,9 +107,11 @@ jobs:
           cmake -S . -B build-min -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DSONITUDE_FETCH_DEPS=OFF
-          -DSONITUDE_BUILD_TESTS=OFF
+          -DSONITUDE_BUILD_TESTS=ON
           -DSONITUDE_WITH_ALSA=OFF
           -DSONITUDE_WITH_LIBSAMPLERATE=OFF
       - name: Build minimal
         run: cmake --build build-min --parallel
+      - name: CTest minimal
+        run: ctest --test-dir build-min --output-on-failure
 

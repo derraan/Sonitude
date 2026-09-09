@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <thread>
@@ -27,4 +28,5 @@ bool TryConfigureOtherScheduling(std::thread& thread);
 bool TryConfigureOtherScheduling(std::jthread& thread);
 bool TryConfigureCurrentThreadRtScheduling(std::int32_t priority);
 bool TryEnableMemoryLocking();
+void PrefaultStack(std::size_t bytes) noexcept;
 }  // namespace sonitude::rt

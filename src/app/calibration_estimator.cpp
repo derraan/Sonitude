@@ -315,7 +315,7 @@ CalibrationEstimateOutput EstimateCalibrationFromCapture(
     if (ch_report.rms_level < options.min_signal_rms)
     {
       ch_report.warnings.push_back("signal RMS below minimum useful level");
-      ch_report.status = CalibrationQualityStatus::Invalid;
+      ch_report.status = WorstStatus(ch_report.status, CalibrationQualityStatus::Unresolved);
     }
 
     std::vector<float> ch_work = signal_segments[ch];
@@ -377,7 +377,7 @@ CalibrationEstimateOutput EstimateCalibrationFromCapture(
         ch_report.gain_linear = 1.0F;
         ch_report.relative_gain_db = 0.0F;
         ch_report.warnings.push_back("gain normalization skipped due to low signal level");
-        ch_report.status = WorstStatus(ch_report.status, CalibrationQualityStatus::Warning);
+        ch_report.status = WorstStatus(ch_report.status, CalibrationQualityStatus::Unresolved);
       }
     }
 
