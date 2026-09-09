@@ -351,6 +351,13 @@ if(SONITUDE_BUILD_TESTS)
     PRIVATE
       SONITUDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
   )
+  if(SONITUDE_SANITIZER STREQUAL "thread")
+    target_compile_definitions(
+      sonitude_unit_tests
+      PRIVATE
+        SONITUDE_DISABLE_ALLOC_COUNTER_GLOBAL_NEW=1
+    )
+  endif()
 
   add_test(
     NAME sonitude_unit_tests
