@@ -154,12 +154,15 @@ class BatchWorker(QThread):
         if batch_result.decoded_input_wav != test.input_wav:
             shutil.copy2(batch_result.decoded_input_wav, test.input_wav)
 
-        beamformed, sample_rate = audio_loader.load_wav(batch_result.beamformed_wav)
-        suppressed, _ = audio_loader.load_wav(batch_result.suppressed_wav)
-        processed, _ = audio_loader.load_wav(batch_result.output_wav)
-        beamformed_mono = beamformed[:, 0]
-        suppressed_mono = suppressed[:, 0]
-        processed_mono = processed[:, 0]
+        (beamformed_mono, sample_rate), (suppressed_mono, _), (processed_mono, _) = (
+            audio_loader.load_mono_wavs_parallel(
+                [
+                    batch_result.beamformed_wav,
+                    batch_result.suppressed_wav,
+                    batch_result.output_wav,
+                ]
+            )
+        )
 
         export_pcm(
             test.processed_stereo_wav,
@@ -173,12 +176,19 @@ class BatchWorker(QThread):
         export_pcm(export_path, processed_mono, sample_rate, container=export_suffix)
         test.processed_export = export_path
 
-        raw_data, raw_meta = audio_loader.load_audio(source_for_decode)
-        raw_six = audio_loader.extract_channels(raw_data, config_summary.active_channel_map)
+        if batch_result.decoded_pcm is not None:
+            raw_six = audio_loader.extract_channels(
+                batch_result.decoded_pcm, config_summary.active_channel_map
+            )
+            raw_sample_rate = sample_rate
+        else:
+            raw_data, raw_meta = audio_loader.load_audio(batch_result.decoded_input_wav)
+            raw_six = audio_loader.extract_channels(raw_data, config_summary.active_channel_map)
+            raw_sample_rate = raw_meta.sample_rate_hz
         export_pcm(
             test.raw_preview_wav,
             downmix.ear_cup_stereo_preview(raw_six, config_summary.active_channel_map),
-            raw_meta.sample_rate_hz,
+            raw_sample_rate,
             container="wav",
             subtype="PCM_16",
         )

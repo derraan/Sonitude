@@ -6,11 +6,28 @@
 
 namespace sonitude::audio::alsa
 {
+namespace
+{
+constexpr std::size_t kSrcLatencyScratchFrames = 64;
+}  // namespace
+
+std::size_t PlaybackWorker::CalculateRequiredScratchFrames(const std::size_t capture_period_frames,
+                                                           const std::size_t playback_period_frames,
+                                                           const double asrc_max_ratio)
+{
+  const std::size_t base_period = std::max(capture_period_frames, playback_period_frames);
+  const std::size_t ratio_scale = std::max<std::size_t>(1U, static_cast<std::size_t>(std::ceil(asrc_max_ratio)));
+  const std::size_t headroom_frames = base_period;
+  return (base_period * ratio_scale) + kSrcLatencyScratchFrames + headroom_frames;
+}
+
 PlaybackWorker::PlaybackWorker(AlsaPcmDevice* device,
                                dsp::IStereoResampler* resampler,
                                dsp::AsrcController* controller,
                                rt::TelemetryCounters* counters,
-                               const bool asrc_enabled)
+                               const bool asrc_enabled,
+                               const std::size_t capture_period_frames,
+                               const double asrc_max_ratio)
     : device_(device),
       resampler_(resampler),
       controller_(controller),
@@ -18,10 +35,11 @@ PlaybackWorker::PlaybackWorker(AlsaPcmDevice* device,
       asrc_enabled_(asrc_enabled)
 {
   const auto negotiated = device_->negotiated();
-  const std::size_t period = negotiated.period_frames;
+  const std::size_t scratch_frames = CalculateRequiredScratchFrames(
+      capture_period_frames, negotiated.period_frames, asrc_max_ratio);
   const std::size_t bytes_per_sample = audio::BytesPerSample(negotiated.format);
-  pending_.assign(period * 2U, {});
-  resampled_.assign(period * 2U, {});
+  pending_.assign(scratch_frames, {});
+  resampled_.assign(scratch_frames, {});
   interleaved_float_.assign(resampled_.size() * 2U, 0.0F);
   interleaved_bytes_.assign(resampled_.size() * 2U * bytes_per_sample, 0U);
   if (!asrc_enabled_)

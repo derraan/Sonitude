@@ -24,13 +24,102 @@ bool IsKnownEqType(const std::string& type)
 {
   return type == "PK" || type == "LS" || type == "HS" || type == "LP" || type == "HP";
 }
+
+bool IsFiniteFloat(const float value)
+{
+  return std::isfinite(value);
+}
 }  // namespace
+
+const char* CalibrationQualityStatusToString(const CalibrationQualityStatus status) noexcept
+{
+  switch (status)
+  {
+    case CalibrationQualityStatus::Pass:
+      return "PASS";
+    case CalibrationQualityStatus::Warning:
+      return "WARNING";
+    case CalibrationQualityStatus::Unresolved:
+      return "UNRESOLVED";
+    case CalibrationQualityStatus::Invalid:
+      return "INVALID";
+  }
+  return "INVALID";
+}
 
 CalibrationConfig LoadCalibrationFromFile(const std::string& path)
 {
   const YAML::Node root = YAML::LoadFile(path);
   CalibrationConfig calibration;
+  if (root["schema_version"])
+  {
+    calibration.schema_version = root["schema_version"].as<int>();
+  }
   calibration.sample_rate_hz = RequireScalar<std::uint32_t>(root, "sample_rate_hz");
+
+  if (root["reference"])
+  {
+    const YAML::Node ref = root["reference"];
+    if (ref["microphone_id"])
+    {
+      calibration.reference.microphone_id = ref["microphone_id"].as<std::string>();
+    }
+  }
+
+  if (root["identity"])
+  {
+    const YAML::Node id = root["identity"];
+    if (id["geometry_id"])
+    {
+      calibration.identity.geometry_id = id["geometry_id"].as<std::string>();
+    }
+    if (id["device_id"])
+    {
+      calibration.identity.device_id = id["device_id"].as<std::string>();
+    }
+    if (id["calibration_sequence"])
+    {
+      calibration.identity.calibration_sequence = id["calibration_sequence"].as<std::string>();
+    }
+    if (id["created_utc"])
+    {
+      calibration.identity.created_utc = id["created_utc"].as<std::string>();
+    }
+  }
+
+  if (root["capture"])
+  {
+    const YAML::Node cap = root["capture"];
+    if (cap["sample_rate_hz"])
+    {
+      calibration.capture.sample_rate_hz = cap["sample_rate_hz"].as<std::uint32_t>();
+    }
+    if (cap["channel_count"])
+    {
+      calibration.capture.channel_count = cap["channel_count"].as<std::size_t>();
+    }
+  }
+
+  if (root["quality"])
+  {
+    const YAML::Node q = root["quality"];
+    if (q["valid"])
+    {
+      calibration.quality.valid = q["valid"].as<bool>();
+    }
+    if (q["hardware_evidence"])
+    {
+      calibration.quality.hardware_evidence = q["hardware_evidence"].as<bool>();
+    }
+    if (q["warnings"] && q["warnings"].IsSequence())
+    {
+      for (const YAML::Node& w : q["warnings"])
+      {
+        calibration.quality.warnings.push_back(w.as<std::string>());
+      }
+    }
+  }
+
   const YAML::Node channels = root["channels"];
   if (!channels || !channels.IsSequence())
   {
@@ -86,6 +175,10 @@ void ValidateCalibrationConfig(const CalibrationConfig& calibration,
                                const std::vector<std::string>& geometry_ids,
                                const std::uint32_t expected_sample_rate_hz)
 {
+  if (calibration.schema_version < 1 || calibration.schema_version > kCalibrationSchemaVersion)
+  {
+    throw std::runtime_error("calibration schema_version is not supported");
+  }
   if (calibration.sample_rate_hz != expected_sample_rate_hz)
   {
     throw std::runtime_error("calibration sample_rate_hz does not match capture rate");
@@ -93,6 +186,15 @@ void ValidateCalibrationConfig(const CalibrationConfig& calibration,
   if (calibration.channels.size() != 6)
   {
     throw std::runtime_error("calibration must have six channels");
+  }
+  if (calibration.capture.channel_count != 0 && calibration.capture.channel_count != 6)
+  {
+    throw std::runtime_error("calibration capture channel_count must be six when present");
+  }
+  if (calibration.capture.sample_rate_hz != 0 &&
+      calibration.capture.sample_rate_hz != calibration.sample_rate_hz)
+  {
+    throw std::runtime_error("calibration capture sample_rate_hz does not match sample_rate_hz");
   }
 
   const std::unordered_set<std::string> geometry_id_set(geometry_ids.begin(), geometry_ids.end());
@@ -115,6 +217,19 @@ void ValidateCalibrationConfig(const CalibrationConfig& calibration,
     {
       throw std::runtime_error("calibration gain out of range");
     }
+    if (!IsFiniteFloat(channel.gain_linear))
+    {
+      throw std::runtime_error("calibration gain_linear must be finite");
+    }
+    if (!IsFiniteFloat(channel.delay_samples))
+    {
+      throw std::runtime_error("calibration delay_samples must be finite");
+    }
+    if (!IsFiniteFloat(channel.dc_offset))
+    {
+      throw std::runtime_error("calibration dc_offset must be finite");
+    }
+    // Engineering guardrail: fractional delays beyond ~6 ms at 44.1 kHz are suspect.
     if (std::fabs(channel.delay_samples) > 256.0F)
     {
       throw std::runtime_error("calibration delay_samples out of range");
@@ -146,6 +261,11 @@ void ValidateCalibrationConfig(const CalibrationConfig& calibration,
   if (calibration_id_set.size() != geometry_id_set.size())
   {
     throw std::runtime_error("calibration must contain exactly one channel for each geometry microphone");
+  }
+  if (!calibration.reference.microphone_id.empty() &&
+      calibration_id_set.find(calibration.reference.microphone_id) == calibration_id_set.end())
+  {
+    throw std::runtime_error("calibration reference microphone_id does not exist in channels");
   }
 }
 }  // namespace sonitude::app

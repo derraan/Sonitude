@@ -1,4 +1,4 @@
-"""Adapter around sonitude_stream_process using protocol v3."""
+"""Adapter around sonitude_stream_process using protocol v4."""
 
 from __future__ import annotations
 
@@ -138,6 +138,14 @@ class StreamProcessor:
             suppression_envelope_attack_coeff=sup.envelope_attack_coeff,
             suppression_envelope_release_coeff=sup.envelope_release_coeff,
             suppression_confidence=sup.confidence,
+            spectral_gain_floor_db=sup.spectral_gain_floor_db,
+            spectral_protect_ratio=sup.spectral_protect_ratio,
+            spectral_noise_overestimate=sup.spectral_noise_overestimate,
+            spectral_tonal_ratio=sup.spectral_tonal_ratio,
+            spectral_noise_rise_ms=sup.spectral_noise_rise_ms,
+            mvdr_max_wn_gain=sup.mvdr_max_wn_gain,
+            mvdr_cov_tau_ms=sup.mvdr_cov_tau_ms,
+            mvdr_diag_load=sup.mvdr_diag_load,
         )
         try:
             self._process.stdin.write(header)

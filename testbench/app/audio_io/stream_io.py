@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import soundfile as sf
@@ -127,6 +129,26 @@ def load_file_overview(
         sample_rate_hz=sample_rate,
         duration_s=duration_s,
     )
+
+
+def load_file_overviews_parallel(
+    specs: dict[str, tuple[Path | str, dict[str, Any]]],
+) -> dict[str, FileOverview]:
+    """Load several plot overviews concurrently (independent seek-heavy readers)."""
+    if not specs:
+        return {}
+    if len(specs) == 1:
+        key, (path, kwargs) = next(iter(specs.items()))
+        return {key: load_file_overview(path, **kwargs)}
+
+    def _load_one(item: tuple[str, Path | str, dict[str, Any]]) -> tuple[str, FileOverview]:
+        key, path, kwargs = item
+        return key, load_file_overview(path, **kwargs)
+
+    items = [(key, path, kwargs) for key, (path, kwargs) in specs.items()]
+    workers = min(len(items), 4)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return dict(pool.map(_load_one, items))
 
 
 def load_plot_preview(

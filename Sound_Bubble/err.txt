@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "edge/dummy_realtime.py", line 128, in <module>
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+TypeError: 'type' object is not subscriptable

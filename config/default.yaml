@@ -29,6 +29,14 @@ steering:
   reference_mic_index: 2
   steering_ramp_ms: 150.0
   ambient_floor_linear: 0.25
+  model: near_field
+  source_distance_m: 0.45
+  experimental_dual_reference_mvdr: false
+  left_ear_mic_index: 0
+  right_ear_mic_index: 5
+  kemar_lut:
+    enabled: true
+    table_path: "../data/hrtf/generic_sadie2_d2/compact_32.shrf"
 
 suppression:
   enabled: false
@@ -41,6 +49,17 @@ suppression:
     hop_size: 32
     gain_floor_db: -12.0
 
+spatial:
+  backend: adaptive_geometric
+  # fixed_measured is an unqualified development option. It requires a compiled
+  # SMV3 profile and binaural.enabled: false so the HRTF renderer is not applied
+  # on top of the selective-binaural output.
+  profile_path: ""
+  mask_enabled: true
+  eta_low_db: -3.0
+  eta_high_db: 3.0
+  mask_smooth_sec: 0.020
+
 state_machine:
   activation_hold_ms: 400
   confirmation_hold_ms: 250
@@ -52,15 +71,19 @@ zones:
   front_auto_focus:
     azimuth_min_deg: -45.0
     azimuth_max_deg: 45.0
+    policy: "focus"
   right_assist:
     azimuth_min_deg: 45.0
     azimuth_max_deg: 100.0
+    policy: "assist"
   left_assist:
     azimuth_min_deg: -100.0
     azimuth_max_deg: -45.0
+    policy: "assist"
   rear_ambient:
     azimuth_min_deg: 100.0
     azimuth_max_deg: 260.0
+    policy: "ambient"
 
 odas:
   enabled: false
@@ -73,11 +96,16 @@ telemetry:
   emit_json: false
   stats_period_ms: 1000
 
+realtime:
+  capture_priority: 80
+  playback_priority: 78
+  enable_mlockall: true
+
 binaural:
   enabled: true
-  backend: mono_reference
+  backend: compact_hrtf
   direction:
-    follow_steering: false
+    follow_steering: true
     azimuth_deg: 0.0
     elevation_deg: 0.0
   transition:

@@ -7,11 +7,19 @@
 
 namespace sonitude::app
 {
+enum class ZonePolicy : std::uint8_t
+{
+  Focus = 0,
+  Assist = 1,
+  Ambient = 2
+};
+
 struct ZoneConfig
 {
   std::string name;
   float azimuth_min_deg = 0.0F;
   float azimuth_max_deg = 0.0F;
+  ZonePolicy policy = ZonePolicy::Focus;
 };
 
 struct DeviceConfig
@@ -47,12 +55,33 @@ struct GeometryConfig
   std::vector<GeometryMic> microphones;
 };
 
+struct SpatialConfig
+{
+  std::string backend = "adaptive_geometric";
+  std::string profile_path;
+  bool mask_enabled = true;
+  float eta_low_db = -3.0F;
+  float eta_high_db = 3.0F;
+  float mask_smooth_sec = 0.020F;
+};
+
 struct SteeringConfig
 {
   float speed_of_sound_mps = 343.0F;
   std::size_t reference_mic_index = 0;
   float steering_ramp_ms = 150.0F;
   float ambient_floor_linear = 0.25F;
+  std::string model = "near_field";
+  float source_distance_m = 0.45F;
+  bool experimental_dual_reference_mvdr = false;
+  bool binaural_output = false;
+  std::size_t left_ear_mic_index = 0;
+  std::size_t right_ear_mic_index = 5;
+  struct KemarLutConfig
+  {
+    bool enabled = false;
+    std::string table_path;
+  } kemar_lut;
 };
 
 struct SpectralSuppressionConfig
@@ -144,6 +173,13 @@ struct EqConfig
   std::vector<EqSectionConfig> sections;
 };
 
+struct RealtimeConfig
+{
+  std::int32_t capture_priority = 80;
+  std::int32_t playback_priority = 78;
+  bool enable_mlockall = true;
+};
+
 struct RuntimeConfig
 {
   DeviceConfig capture;
@@ -154,12 +190,14 @@ struct RuntimeConfig
   float calibration_dc_block_hz = 20.0F;
   AsrcConfig asrc;
   SteeringConfig steering;
+  SpatialConfig spatial;
   SuppressionConfig suppression;
   StateMachineConfig state_machine;
   OdasConfig odas;
   TelemetryConfig telemetry;
   BinauralConfig binaural;
   EqConfig common_eq;
+  RealtimeConfig realtime;
   std::vector<ZoneConfig> zones;
 };
 
@@ -171,6 +209,11 @@ struct RuntimeAudioContract
   std::size_t playback_buffer_frames = 0;
   std::size_t software_queue_frames = 0;
   std::size_t minimum_asrc_headroom_frames = 0;
+  std::size_t capture_period_frames = 0;
+  std::size_t playback_period_frames = 0;
+  double asrc_max_ratio = 0.0;
+  std::size_t required_playback_scratch_frames = 0;
+  std::size_t negotiated_playback_scratch_frames = 0;
 };
 
 RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path);

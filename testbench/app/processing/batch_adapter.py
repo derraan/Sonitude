@@ -41,6 +41,7 @@ class BatchResult:
     command: list[str]
     decoded_input_wav: Path
     binaural_wav: Path | None = None
+    decoded_pcm: np.ndarray | None = None
     resolved: dict = field(default_factory=dict)
     suppression_requested: str = "auto"
     suppression_resolved: bool | None = None
@@ -133,11 +134,12 @@ def _prepare_decoded_wav(
     *,
     expected_sample_rate_hz: int | None,
     active_channel_map: list[int] | None,
-) -> Path:
+) -> tuple[Path, np.ndarray]:
     """Decode any supported container to float32 WAV for the C++ WAV-only tool.
 
     Preserves original channel count and order. DSP validation (channel map /
-    six-microphone layout) is separate from codec decode.
+    six-microphone layout) is separate from codec decode. Returns the decoded
+    path and the in-memory PCM so callers avoid a second full read.
     """
     pcm, metadata = load_audio(input_path)
     array_validation = validate_dsp_input(
@@ -149,8 +151,9 @@ def _prepare_decoded_wav(
     if not array_validation.ok:
         raise BatchProcessingError("; ".join(array_validation.errors))
     decoded = output_dir / "input_decoded.wav"
-    export_pcm(decoded, pcm.astype(np.float32, copy=False), metadata.sample_rate_hz, container="wav")
-    return decoded
+    pcm = pcm.astype(np.float32, copy=False)
+    export_pcm(decoded, pcm, metadata.sample_rate_hz, container="wav")
+    return decoded, pcm
 
 
 def run_wav_replay(
@@ -184,7 +187,7 @@ def run_wav_replay(
     elif enable_suppression is False:
         mode = SuppressionMode.OFF
 
-    decoded_input = _prepare_decoded_wav(
+    decoded_input, decoded_pcm = _prepare_decoded_wav(
         input_path,
         output_dir,
         expected_sample_rate_hz=expected_sample_rate_hz,
@@ -238,6 +241,7 @@ def run_wav_replay(
         command=command,
         decoded_input_wav=decoded_input,
         binaural_wav=binaural_path,
+        decoded_pcm=decoded_pcm,
         resolved=resolved,
         suppression_requested=mode.value,
         suppression_resolved=resolved.get("suppression_resolved") if resolved else None,

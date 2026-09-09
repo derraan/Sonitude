@@ -1,6 +1,7 @@
 #include "control/conversation_state_machine.hpp"
 
 #include <cmath>
+#include <optional>
 #include <utility>
 
 namespace sonitude::control
@@ -34,6 +35,16 @@ bool ConversationStateMachine::directionStable(const float azimuth_deg) const
   return diff <= static_cast<double>(config_.zone_direction_stability_deg);
 }
 
+bool ConversationStateMachine::isFocusEligible(const std::optional<ResolvedZone>& zone)
+{
+  return zone.has_value() && zone->policy != app::ZonePolicy::Ambient;
+}
+
+bool ConversationStateMachine::isAmbientZone(const std::optional<ResolvedZone>& zone)
+{
+  return zone.has_value() && zone->policy == app::ZonePolicy::Ambient;
+}
+
 SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input,
                                                   const std::uint64_t now_ns)
 {
@@ -43,14 +54,12 @@ SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input
   }
 
   const bool speech = input.speech_probability >= 0.6F;
-  if (input.has_track)
-  {
-    (void)zones_.zoneFor(input.track.azimuth_deg);
-  }
+  const std::optional<ResolvedZone> zone =
+      input.has_track ? zones_.resolve(input.track.azimuth_deg) : std::nullopt;
   switch (state_)
   {
     case ConversationState::Ambient:
-      if (input.has_track && speech)
+      if (input.has_track && speech && isFocusEligible(zone))
       {
         focus_target_ = input.track;
         transitionTo(ConversationState::Candidate);
@@ -58,7 +67,7 @@ SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input
       }
       break;
     case ConversationState::Candidate:
-      if (!(input.has_track && speech))
+      if (!(input.has_track && speech && isFocusEligible(zone)))
       {
         transitionTo(ConversationState::Ambient);
         state_entry_ns_ = now_ns;
@@ -71,7 +80,12 @@ SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input
       }
       break;
     case ConversationState::Focused:
-      if (input.has_track && speech && directionStable(input.track.azimuth_deg))
+      if (input.has_track && isAmbientZone(zone))
+      {
+        transitionTo(ConversationState::Releasing);
+        state_entry_ns_ = now_ns;
+      }
+      else if (input.has_track && speech && directionStable(input.track.azimuth_deg))
       {
         focus_target_ = input.track;
       }
@@ -87,7 +101,7 @@ SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input
       }
       break;
     case ConversationState::Held:
-      if (input.has_track && speech)
+      if (input.has_track && speech && isFocusEligible(zone))
       {
         focus_target_ = input.track;
         transitionTo(ConversationState::Focused);
@@ -101,7 +115,7 @@ SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input
       }
       break;
     case ConversationState::Releasing:
-      if (input.has_track && speech &&
+      if (input.has_track && speech && isFocusEligible(zone) &&
           (now_ns - state_entry_ns_ >=
            (static_cast<std::uint64_t>(config_.confirmation_hold_ms) * 1'000'000ULL)))
       {
@@ -122,7 +136,10 @@ SteeringSnapshot ConversationStateMachine::update(const ConversationInput& input
 
   SteeringSnapshot out{};
   out.generation = ++generation_;
+  out.zone_id = zone.has_value() ? static_cast<std::int16_t>(zone->index) : kNoZoneId;
   out.failsafe = (state_ == ConversationState::Ambient);
+  out.confidence = input.confidence;
+  out.speech_probability = input.speech_probability;
   if (state_ == ConversationState::Ambient)
   {
     out.target = {0.0F, 0.0F};

@@ -1,11 +1,13 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <exception>
 #include <cmath>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <thread>
@@ -17,21 +19,25 @@
 #include "audio/alsa/alsa_device.hpp"
 #include "audio/alsa/capture_worker.hpp"
 #include "audio/alsa/playback_worker.hpp"
+#include "audio/playback_block_pool.hpp"
 #include "control/control_loop.hpp"
 #include "control/conversation_state_machine.hpp"
 #include "control/zones.hpp"
+#include "dsp/array_profile.hpp"
 #include "dsp/beamformer.hpp"
 #include "dsp/biquad_cascade.hpp"
 #include "dsp/binaural_renderer.hpp"
 #include "dsp/hrtf_table.hpp"
 #include "dsp/asrc_controller.hpp"
+#include "dsp/fixed_binaural_mvdr.hpp"
 #include "dsp/limiter.hpp"
 #include "dsp/calibration_applier.hpp"
 #include "dsp/resampler.hpp"
 #include "dsp/suppression_stage.hpp"
 #include "rt/param_snapshot.hpp"
-#include "rt/spsc_ring.hpp"
+#include "rt/rt_thread.hpp"
 #include "rt/telemetry.hpp"
+#include "rt/wake_event.hpp"
 #include "spatial/mock_doa_provider.hpp"
 #include "spatial/odas_provider.hpp"
 
@@ -39,13 +45,23 @@ namespace
 {
 #if defined(__linux__)
 std::atomic<bool> g_running{true};
+std::atomic<sonitude::rt::WakeEvent*> g_shutdown_wake{nullptr};
 
-void SignalStop(const int) { g_running.store(false, std::memory_order_relaxed); }
-
-struct PlaybackBlockRef
+void SignalStop(const int)
 {
-  std::size_t slot = 0;
-  std::size_t frames = 0;
+  g_running.store(false, std::memory_order_relaxed);
+  if (auto* wake = g_shutdown_wake.load(std::memory_order_relaxed); wake != nullptr)
+  {
+    wake->signal();
+  }
+}
+
+enum class RuntimeFailure : std::uint8_t
+{
+  None = 0,
+  PlaybackWrite,
+  PlaybackBlockRelease,
+  PlaybackQueuePublish,
 };
 
 sonitude::dsp::BinauralBackend ParseBinauralBackend(const std::string& backend)
@@ -253,18 +269,20 @@ int main(int argc, char** argv)
     const auto pb_params = pb.negotiated();
     const std::size_t desired_software_queue_frames =
         cap_params.period_frames * (kPrefillBlocks - 1U);
-    sonitude::app::ValidateRuntimeAudioContract(
-        runtime_config,
-        {.capture_sample_rate_hz = cap_params.sample_rate_hz,
-         .playback_sample_rate_hz = pb_params.sample_rate_hz,
-         .capture_channels = cap_params.channels,
-         .playback_buffer_frames = pb_params.buffer_frames,
-         .software_queue_frames = desired_software_queue_frames,
-         .minimum_asrc_headroom_frames = cap_params.period_frames});
+    const std::size_t required_scratch_frames =
+        sonitude::audio::alsa::PlaybackWorker::CalculateRequiredScratchFrames(
+            cap_params.period_frames, pb_params.period_frames, runtime_config.asrc.max_ratio);
     const std::uint32_t dsp_sample_rate_hz = cap_params.sample_rate_hz;
 
     sonitude::rt::TelemetryCounters counters;
     sonitude::audio::alsa::CaptureWorker cap_worker(&cap, &runtime_config, &counters);
+    const double period_seconds = cap_params.sample_rate_hz > 0U
+                                      ? static_cast<double>(cap_params.period_frames) /
+                                            static_cast<double>(cap_params.sample_rate_hz)
+                                      : 0.0;
+    const int wait_timeout_ms =
+        std::max(10, static_cast<int>(std::llround(period_seconds * 1000.0 * 8.0)));
+    const bool can_wait = cap_worker.prepareWaiting();
     auto resampler = sonitude::dsp::CreateSrcResampler();
     sonitude::dsp::AsrcController ctl({
         .min_ratio = runtime_config.asrc.min_ratio,
@@ -278,7 +296,26 @@ int main(int argc, char** argv)
         runtime_config.asrc.enabled &&
         !(runtime_config.asrc.allow_bypass_for_locked_bench && mode == "passthrough");
     sonitude::audio::alsa::PlaybackWorker pb_worker(
-        &pb, resampler.get(), &ctl, &counters, asrc_enabled);
+        &pb,
+        resampler.get(),
+        &ctl,
+        &counters,
+        asrc_enabled,
+        cap_params.period_frames,
+        runtime_config.asrc.max_ratio);
+    sonitude::app::ValidateRuntimeAudioContract(
+        runtime_config,
+        {.capture_sample_rate_hz = cap_params.sample_rate_hz,
+         .playback_sample_rate_hz = pb_params.sample_rate_hz,
+         .capture_channels = cap_params.channels,
+         .playback_buffer_frames = pb_params.buffer_frames,
+         .software_queue_frames = desired_software_queue_frames,
+         .minimum_asrc_headroom_frames = cap_params.period_frames,
+         .capture_period_frames = cap_params.period_frames,
+         .playback_period_frames = pb_params.period_frames,
+         .asrc_max_ratio = runtime_config.asrc.max_ratio,
+         .required_playback_scratch_frames = required_scratch_frames,
+         .negotiated_playback_scratch_frames = pb_worker.scratchCapacityFrames()});
 
     std::vector<std::string> geometry_ids;
     geometry_ids.reserve(geometry.microphones.size());
@@ -313,7 +350,12 @@ int main(int argc, char** argv)
     std::vector<sonitude::spatial::MockDoaEvent> mock_events;
     mock_events.push_back({0, {1, -30.0F, 0.0F, 0.8F, 0}});
     mock_events.push_back({8'000'000'000ULL, {1, 35.0F, 0.0F, 0.85F, 8'000'000'000ULL}});
-    if (runtime_config.odas.use_mock_provider)
+    if (!runtime_config.odas.enabled)
+    {
+      provider = std::make_unique<sonitude::spatial::MockDoaProvider>(
+          std::vector<sonitude::spatial::MockDoaEvent>{});
+    }
+    else if (runtime_config.odas.use_mock_provider)
     {
       provider = std::make_unique<sonitude::spatial::MockDoaProvider>(std::move(mock_events));
     }
@@ -337,8 +379,26 @@ int main(int argc, char** argv)
         &conversation);
 
     sonitude::dsp::MvdrBeamformer beamformer;
-    beamformer.configure(
-        geometry, runtime_config.steering, calibration, dsp_sample_rate_hz, 4096);
+    sonitude::dsp::FixedBinauralMvdr fixed_beamformer;
+    const bool use_fixed = runtime_config.spatial.backend == "fixed_measured";
+    if (use_fixed)
+    {
+      auto profile = sonitude::dsp::LoadArrayProfileFromFile(runtime_config.spatial.profile_path);
+      sonitude::dsp::FixedMvdrMaskParams mask;
+      mask.enabled = runtime_config.spatial.mask_enabled;
+      mask.eta_low_db = runtime_config.spatial.eta_low_db;
+      mask.eta_high_db = runtime_config.spatial.eta_high_db;
+      mask.smooth_sec = runtime_config.spatial.mask_smooth_sec;
+      fixed_beamformer.configure(profile, dsp_sample_rate_hz, 4096, mask);
+    }
+    else
+    {
+      beamformer.configure(geometry,
+                           runtime_config.steering,
+                           calibration,
+                           dsp_sample_rate_hz,
+                           4096);
+    }
     sonitude::dsp::SuppressionStage suppressor;
     const auto suppression_backend =
         sonitude::dsp::ParseSuppressionBackend(runtime_config.suppression.backend);
@@ -356,14 +416,19 @@ int main(int argc, char** argv)
                       .hop_size = runtime_config.suppression.spectral.hop_size,
                       .gain_floor_db = runtime_config.suppression.spectral.gain_floor_db,
                       .confidence_threshold = runtime_config.suppression.confidence_threshold}});
-    beamformer.setSpectralPostfilter(suppressor.spectralFilter());
+    if (!use_fixed)
+    {
+      beamformer.setSpectralPostfilter(suppressor.spectralFilter());
+    }
     sonitude::dsp::PeakLimiter limiter;
     limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
 
     constexpr std::size_t kPlaybackRingSlots = 16;
     const std::size_t period_frames = cap_worker.periodFrames();
 
-    const bool binaural_enabled = runtime_config.binaural.enabled;
+    const bool experimental_dual_reference_mvdr =
+        runtime_config.steering.experimental_dual_reference_mvdr;
+    const bool binaural_enabled = runtime_config.binaural.enabled && !use_fixed;
     const auto binaural_backend = ParseBinauralBackend(runtime_config.binaural.backend);
     std::unique_ptr<sonitude::dsp::HrtfTable> compact_hrtf;
     std::unique_ptr<sonitude::dsp::HrtfTable> reference_hrtf;
@@ -389,29 +454,31 @@ int main(int argc, char** argv)
            binaural_backend == sonitude::dsp::BinauralBackend::FullHrtfReference) &&
           (table == nullptr || table->empty()))
       {
-        std::cerr << "realtime: binaural backend requires HRTF table; falling back to mono L=R\n";
+        throw std::runtime_error("binaural backend requires HRTF table");
       }
-      else
-      {
-        try
-        {
-          binaural_renderer.configure({.sample_rate_hz = dsp_sample_rate_hz,
-                                       .backend = binaural_backend,
-                                       .transition_ms = runtime_config.binaural.transition.duration_ms,
-                                       .max_block_frames = period_frames,
-                                       .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
-                                                   .max_ild_db = runtime_config.binaural.model.max_ild_db},
-                                       .table = table,
-                                       .array_downmix = ArrayDownmixForGeometry(geometry)});
-          stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
-          binaural_renderer_ready = true;
-          std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
-        }
-        catch (const std::exception& ex)
-        {
-          std::cerr << "realtime: binaural configure failed: " << ex.what() << '\n';
-        }
-      }
+      binaural_renderer.configure({.sample_rate_hz = dsp_sample_rate_hz,
+                                   .backend = binaural_backend,
+                                   .transition_ms = runtime_config.binaural.transition.duration_ms,
+                                   .max_block_frames = period_frames,
+                                   .itd_ild = {.head_radius_m = runtime_config.binaural.model.head_radius_m,
+                                               .max_ild_db = runtime_config.binaural.model.max_ild_db},
+                                   .table = table,
+                                   .array_downmix = ArrayDownmixForGeometry(geometry)});
+      binaural_renderer_ready = true;
+      std::cout << "Binaural renderer enabled: " << runtime_config.binaural.backend << '\n';
+    }
+    if (experimental_dual_reference_mvdr || use_fixed)
+    {
+      stereo_limiter.configure({.ceiling_linear = 0.95F, .release_ms = 80.0F}, dsp_sample_rate_hz);
+    }
+    if (experimental_dual_reference_mvdr)
+    {
+      std::cerr << "WARNING: steering.experimental_dual_reference_mvdr bypasses HRTF binaural "
+                   "renderer; dual-reference MVDR is not a complete binaural beamformer.\n";
+    }
+    if (use_fixed)
+    {
+      std::cout << "Spatial backend: fixed_measured (development, not a production-qualified profile)\n";
     }
 
     std::vector<sonitude::audio::MicFrame> mic_frames(period_frames);
@@ -420,26 +487,27 @@ int main(int argc, char** argv)
     std::vector<float> binaural_left(period_frames, 0.0F);
     std::vector<float> binaural_right(period_frames, 0.0F);
     std::vector<sonitude::dsp::StereoSample> stereo(period_frames);
-    std::vector<std::vector<sonitude::dsp::StereoSample>> playback_blocks(
-        kPlaybackRingSlots, std::vector<sonitude::dsp::StereoSample>(period_frames));
-    sonitude::rt::SpscRing<PlaybackBlockRef> playback_ring(32);
-    std::size_t write_slot = 0;
-    std::size_t software_queued_frames = 0;
-    bool playback_started = false;
-    std::size_t consecutive_playback_write_failures = 0;
+    sonitude::audio::PlaybackBlockPool playback_pool(kPlaybackRingSlots, period_frames);
 
     std::cout << "Running " << mode << " mode. Press Ctrl+C to stop.\n";
     sonitude::audio::BeamformerSteering last_target{};
     bool have_target = false;
     const auto start_tp = std::chrono::steady_clock::now();
+    if (runtime_config.realtime.enable_mlockall &&
+        !sonitude::rt::TryEnableMemoryLocking())
+    {
+      std::cerr << "Warning: mlockall failed; realtime memory locking is unavailable.\n";
+    }
+    sonitude::rt::WakeEvent shutdown_wake;
+    g_shutdown_wake.store(&shutdown_wake, std::memory_order_relaxed);
     std::jthread control_thread;
     if (mode == "beamform")
     {
-      control_thread = std::jthread([&]
+      control_thread = std::jthread([&](std::stop_token stop_token)
       {
         try
         {
-          while (g_running.load(std::memory_order_relaxed))
+          while (g_running.load(std::memory_order_relaxed) && !stop_token.stop_requested())
           {
             const auto now_ns = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -457,17 +525,42 @@ int main(int argc, char** argv)
           g_running.store(false, std::memory_order_relaxed);
         }
       });
+      if (!sonitude::rt::TryConfigureOtherScheduling(control_thread))
+      {
+        std::cerr << "Warning: control thread SCHED_OTHER pinning was not applied.\n";
+      }
     }
-    std::jthread telemetry_thread([&]
+
+    std::condition_variable_any telemetry_cv;
+    std::mutex telemetry_mutex;
+    std::atomic<RuntimeFailure> runtime_failure{RuntimeFailure::None};
+    std::jthread telemetry_thread([&](std::stop_token stop_token)
     {
       const auto period = std::chrono::milliseconds(runtime_config.telemetry.stats_period_ms);
-      while (g_running.load(std::memory_order_relaxed))
+      std::unique_lock<std::mutex> lock(telemetry_mutex);
+      while (!stop_token.stop_requested())
       {
-        std::this_thread::sleep_for(period);
-        if (!g_running.load(std::memory_order_relaxed))
+        const bool stop_now = telemetry_cv.wait_for(
+            lock, stop_token, period, [&] { return !g_running.load(std::memory_order_relaxed); });
+        if (stop_now || !g_running.load(std::memory_order_relaxed))
         {
+          switch (runtime_failure.load(std::memory_order_acquire))
+          {
+            case RuntimeFailure::PlaybackWrite:
+              std::cerr << "Playback write failed repeatedly; audio loop stopped.\n";
+              break;
+            case RuntimeFailure::PlaybackBlockRelease:
+              std::cerr << "Playback block ownership invariant failed; audio loop stopped.\n";
+              break;
+            case RuntimeFailure::PlaybackQueuePublish:
+              std::cerr << "Playback filled queue invariant failed; audio loop stopped.\n";
+              break;
+            case RuntimeFailure::None:
+              break;
+          }
           break;
         }
+        lock.unlock();
         std::cout << "telemetry: cap_xruns=" << counters.capture_xruns.load(std::memory_order_relaxed)
                   << " pb_xruns=" << counters.playback_xruns.load(std::memory_order_relaxed)
                   << " pb_write_fail=" << counters.playback_write_failures.load(std::memory_order_relaxed)
@@ -476,17 +569,116 @@ int main(int argc, char** argv)
                   << " asrc_ppm=" << counters.asrc_ratio_ppm.load(std::memory_order_relaxed)
                   << " occupancy=" << counters.ring_occupancy_frames.load(std::memory_order_relaxed)
                   << " sup_gain_milli=" << counters.suppressor_gain_milli.load(std::memory_order_relaxed)
+                  << " conf_milli=" << counters.steering_confidence_milli.load(std::memory_order_relaxed)
+                  << " speech_milli=" << counters.speech_probability_milli.load(std::memory_order_relaxed)
                   << " state=" << static_cast<int>(counters.control_state.load(std::memory_order_relaxed))
                   << '\n';
+        lock.lock();
       }
     });
+    if (!sonitude::rt::TryConfigureOtherScheduling(telemetry_thread))
+    {
+      std::cerr << "Warning: telemetry thread SCHED_OTHER pinning was not applied.\n";
+    }
+
+    std::jthread playback_thread([&](std::stop_token stop_token)
+    {
+      bool playback_started = false;
+      std::size_t consecutive_playback_write_failures = 0;
+      while (!stop_token.stop_requested() &&
+             (g_running.load(std::memory_order_relaxed) || playback_pool.filledCount() > 0U))
+      {
+        if (!playback_started)
+        {
+          if (playback_pool.filledCount() < kPrefillBlocks)
+          {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+          }
+          playback_started = true;
+        }
+
+        sonitude::audio::PlaybackBlockRef block;
+        if (!playback_pool.consume(block))
+        {
+          counters.ring_underruns.fetch_add(1, std::memory_order_relaxed);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          continue;
+        }
+
+        const std::size_t device_queued = pb.playbackQueuedFrames();
+        const std::size_t occupancy =
+            playback_pool.queuedFrames() + block.frames + device_queued;
+        if (!pb_worker.writeStereo(playback_pool.readable(block), occupancy))
+        {
+          counters.playback_write_failures.fetch_add(1, std::memory_order_relaxed);
+          ++consecutive_playback_write_failures;
+          if (consecutive_playback_write_failures >= kMaxConsecutivePlaybackFailures)
+          {
+            runtime_failure.store(RuntimeFailure::PlaybackWrite, std::memory_order_release);
+            g_running.store(false, std::memory_order_relaxed);
+            telemetry_cv.notify_all();
+            shutdown_wake.signal();
+          }
+        }
+        else
+        {
+          consecutive_playback_write_failures = 0;
+        }
+        if (!playback_pool.release(block.slot))
+        {
+          runtime_failure.store(RuntimeFailure::PlaybackBlockRelease, std::memory_order_release);
+          g_running.store(false, std::memory_order_relaxed);
+          telemetry_cv.notify_all();
+          shutdown_wake.signal();
+        }
+      }
+    });
+    if (!sonitude::rt::TryConfigureRtScheduling(playback_thread, runtime_config.realtime.playback_priority))
+    {
+      std::cerr << "Warning: playback thread realtime scheduling was not applied.\n";
+    }
+    if (!sonitude::rt::TryConfigureCurrentThreadRtScheduling(runtime_config.realtime.capture_priority))
+    {
+      std::cerr << "Warning: capture/DSP thread realtime scheduling was not applied.\n";
+    }
+    sonitude::rt::PrefaultStack(256U * 1024U);
+
     bool hold_estimator_after_xrun = false;
     while (g_running.load(std::memory_order_relaxed))
     {
+      if (can_wait)
+      {
+        const auto wait_result = cap_worker.waitForData(shutdown_wake.fd(), wait_timeout_ms);
+        if (wait_result == sonitude::audio::alsa::CaptureWait::Interrupted)
+        {
+          break;
+        }
+        if (wait_result == sonitude::audio::alsa::CaptureWait::Timeout)
+        {
+          continue;
+        }
+        if (wait_result == sonitude::audio::alsa::CaptureWait::Error)
+        {
+          std::cerr << "Capture wait failed; stopping realtime loop.\n";
+          g_running.store(false, std::memory_order_relaxed);
+          telemetry_cv.notify_all();
+          shutdown_wake.signal();
+          break;
+        }
+      }
+
       std::size_t frame_count = 0;
       if (!cap_worker.readBlock(std::span<sonitude::audio::MicFrame>(mic_frames), &frame_count))
       {
-        beamformer.resetStream();
+        if (use_fixed)
+        {
+          fixed_beamformer.resetStream();
+        }
+        else
+        {
+          beamformer.resetStream();
+        }
         suppressor.reset();
         if (binaural_renderer_ready)
         {
@@ -519,10 +711,23 @@ int main(int argc, char** argv)
       else
       {
         const auto snapshot = steering_buffer.acquire();
+        counters.steering_confidence_milli.store(
+            static_cast<std::int64_t>(std::llround(snapshot.confidence * 1000.0F)),
+            std::memory_order_relaxed);
+        counters.speech_probability_milli.store(
+            static_cast<std::int64_t>(std::llround(snapshot.speech_probability * 1000.0F)),
+            std::memory_order_relaxed);
         if (!have_target || std::fabs(snapshot.target.azimuth_deg - last_target.azimuth_deg) > 0.01F ||
             std::fabs(snapshot.target.elevation_deg - last_target.elevation_deg) > 0.01F)
         {
-          beamformer.setTarget(snapshot.target);
+          if (use_fixed)
+          {
+            fixed_beamformer.setTarget(snapshot.target);
+          }
+          else
+          {
+            beamformer.setTarget(snapshot.target);
+          }
           last_target = snapshot.target;
           have_target = true;
         }
@@ -532,30 +737,36 @@ int main(int argc, char** argv)
         suppressor.setEstimatorHold(hold_estimator_after_xrun);
         hold_estimator_after_xrun = false;
         suppressor.setControl(focus_active, confidence);
-        beamformer.process(
-            std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
-            std::span<float>(mono.data(), frame_count));
-        suppressor.process(std::span<float>(mono.data(), frame_count));
-        if (common_eq.enabled())
+        if (use_fixed)
         {
-          common_eq.processMono(std::span<float>(mono.data(), frame_count));
+          fixed_beamformer.processStereo(
+              std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+              std::span<float>(binaural_left.data(), frame_count),
+              std::span<float>(binaural_right.data(), frame_count));
+          for (std::size_t i = 0; i < frame_count; ++i)
+          {
+            mono[i] = 0.5F * (binaural_left[i] + binaural_right[i]);
+          }
+          suppressor.process(std::span<float>(mono.data(), frame_count));
+          stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
+                                 std::span<float>(binaural_right.data(), frame_count));
+          for (std::size_t i = 0; i < frame_count; ++i)
+          {
+            stereo[i].left = binaural_left[i];
+            stereo[i].right = binaural_right[i];
+          }
         }
-        limiter.process(std::span<float>(mono.data(), frame_count));
-        counters.suppressor_gain_milli.store(
-            static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),
-            std::memory_order_relaxed);
-        if (binaural_renderer_ready)
+        else if (experimental_dual_reference_mvdr)
         {
-          const sonitude::audio::BeamformerSteering binaural_dir =
-              runtime_config.binaural.direction.follow_steering
-                  ? snapshot.target
-                  : sonitude::audio::BeamformerSteering{
-                        runtime_config.binaural.direction.azimuth_deg,
-                        runtime_config.binaural.direction.elevation_deg};
-          binaural_renderer.setDirection(binaural_dir);
-          binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
-                                    std::span<float>(binaural_left.data(), frame_count),
-                                    std::span<float>(binaural_right.data(), frame_count));
+          beamformer.processStereo(
+              std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+              std::span<float>(binaural_left.data(), frame_count),
+              std::span<float>(binaural_right.data(), frame_count));
+          for (std::size_t i = 0; i < frame_count; ++i)
+          {
+            mono[i] = 0.5F * (binaural_left[i] + binaural_right[i]);
+          }
+          suppressor.process(std::span<float>(mono.data(), frame_count));
           stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
                                  std::span<float>(binaural_right.data(), frame_count));
           for (std::size_t i = 0; i < frame_count; ++i)
@@ -566,65 +777,71 @@ int main(int argc, char** argv)
         }
         else
         {
-          for (std::size_t i = 0; i < frame_count; ++i)
+          beamformer.process(
+              std::span<const sonitude::audio::MicFrame>(calibrated_frames.data(), frame_count),
+              std::span<float>(mono.data(), frame_count));
+          suppressor.process(std::span<float>(mono.data(), frame_count));
+          if (common_eq.enabled())
           {
-            stereo[i].left = mono[i];
-            stereo[i].right = mono[i];
+            common_eq.processMono(std::span<float>(mono.data(), frame_count));
           }
-        }
-      }
-
-      std::copy(stereo.begin(),
-                stereo.begin() + static_cast<std::ptrdiff_t>(frame_count),
-                playback_blocks[write_slot].begin());
-      const std::size_t written_slot = write_slot;
-      write_slot = (write_slot + 1U) % playback_blocks.size();
-      if (!playback_ring.push({written_slot, frame_count}))
-      {
-        counters.ring_overruns.fetch_add(1, std::memory_order_relaxed);
-      }
-      else
-      {
-        software_queued_frames += frame_count;
-      }
-
-      if (!playback_started && playback_ring.size() >= kPrefillBlocks)
-      {
-        playback_started = true;
-      }
-
-      if (playback_started)
-      {
-        PlaybackBlockRef block;
-        if (playback_ring.pop(block))
-        {
-          software_queued_frames -= block.frames;
-          const std::size_t device_queued = pb.playbackQueuedFrames();
-          const std::size_t occupancy = software_queued_frames + device_queued;
-          if (!pb_worker.writeStereo(
-              std::span<const sonitude::dsp::StereoSample>(playback_blocks[block.slot].data(), block.frames),
-              occupancy))
+          limiter.process(std::span<float>(mono.data(), frame_count));
+          if (binaural_renderer_ready)
           {
-            counters.playback_write_failures.fetch_add(1, std::memory_order_relaxed);
-            ++consecutive_playback_write_failures;
-            if (consecutive_playback_write_failures >= kMaxConsecutivePlaybackFailures)
+            const sonitude::audio::BeamformerSteering binaural_dir =
+                runtime_config.binaural.direction.follow_steering
+                    ? snapshot.target
+                    : sonitude::audio::BeamformerSteering{
+                          runtime_config.binaural.direction.azimuth_deg,
+                          runtime_config.binaural.direction.elevation_deg};
+            binaural_renderer.setDirection(binaural_dir);
+            binaural_renderer.process(std::span<const float>(mono.data(), frame_count),
+                                      std::span<float>(binaural_left.data(), frame_count),
+                                      std::span<float>(binaural_right.data(), frame_count));
+            stereo_limiter.process(std::span<float>(binaural_left.data(), frame_count),
+                                   std::span<float>(binaural_right.data(), frame_count));
+            for (std::size_t i = 0; i < frame_count; ++i)
             {
-              std::cerr << "Playback write failed repeatedly; stopping audio loop.\n";
-              g_running.store(false, std::memory_order_relaxed);
+              stereo[i].left = binaural_left[i];
+              stereo[i].right = binaural_right[i];
             }
           }
           else
           {
-            consecutive_playback_write_failures = 0;
+            throw std::runtime_error(
+                "mono L=R playback path is disabled; enable binaural.enabled for HRTF output");
           }
         }
-        else
-        {
-          counters.ring_underruns.fetch_add(1, std::memory_order_relaxed);
-        }
+        counters.suppressor_gain_milli.store(
+            static_cast<std::int64_t>(std::llround(suppressor.currentGain() * 1000.0F)),
+            std::memory_order_relaxed);
       }
 
+      std::size_t write_slot = 0;
+      if (!playback_pool.acquire(write_slot))
+      {
+        counters.ring_overruns.fetch_add(1, std::memory_order_relaxed);
+        continue;
+      }
+      const auto output_block = playback_pool.writable(write_slot);
+      std::copy(stereo.begin(),
+                stereo.begin() + static_cast<std::ptrdiff_t>(frame_count),
+                output_block.begin());
+      if (!playback_pool.publish(write_slot, frame_count))
+      {
+        runtime_failure.store(RuntimeFailure::PlaybackQueuePublish, std::memory_order_release);
+        g_running.store(false, std::memory_order_relaxed);
+        telemetry_cv.notify_all();
+        shutdown_wake.signal();
+      }
     }
+    g_running.store(false, std::memory_order_relaxed);
+    telemetry_cv.notify_all();
+    shutdown_wake.signal();
+    g_shutdown_wake.store(nullptr, std::memory_order_relaxed);
+    control_thread.request_stop();
+    telemetry_thread.request_stop();
+    playback_thread.request_stop();
     return 0;
 #else
     std::cout << "Passthrough mode is Linux-only (ALSA).\n";

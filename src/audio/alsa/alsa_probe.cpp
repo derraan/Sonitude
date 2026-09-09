@@ -12,6 +12,23 @@ namespace sonitude::audio::alsa
 #if defined(__linux__)
 namespace
 {
+const char* FormatName(const snd_pcm_format_t format)
+{
+  switch (format)
+  {
+    case SND_PCM_FORMAT_S16_LE:
+      return "S16_LE";
+    case SND_PCM_FORMAT_S24_3LE:
+      return "S24_3LE";
+    case SND_PCM_FORMAT_S32_LE:
+      return "S32_LE";
+    case SND_PCM_FORMAT_FLOAT_LE:
+      return "FLOAT_LE";
+    default:
+      return "UNKNOWN";
+  }
+}
+
 DeviceProbeResult ProbePcm(const std::string& pcm_name, const snd_pcm_stream_t stream)
 {
   snd_pcm_t* pcm = nullptr;
@@ -32,7 +49,15 @@ DeviceProbeResult ProbePcm(const std::string& pcm_name, const snd_pcm_stream_t s
   out.pcm_name = pcm_name;
   out.channels_min = min_channels;
   out.channels_max = max_channels;
-  out.formats = {"S16_LE", "S24_3LE", "S32_LE"};
+  for (const snd_pcm_format_t candidate :
+       {SND_PCM_FORMAT_S16_LE, SND_PCM_FORMAT_S24_3LE, SND_PCM_FORMAT_S32_LE, SND_PCM_FORMAT_FLOAT_LE})
+  {
+    const int rc = snd_pcm_hw_params_test_format(pcm, params, candidate);
+    if (rc == 0)
+    {
+      out.formats.emplace_back(FormatName(candidate));
+    }
+  }
   for (const std::uint32_t rate : {16000U, 24000U, 44100U, 48000U, 96000U})
   {
     const int rc = snd_pcm_hw_params_test_rate(pcm, params, rate, 0);

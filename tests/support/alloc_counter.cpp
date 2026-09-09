@@ -21,6 +21,7 @@ void* CountedMalloc(const std::size_t n)
 }
 }  // namespace
 
+#if !defined(SONITUDE_DISABLE_ALLOC_COUNTER_GLOBAL_NEW)
 void* operator new(std::size_t n)
 {
   return CountedMalloc(n);
@@ -62,6 +63,7 @@ void operator delete[](void* p, std::size_t) noexcept
 {
   std::free(p);
 }
+#endif
 
 namespace sonitude::tests::support
 {
