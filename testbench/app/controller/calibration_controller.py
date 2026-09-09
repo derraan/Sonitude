@@ -28,7 +28,12 @@ from tools.calibration.compile_calibration import (  # noqa: E402
 )
 from tools.calibration.geometry import MIC_IDS  # noqa: E402
 from tools.calibration.angles import STANDARD_ARRAY_AZIMUTHS_DEG, format_azimuth_label  # noqa: E402
-from tools.calibration.mdat_parse import MdatParseResult, parse_rew_mdat, summarize_mdat_markdown  # noqa: E402
+from tools.calibration.mdat_parse import (  # noqa: E402
+    MdatParseResult,
+    merge_mdat_results,
+    parse_rew_mdat,
+    summarize_mdat_markdown,
+)
 
 __all__ = [
     "DEFAULT_CALIBRATION_OUT_DIR",
@@ -41,6 +46,7 @@ __all__ = [
     "compile_session",
     "default_geometry_path",
     "format_azimuth_label",
+    "merge_mdat_results",
     "missing_compile_inputs",
     "parse_rew_mdat",
     "resolve_config_sidecar",

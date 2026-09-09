@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QMainWindow, QTabWidget
 
 from app.config_reader import DEFAULT_CONFIG_PATH
+from app.controller.runtime_yaml_catalog import calibration_path_from_runtime
 from app.ui.calibration_tab import CalibrationTab
 from app.ui.recorded_tab import RecordedDataTab
 from app.ui.realtime_tab import RealtimeTab
@@ -34,12 +35,15 @@ class MainWindow(QMainWindow):
 
     def _on_dsp_config_ready(self, config_path: str) -> None:
         path = Path(config_path)
-        self.recorded_tab.set_runtime_config_path(path)
-        self.realtime_tab.set_runtime_config_path(path)
+        cal = calibration_path_from_runtime(path)
+        self.recorded_tab.apply_pipeline_files(path, cal, restart_if_running=True)
+        self.realtime_tab.apply_pipeline_files(path, cal, restart_if_running=True)
 
-    def _on_runtime_config_committed(self, _config_path: str) -> None:
-        self.recorded_tab.set_runtime_config_path(DEFAULT_CONFIG_PATH)
-        self.realtime_tab.set_runtime_config_path(DEFAULT_CONFIG_PATH)
+    def _on_runtime_config_committed(self, config_path: str) -> None:
+        path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
+        cal = calibration_path_from_runtime(path)
+        self.recorded_tab.apply_pipeline_files(path, cal, restart_if_running=True)
+        self.realtime_tab.apply_pipeline_files(path, cal, restart_if_running=True)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self.recorded_tab.save_layout()

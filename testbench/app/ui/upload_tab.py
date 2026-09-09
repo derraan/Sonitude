@@ -228,7 +228,8 @@ class UploadTab(QWidget):
     def _apply_commit_result(self, result: UploadCommitResult, variant: str) -> None:
         self._status.setStyleSheet("color: #4caf50;")
         self._status.setText(
-            f"Committed {variant} to default runtime YAML. Restart processing to apply calibration/YAML changes."
+            f"Committed {variant} to config/default.yaml. Recorded and Real-Time now point at that YAML; "
+            "a running Real-Time stream is restarted automatically."
         )
         self._paths.setText(
             f"Config: {result.committed_config_path}\n"

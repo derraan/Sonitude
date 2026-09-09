@@ -47,6 +47,7 @@ from app.controller.calibration_controller import (
     format_azimuth_label,
     missing_compile_inputs,
     parse_rew_mdat,
+    merge_mdat_results,
     summarize_mdat_markdown,
     write_dsp_runtime_overlay,
 )
@@ -135,7 +136,8 @@ class CalibrationTab(QWidget):
         angle_btns = QHBoxLayout()
         import_wav_btn = QPushButton("Import WAV for row")
         import_wav_btn.clicked.connect(self._on_import_angle_wav)
-        import_mdat_btn = QPushButton("Import REW .mdat")
+        import_mdat_btn = QPushButton("Import REW .mdat…")
+        import_mdat_btn.setToolTip("Select one or more .mdat files (Ctrl+click). Split REW exports are merged.")
         import_mdat_btn.clicked.connect(self._on_import_mdat)
         enable_all_btn = QPushButton("Enable all")
         enable_all_btn.clicked.connect(lambda: self._set_all_angles(True))
@@ -188,7 +190,7 @@ class CalibrationTab(QWidget):
         clear_rew_btn.clicked.connect(lambda: self._rew_edit.setText(""))
 
         self._mdat_edit = _path_edit()
-        self._mdat_edit.setPlaceholderText("Optional shared REW .mdat")
+        self._mdat_edit.setPlaceholderText("Optional REW .mdat (select multiple if split at 32 measurements)")
 
         self._stimulus_edit = _path_edit()
         stimulus_btn = QPushButton("Import stimulus")
@@ -219,7 +221,7 @@ class CalibrationTab(QWidget):
         files_layout.addLayout(stim_row)
         mdat_row = QHBoxLayout()
         mdat_row.addWidget(self._mdat_edit, stretch=1)
-        files_layout.addWidget(QLabel("Parsed REW .mdat (metadata / delays):"))
+        files_layout.addWidget(QLabel("Parsed REW .mdat (metadata / delays; multiple files are merged):"))
         files_layout.addLayout(mdat_row)
         rew_row = QHBoxLayout()
         rew_row.addWidget(self._rew_edit, stretch=1)
@@ -477,27 +479,29 @@ class CalibrationTab(QWidget):
             self._use_checks[az].setChecked(True)
         self._on_use_toggled(az)
 
-    def _on_import_mdat(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select REW .mdat", filter=_MDAT_FILTER)
-        if not path:
-            return
-        try:
-            result = parse_rew_mdat(path)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "MDAT parse failed", str(exc))
-            return
-        self._mdat_result = result
-        self._mdat_edit.setText(path)
-        self._report_view.setPlainText(summarize_mdat_markdown(result))
+    def _clear_mdat_preview_columns(self) -> None:
+        for row, _az in enumerate(STANDARD_ARRAY_AZIMUTHS_DEG):
+            self._angle_table.item(row, _COL_DELAY).setText("—")
+            self._angle_table.item(row, _COL_DELAY).setToolTip("")
+            self._angle_table.item(row, _COL_LEVEL).setText("—")
 
-        # Fill delay/level columns for matching azimuths (array channels averaged for preview).
+    def _apply_mdat_preview(self, result) -> None:
+        self._clear_mdat_preview_columns()
         by_az = result.by_azimuth()
         for az in STANDARD_ARRAY_AZIMUTHS_DEG:
             row = self._row_for_azimuth(az)
             if row < 0:
                 continue
             delays = result.array_channel_delays_ms(az)
-            if delays:
+            preferred = [
+                m
+                for m in result.measurements
+                if m.is_array_channel
+                and m.channel is not None
+                and m.azimuth_deg is not None
+                and abs(float(m.azimuth_deg) - float(az)) < 1e-6
+            ]
+            if delays and preferred:
                 mean_ms = sum(delays.values()) / len(delays)
                 self._angle_table.item(row, _COL_DELAY).setText(f"{mean_ms:.3f}")
                 tip = ", ".join(f"ch{ch}:{ms:.3f}ms" for ch, ms in sorted(delays.items()))
@@ -509,10 +513,28 @@ class CalibrationTab(QWidget):
             ]
             if peaks:
                 self._angle_table.item(row, _COL_LEVEL).setText(f"{sum(peaks) / len(peaks):.1f}")
-            elif abs(az) < 1e-9 and result.array_channel_delays_ms(0.0):
-                # 0° delays may exist even when FR cards didn't attach peaks.
-                pass
-        self._status.setText(f"Parsed MDAT: {len(result.measurements)} measurement notes")
+
+    def _on_import_mdat(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(self, "Select REW .mdat file(s)", filter=_MDAT_FILTER)
+        if not paths:
+            return
+        parsed = []
+        try:
+            for path in paths:
+                parsed.append(parse_rew_mdat(path))
+            result = merge_mdat_results(parsed)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "MDAT parse failed", str(exc))
+            return
+        self._mdat_result = result
+        names = [p.name for p in (result.source_paths or [Path(p) for p in paths])]
+        self._mdat_edit.setText(" + ".join(names))
+        self._mdat_edit.setToolTip("\n".join(str(p) for p in (result.source_paths or paths)))
+        self._report_view.setPlainText(summarize_mdat_markdown(result))
+        self._apply_mdat_preview(result)
+        self._status.setText(
+            f"Parsed {len(result.source_paths or paths)} MDAT file(s): {len(result.measurements)} measurement notes"
+        )
         self._warnings.setStyleSheet("color: #c9a227;")
         self._warnings.setText("; ".join(result.warnings))
 

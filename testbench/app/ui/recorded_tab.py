@@ -48,6 +48,7 @@ from app.ui.layout_persist import (
     save_splitter,
 )
 from app.ui.metrics_panel import MetricsPanel
+from app.ui.pipeline_config_picker import PipelineConfigPicker, recorded_session_yaml
 from app.ui.playback_panel import PlaybackPanel
 from app.ui.secondary_note import apply_secondary_note
 from app.ui.steering_controls import SteeringControls
@@ -213,8 +214,12 @@ class RecordedDataTab(QWidget):
         steering_test_layout.addRow(self._steering_test_checkbox)
         steering_test_layout.addRow("Expected source direction:", self._expected_azimuth_spin)
 
+        self._pipeline = PipelineConfigPicker(recorded_session_yaml())
+        self._pipeline.selectionChanged.connect(self._on_pipeline_changed)
+
         config_inner = QWidget()
         config_layout = QVBoxLayout(config_inner)
+        config_layout.addWidget(self._pipeline)
         config_layout.addWidget(self._steering)
         config_layout.addWidget(self._beamformer)
         config_layout.addWidget(self._live_dsp)
@@ -327,6 +332,7 @@ class RecordedDataTab(QWidget):
 
         outer = QVBoxLayout(self)
         outer.addWidget(self._main_splitter)
+        self._sync_config_path()
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -340,10 +346,32 @@ class RecordedDataTab(QWidget):
         save_splitter(self._inspect_splitter, KEY_RECORDED_V)
 
     def set_runtime_config_path(self, path: Path) -> None:
-        self._config_path = Path(path)
+        self.apply_pipeline_files(Path(path))
+
+    def apply_pipeline_files(
+        self,
+        runtime_yaml: Path,
+        calibration_yaml: Path | None = None,
+        *,
+        restart_if_running: bool = False,
+    ) -> None:
+        self._pipeline.set_selection(Path(runtime_yaml), calibration_yaml)
+        self._sync_config_path()
         row = self._file_list.currentRow()
         if 0 <= row < len(self._selected_paths):
             self._show_metadata(self._selected_paths[row])
+
+    def _sync_config_path(self) -> None:
+        self._config_path = self._pipeline.materialize_config()
+
+    def _on_pipeline_changed(self) -> None:
+        self._sync_config_path()
+        row = self._file_list.currentRow()
+        if 0 <= row < len(self._selected_paths):
+            self._show_metadata(self._selected_paths[row])
+        if self._preview is not None and self._preview.isRunning():
+            self._on_live_stop()
+            self._on_live_play()
 
     def dsp_commit_snapshot(self) -> DspCommitSnapshot:
         return DspCommitSnapshot(
@@ -432,6 +460,7 @@ class RecordedDataTab(QWidget):
         self._progress_bar.setRange(0, 100 if len(paths) == 1 else len(paths))
         self._progress_bar.setValue(0)
         self._status_label.setText(f"Processing 0/{len(paths)}...")
+        self._sync_config_path()
 
         expected_azimuth = (
             self._expected_azimuth_spin.value() if self._steering_test_checkbox.isChecked() else None
@@ -539,6 +568,7 @@ class RecordedDataTab(QWidget):
         if path is None:
             QMessageBox.warning(self, "No file selected", "Select a 6-channel recording first.")
             return
+        self._sync_config_path()
         try:
             config = read_runtime_config_summary(self._config_path)
         except Exception as exc:  # noqa: BLE001

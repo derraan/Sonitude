@@ -13,6 +13,7 @@ from app.controller.calibration_controller import (
     compile_session,
     default_geometry_path,
     format_azimuth_label,
+    merge_mdat_results,
     missing_compile_inputs,
     parse_rew_mdat,
     write_dsp_runtime_overlay,
@@ -79,6 +80,27 @@ def test_parse_rew_mdat_extracts_delay_and_levels() -> None:
     elements = result.element_delays_ms()
     assert "M0" in elements
     assert any(m.timing_peak_dbfs is not None for m in result.measurements)
+
+
+def test_merge_mdat_results_combines_split_array_files() -> None:
+    base = Path(
+        r"C:\Users\darre\3301PrototypeS2\Sonitude-spectral-postfilter"
+        r"\tmp_cal_unzip\Characterization 9-9-26"
+    )
+    plus = base / "Sonitude-Characterization-ProtoV1-Array-(0 to +90deg).mdat"
+    minus = base / "Sonitude-Characterization-ProtoV1-Array-(-30 to -90deg).mdat"
+    if not plus.is_file() or not minus.is_file():
+        import pytest
+
+        pytest.skip("split characterization MDAT fixtures not present")
+    merged = merge_mdat_results([parse_rew_mdat(plus), parse_rew_mdat(minus)])
+    assert len(merged.source_paths) == 2
+    assert set(merged.array_channel_delays_ms(0.0)) == {1, 2, 3, 4, 5, 6}
+    assert set(merged.array_channel_delays_ms(-90.0)) == {1, 2, 3, 4, 5, 6}
+    assert set(merged.array_channel_delays_ms(90.0)) == {1, 2, 3, 4, 5, 6}
+    # Incomplete leftovers in the +90 file must not clobber the dedicated -30 take.
+    minus_only = parse_rew_mdat(minus)
+    assert merged.array_channel_delays_ms(-30.0) == minus_only.array_channel_delays_ms(-30.0)
 
 
 def test_missing_compile_inputs_lists_absent_files(tmp_path: Path) -> None:

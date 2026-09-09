@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
 
 from .angles import parse_azimuth_from_name
 
@@ -72,6 +73,7 @@ class MdatParseResult:
     measurements: list[MdatMeasurement] = field(default_factory=list)
     sample_rate_hz_guess: float | None = None
     warnings: list[str] = field(default_factory=list)
+    source_paths: list[Path] = field(default_factory=list)
 
     def by_azimuth(self) -> dict[float, list[MdatMeasurement]]:
         out: dict[float, list[MdatMeasurement]] = {}
@@ -291,14 +293,66 @@ def parse_rew_mdat(path: str | Path, *, window_bytes: int = 2500) -> MdatParseRe
         measurements=measurements,
         sample_rate_hz_guess=sample_rate,
         warnings=warnings,
+        source_paths=[path],
+    )
+
+
+def merge_mdat_results(results: Sequence[MdatParseResult]) -> MdatParseResult:
+    """Concatenate measurements from split REW MDATs (e.g. 32-measurement cap)."""
+    parsed = [item for item in results if item is not None]
+    if not parsed:
+        raise RuntimeError("No MDAT results to merge")
+    if len(parsed) == 1:
+        return parsed[0]
+
+    measurements: list[MdatMeasurement] = []
+    by_key: dict[str, MdatMeasurement] = {}
+    order: list[str] = []
+    warnings: list[str] = []
+    labels: list[str] = []
+    source_paths: list[Path] = []
+    sample_rate: float | None = None
+    for result in parsed:
+        labels.append(result.version_label)
+        for src in result.source_paths or [result.path]:
+            if src not in source_paths:
+                source_paths.append(src)
+        if sample_rate is None:
+            sample_rate = result.sample_rate_hz_guess
+        for item in result.measurements:
+            if item.azimuth_deg is not None and item.channel is not None:
+                key = f"az{float(item.azimuth_deg):g}|ch{item.channel}"
+            else:
+                key = f"{item.source_wav.lower()}|{item.channel}"
+            if key not in by_key:
+                order.append(key)
+            by_key[key] = item
+        for warning in result.warnings:
+            if warning not in warnings:
+                warnings.append(warning)
+    measurements = [by_key[key] for key in order]
+
+    names = ", ".join(p.name for p in source_paths)
+    warnings.insert(0, f"Merged {len(source_paths)} MDAT files: {names}")
+    unique_labels = list(dict.fromkeys(labels))
+    return MdatParseResult(
+        path=source_paths[0],
+        version_label=" + ".join(unique_labels),
+        measurements=measurements,
+        sample_rate_hz_guess=sample_rate,
+        warnings=warnings,
+        source_paths=source_paths,
     )
 
 
 def summarize_mdat_markdown(result: MdatParseResult) -> str:
+    sources = result.source_paths or [result.path]
+    title = sources[0].name if len(sources) == 1 else f"{len(sources)} files"
     lines = [
-        f"# REW MDAT: {result.path.name}",
+        f"# REW MDAT: {title}",
         "",
         f"- format: {result.version_label}",
+        f"- files: {', '.join(p.name for p in sources)}",
         f"- measurements parsed: {len(result.measurements)}",
         f"- sample_rate_guess_hz: {result.sample_rate_hz_guess}",
         "",
