@@ -18,6 +18,11 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
+try:
+    from .deconvolve import DirectPathWindowSpec, deconvolve_multichannel, direct_path_window
+except ImportError:  # pragma: no cover - direct script execution
+    from deconvolve import DirectPathWindowSpec, deconvolve_multichannel, direct_path_window
+
 MAGIC = b"SMV3"
 HEADER_SIZE = 128
 FNV_OFFSET = 14695981039346656037
@@ -103,6 +108,8 @@ def pack_profile(profile: dict) -> bytes:
     struct.pack_into("<I", header, 24, len(payload))
     geom = str(profile.get("geometry_id", "synthetic")).encode("ascii")[:31]
     header[32 : 32 + len(geom)] = geom
+    conditioning = bytes(profile.get("conditioning_hash_bytes", b"\x00" * 16))
+    header[64 : 64 + 16] = conditioning[:16].ljust(16, b"\x00")
     header[96] = 1 if profile.get("synthetic", True) else 0
     header[97] = int(profile.get("noise_model", 0))
     struct.pack_into("<f", header, 100, float(profile.get("reference_gain", 1.0)))
@@ -174,7 +181,7 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
     manifest_path = Path(path)
     raw = _load_mapping(manifest_path)
     schema_version = _as_int(raw, "schema_version", minimum=1)
-    if schema_version != 1:
+    if schema_version not in {1, 2}:
         raise ValueError(f"Unsupported manifest schema_version: {schema_version}")
     layout = str(raw.get("layout", "")).strip()
     if layout not in {"multichannel", "per_mic"}:
@@ -199,7 +206,17 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
         "gains": raw.get("gains"),
         "polarity": raw.get("polarity"),
         "directions": directions,
+        "input": str(raw.get("input", "ir")).strip().lower(),
+        "stimulus": raw.get("stimulus"),
+        "window": raw.get("window"),
+        "deconv_eps_rel": float(raw.get("deconv_eps_rel", 1.0e-6)),
     }
+    if manifest["input"] not in {"ir", "sweep"}:
+        raise ValueError("Manifest field 'input' must be 'ir' or 'sweep'")
+    if manifest["input"] == "sweep":
+        stimulus = manifest.get("stimulus")
+        if not isinstance(stimulus, str) or not stimulus.strip():
+            raise ValueError("Manifest field 'stimulus' is required for input='sweep'")
     for key in ("reference_mic", "left_ear_mic", "right_ear_mic"):
         idx = int(manifest[key])
         if idx < 0 or idx >= MICS:
@@ -209,6 +226,23 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
     if manifest["self_noise"] < 0.0 or manifest["max_weight_norm"] <= 0.0:
         raise ValueError("self_noise must be >= 0 and max_weight_norm must be > 0")
     return manifest
+
+
+def _parse_window_spec(raw: Any) -> DirectPathWindowSpec:
+    if raw is None:
+        return DirectPathWindowSpec()
+    if not isinstance(raw, dict):
+        raise ValueError("Manifest field 'window' must be an object")
+    pre_samples = int(raw.get("pre_samples", 8))
+    length_samples = int(raw.get("length_samples", 256))
+    taper = str(raw.get("taper", "tukey")).strip().lower()
+    tukey_alpha = float(raw.get("tukey_alpha", 0.25))
+    return DirectPathWindowSpec(
+        pre_samples=pre_samples,
+        length_samples=length_samples,
+        taper=taper,
+        tukey_alpha=tukey_alpha,
+    )
 
 
 def _resolve_path(base_dir: Path, raw: str) -> Path:
@@ -268,12 +302,27 @@ def _parse_direction_sources(manifest: dict[str, Any], base_dir: Path) -> list[d
     return sources
 
 
-def load_ir_cube(manifest: dict[str, Any], base_dir: str | Path) -> tuple[np.ndarray, list[float], int]:
+def _load_stimulus(path: Path, expected_sr: int) -> np.ndarray:
+    wav, sr = _load_audio(path)
+    if sr != expected_sr:
+        raise ValueError(f"Stimulus sample-rate mismatch for {path}: {sr} != {expected_sr}")
+    return wav[:, 0].copy()
+
+
+def load_ir_cube(
+    manifest: dict[str, Any], base_dir: str | Path
+) -> tuple[np.ndarray, list[float], int, list[dict[str, Any]]]:
     src = _parse_direction_sources(manifest, Path(base_dir))
     expected_sr = int(manifest["sample_rate_hz"])
     direction_waves: list[np.ndarray] = []
     azimuths: list[float] = []
+    report_rows: list[dict[str, Any]] = []
     max_len = 0
+    input_kind = str(manifest.get("input", "ir"))
+    window_spec = _parse_window_spec(manifest.get("window"))
+    stimulus = None
+    if input_kind == "sweep":
+        stimulus = _load_stimulus(_resolve_path(Path(base_dir), str(manifest["stimulus"])), expected_sr)
     for item in src:
         if item["layout"] == "multichannel":
             wav, sr = _load_audio(item["paths"][0])
@@ -281,7 +330,7 @@ def load_ir_cube(manifest: dict[str, Any], base_dir: str | Path) -> tuple[np.nda
                 raise ValueError(f"Sample-rate mismatch for {item['paths'][0]}: {sr} != {expected_sr}")
             if wav.shape[1] != MICS:
                 raise ValueError(f"{item['paths'][0]} must have exactly 6 channels")
-            per_dir = wav.T
+            per_dir_raw = wav.T
         else:
             chans: list[np.ndarray] = []
             for p in item["paths"]:
@@ -291,7 +340,32 @@ def load_ir_cube(manifest: dict[str, Any], base_dir: str | Path) -> tuple[np.nda
                 if wav.shape[1] != 1:
                     raise ValueError(f"{p} must be mono for per_mic layout")
                 chans.append(wav[:, 0])
-            per_dir = np.stack(chans, axis=0)
+            per_dir_raw = np.stack(chans, axis=0)
+        if input_kind == "sweep":
+            assert stimulus is not None
+            irs = deconvolve_multichannel(
+                per_dir_raw.T,
+                stimulus,
+                eps_rel=float(manifest.get("deconv_eps_rel", 1.0e-6)),
+            )
+            windowed = direct_path_window(irs, window_spec)
+            per_dir = windowed.windowed
+            report_rows.append(
+                {
+                    "azimuth_deg": float(item["azimuth_deg"]),
+                    "window_start_sample": int(windowed.start_sample),
+                    "window_stop_sample": int(windowed.stop_sample),
+                    "direct_arrival_samples": [int(v) for v in windowed.arrival_samples],
+                    "window": {
+                        "pre_samples": int(window_spec.pre_samples),
+                        "length_samples": int(window_spec.length_samples),
+                        "taper": str(window_spec.taper),
+                        "tukey_alpha": float(window_spec.tukey_alpha),
+                    },
+                }
+            )
+        else:
+            per_dir = per_dir_raw
         max_len = max(max_len, int(per_dir.shape[1]))
         direction_waves.append(per_dir)
         azimuths.append(float(item["azimuth_deg"]))
@@ -299,7 +373,7 @@ def load_ir_cube(manifest: dict[str, Any], base_dir: str | Path) -> tuple[np.nda
     irs = np.zeros((len(direction_waves), MICS, max_len), dtype=np.float64)
     for di, arr in enumerate(direction_waves):
         irs[di, :, : arr.shape[1]] = arr
-    return irs, azimuths, expected_sr
+    return irs, azimuths, expected_sr, report_rows
 
 
 def _m3_channel_index(ch: dict[str, Any], fallback_index: int) -> int:
@@ -353,6 +427,19 @@ def load_conditioner(manifest: dict[str, Any], base_dir: str | Path) -> tuple[np
     return gains, polarity
 
 
+def conditioning_hash(gains: np.ndarray, polarity: np.ndarray) -> bytes:
+    vec = np.concatenate(
+        (
+            np.asarray(gains, dtype=np.float32).reshape(-1),
+            np.asarray(polarity, dtype=np.float32).reshape(-1),
+        )
+    )
+    h = fnv1a64(vec.tobytes())
+    low = h.to_bytes(8, "little", signed=False)
+    high = ((h * 0x9E3779B185EBCA87) & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little", signed=False)
+    return low + high
+
+
 def compile_from_irs(
     irs: np.ndarray,
     azimuths: list[float],
@@ -366,6 +453,7 @@ def compile_from_irs(
     polarity: np.ndarray | None = None,
     max_weight_norm: float = 4.0,
     self_noise: float = 1e-3,
+    conditioning_hash_bytes: bytes | None = None,
 ) -> dict:
     if irs.ndim != 3 or irs.shape[1] != MICS:
         raise ValueError("irs must be [dir, 6, time]")
@@ -435,10 +523,11 @@ def compile_from_irs(
         "steering": d_all.astype(np.complex64),
         "valid": valid,
         "dominance_scale": scale,
+        "conditioning_hash_bytes": conditioning_hash_bytes or (b"\x00" * 16),
     }
 
 
-def write_outputs(profile: dict, out_prefix: Path) -> None:
+def write_outputs(profile: dict, out_prefix: Path, report_extra: dict[str, Any] | None = None) -> None:
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
     blob = pack_profile(profile)
     (out_prefix.with_suffix(".bin")).write_bytes(blob)
@@ -463,12 +552,16 @@ def write_outputs(profile: dict, out_prefix: Path) -> None:
     (out_prefix.with_suffix(".csv")).write_text("\n".join(rows) + "\n", encoding="utf-8")
     report = {
         "synthetic": bool(profile.get("synthetic", True)),
+        "geometry_id": str(profile.get("geometry_id", "synthetic")),
         "directions": int(profile["direction_count"]),
         "bins": int(profile["bin_count"]),
         "bytes": len(blob),
         "noise_model": "angular_atf_plus_documented_self_noise",
         "self_noise_note": "Identity loading is a documented synthetic floor, not a measured sensor noise PSD.",
+        "conditioning_hash_hex": bytes(profile.get("conditioning_hash_bytes", b"")).hex(),
     }
+    if report_extra:
+        report.update(report_extra)
     (out_prefix.with_suffix(".report.json")).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
@@ -497,8 +590,9 @@ def _compile_synthetic(args: argparse.Namespace) -> None:
 def _compile_manifest(args: argparse.Namespace) -> None:
     manifest_path = Path(args.manifest).resolve()
     manifest = load_manifest(manifest_path)
-    irs, azimuths, sample_rate_hz = load_ir_cube(manifest, manifest_path.parent)
+    irs, azimuths, sample_rate_hz, direction_meta = load_ir_cube(manifest, manifest_path.parent)
     gains, polarity = load_conditioner(manifest, manifest_path.parent)
+    cond_hash = conditioning_hash(gains, polarity)
     profile = compile_from_irs(
         irs,
         azimuths,
@@ -512,10 +606,15 @@ def _compile_manifest(args: argparse.Namespace) -> None:
         polarity=polarity,
         max_weight_norm=float(manifest["max_weight_norm"]),
         self_noise=float(manifest["self_noise"]),
+        conditioning_hash_bytes=cond_hash,
     )
     profile["synthetic"] = False
     profile["geometry_id"] = str(manifest["geometry_id"])
-    write_outputs(profile, Path(args.output_prefix))
+    report_extra = {
+        "input_mode": str(manifest.get("input", "ir")),
+        "windowing": direction_meta,
+    }
+    write_outputs(profile, Path(args.output_prefix), report_extra=report_extra)
     print(f"wrote physical profile prefix {args.output_prefix}")
 
 

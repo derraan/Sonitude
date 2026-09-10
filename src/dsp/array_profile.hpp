@@ -62,6 +62,13 @@ struct ArrayProfileView
   [[nodiscard]] bool valid() const noexcept { return profile != nullptr && !profile->empty(); }
 };
 
+struct AzimuthBracket
+{
+  std::size_t left_index = 0;
+  std::size_t right_index = 0;
+  float blend = 0.0F;  // 0 => left only, 1 => right only
+};
+
 ArrayProfile LoadArrayProfileFromBytes(std::span<const std::uint8_t> bytes);
 ArrayProfile LoadArrayProfileFromFile(const std::string& path);
 std::vector<std::uint8_t> SerializeArrayProfile(const ArrayProfile& profile);
@@ -70,4 +77,5 @@ void ValidateArrayProfile(const ArrayProfile& profile,
                           std::uint16_t fft_size,
                           std::uint16_t hop_size);
 std::size_t NearestAzimuthIndex(const ArrayProfile& profile, float azimuth_deg);
+AzimuthBracket BracketAzimuth(const ArrayProfile& profile, float azimuth_deg);
 }  // namespace sonitude::dsp

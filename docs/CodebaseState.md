@@ -15,7 +15,7 @@ capture -> channel conditioning -> STFT
 
 | Stage | Milestone | Current status | Notes |
 | --- | --- | --- | --- |
-| Stage 2 | M3 calibration | in_progress | Channel conditioner live; normalized-correlation delay diagnostic + v2 schema; IR compiler (`tools/calibration/compile_array.py`) emits SMV3 artifacts; HW sweep evidence pending |
+| Stage 2 | M3 calibration | in_progress | Channel conditioner live; normalized-correlation delay diagnostic + v2 schema; measured-array compiler (`tools/calibration/compile_array.py`) supports sweep->windowed-RTF->SMV3 for `fixed_measured`; HW sweep evidence pending |
 | Stage 3 | M4 beamformer | in_progress | STFT-domain MVDR (128/32), delay-and-sum fallback, steering crossfade. SCOPE-3 vetoed for MVDR. |
 | Stage 4 | M7 suppression/limiter | in_progress | Conservative default. Spectral NS shares the MVDR 128/32 hop (guard spectra stay in the frequency domain). Experimental; not the shipping voice suppressor. |
 

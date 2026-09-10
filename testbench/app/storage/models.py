@@ -111,6 +111,10 @@ class SuppressorRequest:
     mvdr_max_wn_gain: float = 4.0
     mvdr_cov_tau_ms: float = 80.0
     mvdr_diag_load: float = 0.08
+    amplitude_range_bias: bool = True
+    speech_low_hz: float = 300.0
+    speech_high_hz: float = 4000.0
+    near_dominance_ratio: float = 1.4
 
     def as_dict(self) -> dict:
         return {
@@ -130,6 +134,10 @@ class SuppressorRequest:
             "mvdr_max_wn_gain": self.mvdr_max_wn_gain,
             "mvdr_cov_tau_ms": self.mvdr_cov_tau_ms,
             "mvdr_diag_load": self.mvdr_diag_load,
+            "amplitude_range_bias": self.amplitude_range_bias,
+            "speech_low_hz": self.speech_low_hz,
+            "speech_high_hz": self.speech_high_hz,
+            "near_dominance_ratio": self.near_dominance_ratio,
         }
 
 

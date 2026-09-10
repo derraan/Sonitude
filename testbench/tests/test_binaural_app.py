@@ -49,12 +49,12 @@ def test_parse_capabilities_json_drops_off_backend() -> None:
 def test_preferred_suppression_backend_honors_yaml() -> None:
     available = ["conservative", "spectral"]
     assert preferred_suppression_backend(available, "spectral") == "spectral"
-    assert preferred_suppression_backend(available, None) == "conservative"
+    assert preferred_suppression_backend(available, None) == "spectral"
 
 
 def test_config_reader_exposes_suppression_backend() -> None:
     summary = read_runtime_config_summary(DEFAULT_CONFIG_PATH)
-    assert summary.suppression.backend == "conservative"
+    assert summary.suppression.backend == "spectral"
 
 
 def test_parse_capabilities_json_lists_hrtf_backends() -> None:

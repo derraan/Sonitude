@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
+#include <spdlog/spdlog.h>
 #include <yaml-cpp/yaml.h>
 
 namespace sonitude::app
@@ -198,6 +199,11 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
       config.spatial.profile_path =
           ResolvePath(path, RequireScalar<std::string>(spatial, "profile_path"));
     }
+    if (spatial["azimuth_interpolation"])
+    {
+      config.spatial.azimuth_interpolation =
+          RequireScalar<std::string>(spatial, "azimuth_interpolation");
+    }
     if (spatial["mask_enabled"])
     {
       config.spatial.mask_enabled = RequireScalar<bool>(spatial, "mask_enabled");
@@ -240,6 +246,24 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
     if (spectral["gain_floor_db"])
     {
       config.suppression.spectral.gain_floor_db = RequireScalar<float>(spectral, "gain_floor_db");
+    }
+    if (spectral["amplitude_range_bias"])
+    {
+      config.suppression.spectral.amplitude_range_bias =
+          RequireScalar<bool>(spectral, "amplitude_range_bias");
+    }
+    if (spectral["speech_low_hz"])
+    {
+      config.suppression.spectral.speech_low_hz = RequireScalar<float>(spectral, "speech_low_hz");
+    }
+    if (spectral["speech_high_hz"])
+    {
+      config.suppression.spectral.speech_high_hz = RequireScalar<float>(spectral, "speech_high_hz");
+    }
+    if (spectral["near_dominance_ratio"])
+    {
+      config.suppression.spectral.near_dominance_ratio =
+          RequireScalar<float>(spectral, "near_dominance_ratio");
     }
   }
 
@@ -455,7 +479,13 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   }
   if (config.steering.model != "near_field" && config.steering.model != "far_field")
   {
-    throw std::runtime_error("steering.model must be near_field or far_field");
+    throw std::runtime_error("steering.model must be near_field (or deprecated far_field)");
+  }
+  if (config.steering.model == "far_field")
+  {
+    spdlog::warn(
+        "steering.model=far_field is deprecated; the real-time pipeline uses near_field MVDR. "
+        "Keep far_field only for offline polar/unit tests.");
   }
   if (config.steering.source_distance_m <= 0.0F || config.steering.source_distance_m > 5.0F)
   {
@@ -464,6 +494,11 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   if (config.spatial.backend != "adaptive_geometric" && config.spatial.backend != "fixed_measured")
   {
     throw std::runtime_error("spatial.backend must be adaptive_geometric or fixed_measured");
+  }
+  if (config.spatial.azimuth_interpolation != "nearest" &&
+      config.spatial.azimuth_interpolation != "linear_blend")
+  {
+    throw std::runtime_error("spatial.azimuth_interpolation must be nearest or linear_blend");
   }
   if (config.spatial.backend == "fixed_measured")
   {
@@ -519,6 +554,25 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
       config.suppression.spectral.gain_floor_db < -80.0F)
   {
     throw std::runtime_error("suppression.spectral.gain_floor_db must be in [-80, 0]");
+  }
+  if (config.suppression.spectral.speech_low_hz < 50.0F ||
+      config.suppression.spectral.speech_low_hz > 2000.0F)
+  {
+    throw std::runtime_error("suppression.spectral.speech_low_hz must be in [50, 2000]");
+  }
+  if (config.suppression.spectral.speech_high_hz < 1000.0F ||
+      config.suppression.spectral.speech_high_hz > 12000.0F)
+  {
+    throw std::runtime_error("suppression.spectral.speech_high_hz must be in [1000, 12000]");
+  }
+  if (config.suppression.spectral.speech_high_hz <= config.suppression.spectral.speech_low_hz)
+  {
+    throw std::runtime_error("suppression.spectral.speech_high_hz must exceed speech_low_hz");
+  }
+  if (config.suppression.spectral.near_dominance_ratio < 1.05F ||
+      config.suppression.spectral.near_dominance_ratio > 8.0F)
+  {
+    throw std::runtime_error("suppression.spectral.near_dominance_ratio must be in [1.05, 8]");
   }
 
   if (config.state_machine.activation_hold_ms == 0 || config.state_machine.confirmation_hold_ms == 0)

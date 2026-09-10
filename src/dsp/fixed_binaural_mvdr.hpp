@@ -22,13 +22,21 @@ struct FixedMvdrMaskParams
   float constant_mask = -1.0F;  // <0 uses residual estimator
 };
 
+enum class AzimuthInterpolationMode : std::uint8_t
+{
+  Nearest = 0,
+  LinearBlend = 1
+};
+
 class FixedBinauralMvdr
 {
  public:
   void configure(const ArrayProfile& profile,
                  std::uint32_t sample_rate_hz,
                  std::size_t max_block_frames,
-                 const FixedMvdrMaskParams& mask = {});
+                 const FixedMvdrMaskParams& mask = {},
+                 float steering_ramp_ms = 150.0F,
+                 AzimuthInterpolationMode interpolation = AzimuthInterpolationMode::Nearest);
   void setTarget(audio::BeamformerSteering target);
   void processStereo(std::span<const audio::MicFrame> input,
                      std::span<float> left_out,
@@ -71,6 +79,8 @@ class FixedBinauralMvdr
   bool have_queued_ = false;
   std::size_t active_dir_ = 0;
   std::size_t pending_dir_ = 0;
+  AzimuthInterpolationMode interpolation_mode_ = AzimuthInterpolationMode::Nearest;
+  AzimuthBracket interpolation_bracket_{};
 
   std::array<StreamingStft, audio::kMicChannels> mic_stft_{};
   std::array<MicHopContext, audio::kMicChannels> mic_ctx_{};

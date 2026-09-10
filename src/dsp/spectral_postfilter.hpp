@@ -1,9 +1,11 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <span>
 #include <vector>
 
+#include "audio/audio_types.hpp"
 #include "dsp/spatial_looks.hpp"
 
 namespace sonitude::dsp
@@ -15,6 +17,10 @@ struct SpectralPostfilterConfig
   std::size_t hop_size = 32;
   float gain_floor_db = -12.0F;
   float confidence_threshold = 0.6F;
+  bool amplitude_range_bias = true;
+  float speech_low_hz = 300.0F;
+  float speech_high_hz = 4000.0F;
+  float near_dominance_ratio = 1.4F;
 };
 
 struct SpectralTuningParams
@@ -39,6 +45,9 @@ class SpectralPostfilter
   void setConfidenceThreshold(float threshold) noexcept;
   void setTuning(const SpectralTuningParams& tuning) noexcept;
   void setEstimatorHold(bool hold) noexcept;
+  void updateAmplitudeProximity(
+      const std::array<std::span<const float>, audio::kMicChannels>& re,
+      const std::array<std::span<const float>, audio::kMicChannels>& im) noexcept;
   void processSpectrum(std::span<float> re,
                        std::span<float> im,
                        GuardSpectrumConstSpans guards = {}) noexcept;
@@ -47,6 +56,7 @@ class SpectralPostfilter
   void applyStoredGains(std::span<float> re, std::span<float> im) const noexcept;
 
   [[nodiscard]] float currentGain() const noexcept { return last_mean_gain_; }
+  [[nodiscard]] float amplitudeProximityForTest() const noexcept { return proximity_; }
 
  private:
   class NoiseTracker
@@ -98,12 +108,18 @@ class SpectralPostfilter
     std::vector<float> prev_gain_{};
   };
 
+  void RefreshSpeechBins() noexcept;
+
   bool ready_ = false;
   bool focus_active_ = true;
   bool have_spatial_ = false;
   float confidence_ = 1.0F;
   bool estimator_hold_ = false;
   double hop_hz_ = 0.0;
+  double sample_rate_hz_ = 0.0;
+  std::size_t speech_lo_bin_ = 1;
+  std::size_t speech_hi_bin_ = 1;
+  float proximity_ = 0.0F;
   SpectralPostfilterConfig config_{};
   SpectralTuningParams tuning_{};
   NoiseTracker tracker_{};

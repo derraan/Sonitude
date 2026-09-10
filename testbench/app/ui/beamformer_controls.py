@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import yaml
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
@@ -12,11 +13,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.config_reader import DEFAULT_CONFIG_PATH
 from app.ui.secondary_note import apply_secondary_note
 
 
 class BeamformerControls(QWidget):
     changed = Signal()
+    yamlReloadNeeded = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -50,15 +53,28 @@ class BeamformerControls(QWidget):
             "Diagonal loading for matrix stability. Lower = sharper beams but more sensitive to errors."
         )
 
+        self._source_distance = QDoubleSpinBox()
+        self._source_distance.setRange(0.05, 5.0)
+        self._source_distance.setSingleStep(0.05)
+        self._source_distance.setDecimals(2)
+        self._source_distance.setSuffix(" m")
+        self._source_distance.setValue(0.45)
+        self._source_distance.setToolTip(
+            "Spherical near-field look distance. Far-field plane-wave MVDR is deprecated. "
+            "This is written into session YAML and requires a stream restart."
+        )
+
         self._note = QLabel(
-            "MVDR runs before suppression. These knobs apply live during streaming preview."
+            "Near-field MVDR (far-field deprecated). WNG / covariance / loading apply live. "
+            "Look distance is YAML-only and restarts the stream."
         )
         apply_secondary_note(self._note)
 
-        box = QGroupBox("MVDR beamformer tuning")
+        box = QGroupBox("Near-field MVDR beamformer")
         form = QFormLayout(box)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.addRow("Look distance:", self._source_distance)
         form.addRow("Directivity (max WNG):", self._max_wn_gain)
         form.addRow("Adaptation time:", self._cov_tau_ms)
         form.addRow("Diagonal loading:", self._diag_load)
@@ -68,8 +84,14 @@ class BeamformerControls(QWidget):
         layout.addWidget(box)
         layout.addWidget(self._note)
 
+        self._load_yaml_defaults()
+
         for widget in (self._max_wn_gain, self._cov_tau_ms, self._diag_load):
             widget.valueChanged.connect(lambda _v: self.changed.emit())
+        self._source_distance.valueChanged.connect(self._on_distance_changed)
+
+    def source_distance_m(self) -> float:
+        return self._source_distance.value()
 
     def mvdr_max_wn_gain(self) -> float:
         return self._max_wn_gain.value()
@@ -84,3 +106,16 @@ class BeamformerControls(QWidget):
         request.mvdr_max_wn_gain = self.mvdr_max_wn_gain()
         request.mvdr_cov_tau_ms = self.mvdr_cov_tau_ms()
         request.mvdr_diag_load = self.mvdr_diag_load()
+
+    def _on_distance_changed(self, _value: float) -> None:
+        self.yamlReloadNeeded.emit()
+
+    def _load_yaml_defaults(self) -> None:
+        try:
+            with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as handle:
+                raw = yaml.safe_load(handle) or {}
+            steering = raw.get("steering") or {}
+            if isinstance(steering, dict) and steering.get("source_distance_m") is not None:
+                self._source_distance.setValue(float(steering["source_distance_m"]))
+        except Exception:  # noqa: BLE001
+            pass

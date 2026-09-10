@@ -1,9 +1,11 @@
 #include "dsp/beamformer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <span>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -223,6 +225,7 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   }
 
   steering_config_ = steering_config;
+  // RT default is near_field. far_field remains for offline polar/unit tests only.
   near_field_ = steering_config_.model != "far_field";
   binaural_output_ = steering_config_.experimental_dual_reference_mvdr;
   sample_rate_hz_ = sample_rate_hz;
@@ -801,6 +804,14 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
       ApplyHermitian(guard_y_re_[g], guard_y_im_[g], kFftSize);
     }
     const auto guards = BindGuardSpectra(guard_y_re_, guard_y_im_);
+    std::array<std::span<const float>, audio::kMicChannels> mic_re{};
+    std::array<std::span<const float>, audio::kMicChannels> mic_im{};
+    for (std::size_t ch = 0; ch < audio::kMicChannels; ++ch)
+    {
+      mic_re[ch] = x_re_[ch];
+      mic_im[ch] = x_im_[ch];
+    }
+    spectral_filter_->updateAmplitudeProximity(mic_re, mic_im);
     if (crossfading_)
     {
       spectral_filter_->processSpectrum(pending_y_re_, pending_y_im_, guards);

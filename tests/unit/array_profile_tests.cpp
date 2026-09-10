@@ -62,6 +62,9 @@ void RunArrayProfileTests()
   Require(std::fabs(loaded.weights_ri[0] - (1.0F / 6.0F)) < 1.0e-6F, "weight round trip");
   sonitude::dsp::ValidateArrayProfile(loaded, 44100, 128, 32);
   Require(sonitude::dsp::NearestAzimuthIndex(loaded, 9.0F) == 1, "nearest azimuth");
+  const auto bracket = sonitude::dsp::BracketAzimuth(loaded, 5.0F);
+  Require(bracket.left_index == 0 && bracket.right_index == 1, "bracket indices");
+  Require(std::fabs(bracket.blend - 0.5F) < 1.0e-6F, "bracket blend");
 
   auto truncated = bytes;
   truncated.resize(50);
@@ -100,4 +103,24 @@ void RunArrayProfileTests()
     hash_threw = true;
   }
   Require(hash_threw, "tampered hash must fail");
+
+  auto sparse = loaded;
+  sparse.identity.synthetic = false;
+  sparse.direction_count = 2;
+  sparse.azimuth_deg = {-20.0F, 20.0F};
+  const std::size_t bins = sparse.bin_count;
+  const std::size_t mics = sparse.mic_count;
+  sparse.weights_ri.assign(static_cast<std::size_t>(sparse.direction_count) * bins * mics * 2U, 0.0F);
+  sparse.steering_ri.assign(sparse.weights_ri.size(), 0.0F);
+  sparse.valid.assign(static_cast<std::size_t>(sparse.direction_count) * bins, 1);
+  bool gap_threw = false;
+  try
+  {
+    sonitude::dsp::ValidateArrayProfile(sparse, 44100, 128, 32);
+  }
+  catch (const std::exception&)
+  {
+    gap_threw = true;
+  }
+  Require(gap_threw, "large azimuth coverage gap must fail");
 }

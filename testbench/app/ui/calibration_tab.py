@@ -43,6 +43,8 @@ from app.controller.calibration_controller import (
     VARIANT_ORDER,
     CalibrationCompileRequest,
     CalibrationWorker,
+    MeasuredProfileCompileRequest,
+    MeasuredProfileWorker,
     default_geometry_path,
     format_azimuth_label,
     missing_compile_inputs,
@@ -96,7 +98,9 @@ class CalibrationTab(QWidget):
         super().__init__(parent)
         self._config_path = DEFAULT_CONFIG_PATH
         self._worker: CalibrationWorker | None = None
+        self._profile_worker: MeasuredProfileWorker | None = None
         self._report: dict | None = None
+        self._profile_report: dict | None = None
         self._mdat_result = None
         self._layout_restored = False
         self._angle_wavs: dict[float, Path] = {}
@@ -338,6 +342,14 @@ class CalibrationTab(QWidget):
                 self._variant_combo.count() - 1, VARIANT_NOTES[name], Qt.ItemDataRole.ToolTipRole
             )
         self._enable_common_eq = QCheckBox("Enable guarded REW common EQ in DSP overlay")
+        self._use_measured_profile = QCheckBox("Use measured azimuth-table MVDR profile in overlay")
+        self._use_measured_profile.setChecked(False)
+        self._compile_profile_btn = QPushButton("Compile measured MVDR profile (SMV3)")
+        self._compile_profile_btn.setEnabled(False)
+        self._compile_profile_btn.clicked.connect(self._on_compile_profile)
+        self._profile_path_label = QLabel("Measured profile: not compiled")
+        self._profile_path_label.setWordWrap(True)
+        self._profile_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._apply_btn = QPushButton("Apply variant to Recorded / Real-Time")
         self._apply_btn.setEnabled(False)
         self._apply_btn.clicked.connect(self._on_apply)
@@ -351,6 +363,9 @@ class CalibrationTab(QWidget):
         apply_form.addRow("Variant:", self._variant_combo)
         apply_layout.addLayout(apply_form)
         apply_layout.addWidget(self._enable_common_eq)
+        apply_layout.addWidget(self._compile_profile_btn)
+        apply_layout.addWidget(self._use_measured_profile)
+        apply_layout.addWidget(self._profile_path_label)
         apply_layout.addWidget(self._apply_btn)
         apply_layout.addWidget(self._dsp_path_label)
 
@@ -391,14 +406,25 @@ class CalibrationTab(QWidget):
     def shutdown(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             self._worker.wait(30000)
+        if self._profile_worker is not None and self._profile_worker.isRunning():
+            self._profile_worker.wait(30000)
 
     def calibration_commit_snapshot(self) -> CalibrationCommitSnapshot:
+        spatial_backend = None
+        spatial_profile_path = None
+        if self._use_measured_profile.isChecked() and self._profile_report:
+            profile_path = self._profile_report.get("profile_bin")
+            if profile_path:
+                spatial_backend = "fixed_measured"
+                spatial_profile_path = Path(profile_path)
         if not self._report:
             return CalibrationCommitSnapshot(
                 variant=str(self._variant_combo.currentData() or "E_full"),
                 variant_yaml=None,
                 common_eq_enabled=self._enable_common_eq.isChecked(),
                 common_eq_sections=None,
+                spatial_backend=spatial_backend,
+                spatial_profile_path=spatial_profile_path,
             )
         variant = str(self._variant_combo.currentData() or "E_full")
         yaml_path_raw = self._report.get("emitted_yaml", {}).get(variant)
@@ -409,6 +435,8 @@ class CalibrationTab(QWidget):
             variant_yaml=Path(yaml_path_raw) if yaml_path_raw else None,
             common_eq_enabled=self._enable_common_eq.isChecked(),
             common_eq_sections=sections,
+            spatial_backend=spatial_backend,
+            spatial_profile_path=spatial_profile_path,
         )
 
     def _row_for_azimuth(self, azimuth_deg: float) -> int:
@@ -616,6 +644,33 @@ class CalibrationTab(QWidget):
             max_tof_samples=int(self._max_tof.value()),
         )
 
+    def _current_profile_request(self) -> MeasuredProfileCompileRequest | None:
+        if self._report is None:
+            return None
+        enabled = self._enabled_angle_wavs()
+        if not enabled:
+            return None
+        stimulus = Path(self._stimulus_edit.text().strip() or "")
+        if not stimulus.is_file():
+            return None
+        variant = str(self._variant_combo.currentData() or "E_full")
+        variant_yaml = self._report.get("emitted_yaml", {}).get(variant)
+        if not variant_yaml:
+            return None
+        out_dir = Path(self._out_edit.text().strip() or DEFAULT_CALIBRATION_OUT_DIR)
+        out_prefix = out_dir / f"array_profile_{self._tag_edit.text().strip() or 'session'}"
+        return MeasuredProfileCompileRequest(
+            out_prefix=out_prefix,
+            sample_rate_hz=int(self._report.get("sample_rate_hz", 44100)),
+            geometry_id="soundbubble_vertical_v1",
+            reference_mic=2,
+            left_ear_mic=0,
+            right_ear_mic=5,
+            calibration_yaml=Path(variant_yaml),
+            stimulus_wav=stimulus,
+            directions=tuple((float(az), path) for az, path in enabled),
+        )
+
     def _on_compile(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             QMessageBox.information(self, "Busy", "A calibration compile is already running.")
@@ -638,6 +693,10 @@ class CalibrationTab(QWidget):
             return
         self._compile_btn.setEnabled(False)
         self._apply_btn.setEnabled(False)
+        self._compile_profile_btn.setEnabled(False)
+        self._profile_report = None
+        self._use_measured_profile.setChecked(False)
+        self._profile_path_label.setText("Measured profile: not compiled")
         self._progress.setRange(0, 0)
         self._status.setText(
             f"Compiling primary {format_azimuth_label(request.azimuth_deg)}"
@@ -658,6 +717,7 @@ class CalibrationTab(QWidget):
             self._status.setText("Compile finished with an unexpected result.")
             return
         self._apply_btn.setEnabled(True)
+        self._compile_profile_btn.setEnabled(True)
         warnings = self._report.get("warnings") or []
         if warnings:
             self._warnings.setStyleSheet("color: #c9a227;")
@@ -682,10 +742,52 @@ class CalibrationTab(QWidget):
         self._report_view.setPlainText("\n".join(chunks))
         self._status.setText(f"Wrote artifacts to {self._out_edit.text().strip()}")
 
+    def _on_compile_profile(self) -> None:
+        if self._profile_worker is not None and self._profile_worker.isRunning():
+            QMessageBox.information(self, "Busy", "A measured profile compile is already running.")
+            return
+        request = self._current_profile_request()
+        if request is None:
+            QMessageBox.warning(
+                self,
+                "Missing inputs",
+                "Compile calibration first, import at least one array WAV, and select a valid stimulus WAV.",
+            )
+            return
+        self._compile_profile_btn.setEnabled(False)
+        self._status.setText("Compiling measured MVDR profile…")
+        self._profile_worker = MeasuredProfileWorker(request)
+        self._profile_worker.finished_ok.connect(self._on_compile_profile_ok)
+        self._profile_worker.failed.connect(self._on_compile_profile_failed)
+        self._profile_worker.start()
+
+    def _on_compile_profile_ok(self, report: object) -> None:
+        self._compile_profile_btn.setEnabled(True)
+        self._profile_report = report if isinstance(report, dict) else None
+        if self._profile_report is None:
+            self._status.setText("Measured profile compile returned invalid report.")
+            return
+        profile_bin = (
+            Path(self._current_profile_request().out_prefix.with_suffix(".bin"))
+            if self._current_profile_request() is not None
+            else None
+        )
+        if profile_bin is not None:
+            self._profile_report["profile_bin"] = str(profile_bin)
+            self._profile_path_label.setText(f"Measured profile: {profile_bin}")
+            self._use_measured_profile.setChecked(True)
+        self._status.setText("Measured profile compiled.")
+
+    def _on_compile_profile_failed(self, error: str) -> None:
+        self._compile_profile_btn.setEnabled(True)
+        self._status.setText(f"Measured profile failed: {error}")
+        QMessageBox.critical(self, "Measured profile compile failed", error)
+
     def _on_compile_failed(self, error: str) -> None:
         self._progress.setRange(0, 1)
         self._progress.setValue(0)
         self._compile_btn.setEnabled(True)
+        self._compile_profile_btn.setEnabled(False)
         self._status.setText(f"Failed: {error}")
         QMessageBox.critical(self, "Calibration compile failed", error)
 
@@ -702,6 +804,11 @@ class CalibrationTab(QWidget):
         overlay = out_dir / "runtime_config_overlay.yaml"
         common_eq = self._report.get("common_eq") or {}
         sections = common_eq.get("sections") if self._enable_common_eq.isChecked() else None
+        spatial_backend = None
+        spatial_profile = None
+        if self._use_measured_profile.isChecked() and self._profile_report is not None:
+            spatial_backend = "fixed_measured"
+            spatial_profile = self._profile_report.get("profile_bin")
         try:
             written = write_dsp_runtime_overlay(
                 overlay,
@@ -709,6 +816,8 @@ class CalibrationTab(QWidget):
                 base_config=self._config_path,
                 common_eq_enabled=self._enable_common_eq.isChecked(),
                 common_eq_sections=sections,
+                spatial_backend=spatial_backend,
+                spatial_profile_path=spatial_profile,
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Could not write DSP overlay", str(exc))

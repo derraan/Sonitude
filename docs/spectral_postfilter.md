@@ -78,7 +78,7 @@ There is one STFT hop clock. Spectral NS does **not** add a second 127-sample de
 | Off-axis external voice | Partially suppressible using target-versus-guard energy |
 | Voice near the target direction | Difficult; spatial contrast becomes weak |
 | Voice at the same direction and similar distance | Generally not separable with this classical pipeline |
-| Near versus distant source | Possible experimentally with near-field steering/RTFs; not established for the current array |
+| Near versus distant source | Amplitude max/mean in 300–4 kHz biases Wiener open in-band; out-of-band bins are floored. Weak at equal-amplitude plane-wave snapshots |
 | Wind and microphone handling noise | Needs dedicated detection/HPF; ordinary Wiener filtering is insufficient |
 
 Complete removal of arbitrary external voices is **not** feasible.
@@ -175,7 +175,13 @@ published equations and parameter meanings. This backend uses:
 6. Wiener `G = ξ/(1+ξ)`, clamp `[G_floor, 1]`, time-smoothed (τ = 16 ms),
    then 3-bin frequency smoother `[0.25, 0.5, 0.25]`. A bypass mix ramps toward
    the Wiener gain when focused and initialized, and toward unity otherwise.
-7. No bin amplification. Hermitian bins share `G[k]`. Telemetry `currentGain()`
+7. **Amplitude range bias (default on):** speech-band (300–4000 Hz) mic
+   power `max/mean` is mapped to proximity in `[0, 1]` (`1` at
+   `near_dominance_ratio`). When the postfilter is engaged, speech-band bins
+   are pulled toward unity by that proximity; all other bins are held at the
+   gain floor. Equal-amplitude far-field snapshots stay at proximity 0, so
+   Wiener is unchanged in-band.
+8. No bin amplification. Hermitian bins share `G[k]`. Telemetry `currentGain()`
    is power-weighted across bins.
 
 Consulted only to bound naming (not implemented): Cohen, IEEE Trans. Speech
@@ -197,6 +203,10 @@ CMSIS-DSP FFT docs were not used in code; the replacement path is the
 | `suppression.spectral.fft_size` | size | samples | 128 | 128 or 256 |
 | `suppression.spectral.hop_size` | size | samples | 32 | 32 with 128, 64 with 256 |
 | `suppression.spectral.gain_floor_db` | float | dB | −12 | [−80, 0] |
+| `suppression.spectral.amplitude_range_bias` | bool | — | true | Near-mic speech-band dominance biases Wiener |
+| `suppression.spectral.speech_low_hz` | float | Hz | 300 | [50, 2000] |
+| `suppression.spectral.speech_high_hz` | float | Hz | 4000 | [1000, 12000] |
+| `suppression.spectral.near_dominance_ratio` | float | — | 1.4 | [1.05, 8] max/mean mic power that maps to proximity 1 |
 
 Resolve: `enabled` is independent of `backend`. Disabled suppression is a
 bypass; `backend` still names the algorithm used when enabled. Spectral adds
@@ -255,8 +265,10 @@ pass/fail MCU gate.
 - First allowed update initializes `λ` from the median spectrum; a leading
   full-band utterance can still colour the estimate if it is not tonal versus
   the median.
-- MVDR plus guard contrast is spatial. It still cannot separate co-located
-  talkers or establish near versus far. Distance estimation is out of scope.
+- MVDR plus guard contrast is spatial. Amplitude-range bias uses nearest-mic
+  speech-band dominance as a proximity prior; it does not estimate metres and
+  cannot separate co-located talkers. Delay-only far-field snapshots have
+  equal amplitude and therefore do not trigger the bias.
 - Testbench residual and intelligibility metrics treat beamformed and suppressed
   taps as the same delay when spectral NS shares the MVDR hop.
 

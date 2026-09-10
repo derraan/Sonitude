@@ -31,7 +31,9 @@ float Smoothstep01(const float x)
 void FixedBinauralMvdr::configure(const ArrayProfile& profile,
                                   const std::uint32_t sample_rate_hz,
                                   const std::size_t max_block_frames,
-                                  const FixedMvdrMaskParams& mask)
+                                  const FixedMvdrMaskParams& mask,
+                                  const float steering_ramp_ms,
+                                  const AzimuthInterpolationMode interpolation)
 {
   ValidateArrayProfile(profile, sample_rate_hz, static_cast<std::uint16_t>(kFftSize),
                        static_cast<std::uint16_t>(kHopSize));
@@ -41,8 +43,11 @@ void FixedBinauralMvdr::configure(const ArrayProfile& profile,
   }
   profile_ = profile;
   mask_ = mask;
+  interpolation_mode_ = interpolation;
   sample_rate_hz_ = sample_rate_hz;
-  ramp_samples_ = std::max<std::size_t>(1U, static_cast<std::size_t>(0.150F * sample_rate_hz_));
+  const float clamped_ramp_ms = std::clamp(steering_ramp_ms, 10.0F, 500.0F);
+  ramp_samples_ = std::max<std::size_t>(
+      1U, static_cast<std::size_t>((clamped_ramp_ms * 0.001F) * static_cast<float>(sample_rate_hz_)));
   const std::size_t fifo_frames = std::max<std::size_t>(max_block_frames, 64U);
   const StreamingStftConfig analysis{.fft_size = kFftSize, .hop_size = kHopSize, .synthesize = false};
   const StreamingStftConfig synthesis{.fft_size = kFftSize, .hop_size = kHopSize, .synthesize = true};
@@ -77,6 +82,7 @@ void FixedBinauralMvdr::configure(const ArrayProfile& profile,
   active_azimuth_ = 0.0F;
   pending_azimuth_ = 0.0F;
   active_dir_ = NearestAzimuthIndex(profile_, 0.0F);
+  interpolation_bracket_ = BracketAzimuth(profile_, 0.0F);
   pending_dir_ = active_dir_;
   crossfading_ = false;
   fade_cursor_ = 0;
@@ -106,6 +112,7 @@ void FixedBinauralMvdr::setTarget(const audio::BeamformerSteering target)
   }
   pending_azimuth_ = az;
   pending_dir_ = NearestAzimuthIndex(profile_, az);
+  interpolation_bracket_ = BracketAzimuth(profile_, az);
   fade_cursor_ = 0;
   crossfading_ = pending_dir_ != active_dir_ || d >= kSteeringDeadbandDeg;
 }
@@ -124,6 +131,7 @@ void FixedBinauralMvdr::resetStream() noexcept
   }
   pending_azimuth_ = active_azimuth_;
   pending_dir_ = active_dir_;
+  interpolation_bracket_ = BracketAzimuth(profile_, active_azimuth_);
   have_queued_ = false;
   crossfading_ = false;
   fade_cursor_ = 0;
@@ -268,7 +276,26 @@ void FixedBinauralMvdr::FormEarSpectra(const std::size_t dir_index,
 
 void FixedBinauralMvdr::FormAndSynthesize() noexcept
 {
-  FormEarSpectra(active_dir_, left_y_re_, left_y_im_, right_y_re_, right_y_im_, true);
+  if (interpolation_mode_ == AzimuthInterpolationMode::LinearBlend && !crossfading_ &&
+      interpolation_bracket_.left_index != interpolation_bracket_.right_index)
+  {
+    FormEarSpectra(interpolation_bracket_.left_index, left_y_re_, left_y_im_, right_y_re_, right_y_im_, true);
+    FormEarSpectra(interpolation_bracket_.right_index, pending_left_re_, pending_left_im_, pending_right_re_,
+                   pending_right_im_, false);
+    const float a = std::clamp(interpolation_bracket_.blend, 0.0F, 1.0F);
+    const float oa = 1.0F - a;
+    for (std::size_t b = 0; b < profile_.bin_count; ++b)
+    {
+      left_y_re_[b] = (oa * left_y_re_[b]) + (a * pending_left_re_[b]);
+      left_y_im_[b] = (oa * left_y_im_[b]) + (a * pending_left_im_[b]);
+      right_y_re_[b] = (oa * right_y_re_[b]) + (a * pending_right_re_[b]);
+      right_y_im_[b] = (oa * right_y_im_[b]) + (a * pending_right_im_[b]);
+    }
+  }
+  else
+  {
+    FormEarSpectra(active_dir_, left_y_re_, left_y_im_, right_y_re_, right_y_im_, true);
+  }
   if (crossfading_)
   {
     FormEarSpectra(pending_dir_, pending_left_re_, pending_left_im_, pending_right_re_,
@@ -318,6 +345,7 @@ void FixedBinauralMvdr::processStereo(const std::span<const audio::MicFrame> inp
       {
         active_azimuth_ = pending_azimuth_;
         active_dir_ = pending_dir_;
+        interpolation_bracket_ = BracketAzimuth(profile_, active_azimuth_);
         crossfading_ = false;
         fade_cursor_ = 0;
         if (have_queued_)
@@ -326,6 +354,7 @@ void FixedBinauralMvdr::processStereo(const std::span<const audio::MicFrame> inp
           have_queued_ = false;
           pending_azimuth_ = next;
           pending_dir_ = NearestAzimuthIndex(profile_, next);
+          interpolation_bracket_ = BracketAzimuth(profile_, pending_azimuth_);
           const double d = std::fabs(spatial::NormalizeAzimuthDeg(
               static_cast<double>(pending_azimuth_ - active_azimuth_)));
           if (d >= kSteeringDeadbandDeg)
