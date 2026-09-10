@@ -1,327 +1,225 @@
-# Sonitude Real-Time Audio
+# Sonitude
 
-Sonitude is a staged Raspberry Pi 5 real-time audio engineering proof-of-concept for a six-microphone head-worn array. The v1 objective is deterministic directional listening with ODAS-driven control and an in-tree STFT-domain MVDR audio path (delay-and-sum fallback).
+Six-microphone directional-audio proof of concept: a C++20 DSP/runtime, a PySide6 engineering test bench, calibration tools, a Pico USB microphone firmware snapshot, and a separate Sound Bubble neural-audio research tree.
 
-## Pipeline
+**Status:** implemented host software with automated tests; hardware acceptance and measured end-to-end latency remain unfinished. This is not a deployment-approved headset release. The overview below was checked against main commit `c096136` on 2026-09-10; implementation and hardware evidence are distinguished throughout.
 
-Sonitude splits into a **real-time audio path** (PCM) and a **control path** (steering only). ODAS is **control-only** in v1 — it does not process audio. Dashed edges are non-RT or planned stages.
+## Start here
 
-```mermaid
-flowchart TB
-    subgraph hw [Hardware]
-        Pico["Pico UAC2\n8ch container / 6 active"]
-        DAC["Creative USB DAC"]
-    end
+| Area | Entry point | Purpose |
+| --- | --- | --- |
+| Host DSP and Linux runtime | [src](src), [CMakeLists.txt](CMakeLists.txt) | Six-channel calibration, MVDR, suppression, binaural rendering, ALSA and ASRC |
+| Desktop test bench | [testbench](testbench/README.md) | Recorded-file processing, live device preview, calibration and configuration upload |
+| Calibration | [guide](docs/calibration.md), [tools/calibration](tools/calibration) | Scalar channel calibration and measured complex-RTF array profiles |
+| Pico firmware | [firmware README](mic-array-pico2w-usb6ch/README.md) | Separate USB microphone capture project; not built by the host CMake project |
+| Neural research/runtime | [Sound_Bubble](Sound_Bubble/README.md), [edge runtime](Sound_Bubble/edge/README_EDGE.md) | Separate training/export/inference workflow; not part of the C++ MVDR chain |
+| Acceptance tracking | [milestones](docs/milestones.md) | Outstanding software/hardware gates and evidence templates |
 
-    subgraph capture [Capture — RT thread]
-        AlsaCap["ALSA capture worker"]
-        Extract["Channel extract\nactive_channel_map"]
-        Cal["CalibrationApplier\npolarity / gain / DC / HP"]
-    end
+## Current processing paths
 
-    subgraph audio [Audio path — RT]
-        Passthrough["Passthrough tap\nmics 4 and 5 → L/R"]
-        BF["STFT MVDR beamformer\n128/32 + steering crossfade"]
-        Suppress["Suppression v1\nM7 implemented"]
-        Binaural["BinauralRenderer\nmono -> stereo"]
-        Limiter["Linked stereo sample-peak limiter"]
-        Asrc["ASRC: PI controller +\nIStereoResampler"]
-        AlsaPb["ALSA playback worker"]
-    end
+### Linux runtime
 
-    subgraph control [Control path — non-RT]
-        Odas["ODAS or MockDoaProvider"]
-        Parser["SST parser / source tracker"]
-        SM["Conversation state machine\n+ ZoneMap + VAD"]
-        Snap["Steering snapshot\nseqlock publish"]
-    end
+`sonitude_realtime` runs capture and DSP on the main audio thread, with separate playback, control and telemetry threads. Capture channel extraction uses `active_channel_map`. Playback uses a bounded block pool and ASRC to accommodate capture/playback clock drift.
 
-    subgraph offline [Offline / diagnostics]
-        WavReplay["sonitude_wav_replay\n6ch WAV → mono + optional stereo binaural"]
-        StreamProc["sonitude_stream_process\nprotocol v2 block adapter"]
-        Tools["probe / capture_check /\ncalibration_estimate"]
-        TestBench["PySide6 test bench\n(testbench/, non-RT)"]
-    end
+The ordinary `adaptive_geometric` beamform path is:
 
-    Telem["Telemetry thread\natomic counters"]
+1. Capture and channel mapping.
+2. Per-channel DC-offset subtraction, polarity, gain and DC blocking.
+3. Optional per-microphone biquad EQ.
+4. Adaptive near-field MVDR.
+5. Optional suppression, common biquad EQ and mono peak limiting.
+6. Binaural rendering, linked stereo peak limiting, then playback resampling/ALSA.
 
-    Pico -->|"S16 interleaved"| AlsaCap
-    AlsaCap --> Extract --> Cal
-    Cal --> Passthrough
-    Cal --> BF
-    Snap -.->|"az/el + failsafe"| BF
-    BF --> Suppress --> Binaural --> Limiter --> Asrc --> AlsaPb --> DAC
-    Passthrough --> Asrc
+Binaural rendering **is wired into the Linux runtime**. The former duplicated-mono output fallback is rejected in the ordinary beamform path. The configured renderer must initialize successfully.
 
-    Odas --> Parser --> SM --> Snap
+Other paths have different semantics:
 
-    Cal -.-> WavReplay
-    Snap -.-> WavReplay
-    Snap -.-> StreamProc
-    WavReplay -.-> TestBench
-    StreamProc -.-> TestBench
+| Path | Behavior and limitation |
+| --- | --- |
+| `--mode passthrough` | Calibrated/EQ'd logical channels 4 and 5 feed L/R; bypasses beamforming, suppression and the beamform limiter chain. These indices are hardcoded, not selected through the steering ear-index settings. |
+| `spatial.backend: adaptive_geometric` | Adaptive geometric MVDR with near-field steering. Current default configuration uses a 0.45 m assumed source distance; this is a setting, not an estimated source distance. |
+| `spatial.backend: fixed_measured` | Loads an SMV3 array profile and emits stereo through `FixedBinauralMvdr`; requires a separately compiled profile. |
+| `steering.experimental_dual_reference_mvdr: true` | Experimental direct stereo MVDR path, bypassing the ordinary HRTF renderer. |
+| Direct stereo paths | See the unresolved suppression/EQ routing defect below before evaluating these paths. |
 
-    AlsaCap -.-> Telem
-    Asrc -.-> Telem
-    SM -.-> Telem
+Steering convention: azimuth 0° is front (+Y), positive toward listener-right (+X); see [head_frame.hpp](src/spatial/head_frame.hpp). Confirm physical channel order and geometry on the actual array.
 
-    Pico -.-> Tools
-```
+### Test bench
 
+The four tabs cover **Recorded**, **Real-Time**, **Calibration** and **Upload**. Python manages UI, files and audio devices; subprocesses invoke the C++ DSP through `sonitude_wav_replay` and `sonitude_stream_process`.
 
+- WAV/FLAC input and output; MP3 input depends on decoder support. MP3 export is not supported.
+- Decoding a file does not make its channel count suitable for the six-microphone pipeline.
+- Recorded processing supports short-file diagnostic taps and a streaming path for longer files.
+- The streaming protocol and executable capabilities must match the Python app; rebuild tools after updating.
+- Directional/Omni Blend is a test-bench mixing control, not a measured beamwidth.
+- The intelligibility metric is an experimental proxy, not standardized SII or an acceptance gate.
+- Desktop live preview is a development path, not evidence of production latency.
 
+See [testbench/README.md](testbench/README.md) for operation and [binaural renderer](docs/binaural_renderer.md) for rendering details. Some detailed documents retain older behavior descriptions; compare them with current source and executable capabilities.
 
-| Stage                | What it does                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------- |
-| **Extract**          | Pull 6 active channels from 8-channel USB container (`MicFrame` = 6 floats)                 |
-| **Calibration**      | Per mic: polarity, DC subtract, gain, high-pass (`CalibrationApplier`)                      |
-| **Beamformer**       | Align mics in time for steering angle; sum with 1/6 weights → mono (M4)                     |
-| **BinauralRenderer** | Converts mono to stereo using selected backend (`mono_reference`, `itd_ild`, HRTF modes)    |
-| **Stereo limiter**   | Linked stereo sample-peak limiter after binaural processing (no look-ahead / no true-peak) |
-| **ASRC**             | PI controller adjusts playback resample ratio so capture/playback clock drift does not XRUN |
-| **Passthrough mode** | Today: ear-cup mics 4/5 to L/R, bypasses beamformer (`--mode passthrough`)                  |
-| **Control**          | ODAS/mock → tracker → state machine → atomic snapshot; audio thread reads snapshot only     |
+## Build and run
 
+### Dependencies
 
-**Clock rule:** Pico and DAC clocks are independent (~tens of ppm). Never drop/duplicate samples for drift — use bounded ASRC ratio control (default ±0.5%).
+Host build: **CMake 3.25+**, a C++20 compiler, Ninja (for commands below), yaml-cpp and spdlog. Linux device runtime also requires ALSA development files. libsamplerate is optional; the build has a linear fallback.
 
-Direction convention for beamformer and binaural renderer is documented in
-`src/spatial/head_frame.hpp`: azimuth `0 deg = front (+Y)`, positive azimuth
-turns clockwise toward listener-right (`+X`).
-
-Full stage-by-stage detail, implementation status, and scope vetoes: `[docs/CodebaseState.md](docs/CodebaseState.md)` (§1 scope, §2 DSP).
-
-### Stage 1 — Capture and channel extract (feeds DSP)
-
-`CaptureWorker` reads one ALSA period from the 8-channel USB container; `ExtractActiveMicFrames` pulls the six active mics via `active_channel_map`.
-
-Each instant is a `MicFrame` (`std::array<float, 6>`). At 44.1 kHz with 64-frame periods, each read yields a block of 64 `MicFrame`s.
-
-### Stage 2 — Calibration (`CalibrationApplier`)
-
-**File:** `src/dsp/calibration_applier.cpp`
-
-Per mic, per sample:
-
-1. **Polarity** — multiply by +1 or −1
-2. **DC subtract** — remove measured offset
-3. **Gain** — multiply by `gain_linear`
-4. **DC blocker** — one-pole high-pass with `calibration_dc_block_hz` (default 20 Hz)
-
-`delay_samples` from calibration YAML is **not** applied in `CalibrationApplier` today. The beamformer (M4) applies per-channel delay as MVDR steering-vector phase.
-
-### Stage 3 — Beamformer (M4; implemented, validation in progress)
-
-Core **directional listening** DSP — **narrowband MVDR**:
-
-1. Far-field steering vector **d** from geometry, look **u**, and calibration delay.
-2. 128/32 STFT of six channels; per-bin distortionless MVDR (delay-and-sum fallback).
-3. Inverse STFT → mono. Internal +90/−90/180 looks exist for spectral contrast only.
-
-- **Delay:** 127 samples at 128/32. Spectral NS shares that hop.
-- **Click-free steering:** dual-look crossfade over `steering_ramp_ms`; covariance frozen during the fade.
-- **Control handoff:** non-RT thread publishes a steering snapshot; audio thread reads it only.
-
-
-
-### Stage 4 — Suppression (M7; implemented, validation in progress)
-
-Conservative **distractor suppression** after beamforming. In-tree **MVDR** is in the beamformer (**SCOPE-3** vetoed). Neural DSP is unused. Spectral NS stays experimental; default backend is conservative.
-
-### Stage 5 — Mono → stereo
-
-- `--mode passthrough` **(today):** taps ear-cup mics 4 and 5 to L/R in `main.cpp` — no beamformer.
-- `--mode beamform` on `sonitude_realtime`: still duplicates directional mono to L/R. The Pi playback path is **not** yet wired to `BinauralRenderer`.
-- Portable tools (`sonitude_wav_replay`, `sonitude_stream_process`): `BinauralRenderer` backends `mono_reference`, `itd_ild`, `compact_hrtf`, `full_hrtf_reference`, then linked `StereoPeakLimiter`. `compact_hrtf` uses experimental raw-HRIR prefix tables, not a validated edge representation. Replay `--output` stays mono; stereo is `--output-binaural` or the stream payload. Details: `[docs/binaural_renderer.md](docs/binaural_renderer.md)`.
-
-
-
-### Stage 6 — ASRC: resampler + PI controller (implemented)
-
-Capture and playback clocks drift even at the same nominal rate. Sonitude adjusts **playback speed** within bounds (default ±0.5%) instead of dropping/duplicating samples.
-
-**PI controller** (`AsrcController`, `src/dsp/asrc_controller.hpp`):
-
-- Input: playback **buffer occupancy** (frames queued)
-- Error: `target_buffer_frames - occupancy`
-- Output: resample **ratio** clamped to `[min_ratio, max_ratio]` with slew-limited steps
-- Too full → ratio < 1 (generate fewer playback frames); too empty → ratio > 1 (generate more)
-- Default target: 128 frames; startup requires one negotiated block of headroom above the retained software-queue floor and below playback-capacity ceiling
-- Negotiated capture/playback rates must exactly match their configured nominal DSP rates
-- Startup also verifies negotiated capture channels can satisfy `active_channel_map`
-- Telemetry: `asrc_ratio_ppm`, `pb_write_fail`
-
-**Stereo resampler** (`IStereoResampler`, `PlaybackWorker`):
-
-
-| Backend                            | When                                               | Method                                            |
-| ---------------------------------- | -------------------------------------------------- | ------------------------------------------------- |
-| libsamplerate (`SRC_SINC_FASTEST`) | Build with `SONITUDE_WITH_LIBSAMPLERATE_ENABLED=1` | Variable-ratio sinc                               |
-| Linear (fallback)                  | Default portable build                             | Linear interp; phase += `1/ratio` per output sample |
-
-
-
-
-## Milestones
-
-Authoritative gate evidence: `[docs/milestones.md](docs/milestones.md)`.
-
-
-| ID     | Milestone                        | Status        | Gate (summary)                                                                      |
-| ------ | -------------------------------- | ------------- | ----------------------------------------------------------------------------------- |
-| **M0** | Scaffold                         | `done`        | CMake configure/build; `--validate-config`; CTest passes                            |
-| **M1** | ALSA discovery and raw loopback  | `in_progress` | Device probe with negotiated params; raw capture-to-output; channel order validated |
-| **M2** | Real-time primitives             | `in_progress` | Lock-free/preallocated path; XRUN telemetry; ASRC interface; passthrough mode       |
-| **M3** | Calibration and offline analysis | `in_progress` | Calibration apply path; offline estimator; YAML report with backup-safe writes      |
-| **M4** | Beamformer                       | `in_progress` | STFT-domain MVDR implemented; scripted steering WAV harness passes synthetic checks |
-| **M5** | ODAS control integration         | `pending`     | Mock provider + ODAS adapter; safe fallback on ODAS loss                            |
-| **M6** | Conversation state machine       | `pending`     | Deterministic hysteresis transitions; telemetry for state and confidence            |
-| **M7** | Suppression v1                   | `in_progress` | One-distractor conservative policy implemented; smooth fade in/out; safe fallback checks pending |
-| **M8** | Measurement and hardening        | `pending`     | Latency marker tooling; soak logs; measured latency percentiles reported            |
-
-
-Status legend: `pending` · `in_progress` · `done` · `blocked`
-
-```bash
-./build/sonitude_realtime --config config/default.yaml --mode passthrough   # Linux + ALSA
-ctest --test-dir build --output-on-failure                                 # portable
-```
-
-
-
-## Scope guardrails
-
-Default v1 baseline rules. Unchecked = guardrail active; checked in `[docs/CodebaseState.md](docs/CodebaseState.md)` = user override (Cursor may implement that scope change).
-
-
-| ID          | Rule                                                                                        | Rationale                                                           |
-| ----------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| **SCOPE-1** | No desktop audio servers in the critical path (PipeWire, PulseAudio, JACK)                  | Adds buffering and latency variance; breaks direct-ALSA RT contract |
-| **SCOPE-2** | No ODAS audio processing in the critical path — ODAS is control-only                        | PCM beamforming stays in Sonitude; ODAS loss must not stop audio    |
-| **SCOPE-3** | No LCMV / GSS / neural DSP in v1; **MVDR vetoed** (in-tree STFT MVDR)                    | Neural still out of scope; see CodebaseState veto log               |
-| **SCOPE-4** | No unmeasured end-to-end latency claims                                                     | Only M8 impulse/loopback measurement may support latency statements |
-| **SCOPE-5** | No distance-estimation or strong automatic nulling claims; at most one suppressor in v1     | Avoids unsupported product statements and M7+ scope creep           |
-| **SCOPE-6** | No milestone marked complete without its observable gate (evidence in `docs/milestones.md`) | Staged delivery integrity                                           |
-| **SCOPE-7** | Pico firmware snapshot may be vendored for reference only; no host build coupling or host-side firmware edits | Keeps host app repo focused while preserving reproducible hardware contracts |
-
-
-Veto checkboxes and override log: `docs/CodebaseState.md` [§1](docs/CodebaseState.md#1-global-project-scope).
-
-## Current status
-
-See the [Milestones](#milestones) table above. Quick summary:
-
-- **Implemented:** scaffold, typed config, ALSA probe/workers, RT primitives (SPSC, block pool), ASRC + resampler, calibration load/apply/WAV tools, passthrough mode, unit tests.
-- **In progress / pending gates:** Pi hardware soak (M1–M3), M4/M7 hardware evidence, M5 ODAS control gate, M6 state machine gate, M8 latency measurement.
-
-
-
-## Repository layout
-
-```text
-.
-├── CMakeLists.txt
-├── CMakePresets.json
-├── cmake/
-├── config/
-├── docs/
-├── scripts/
-├── src/
-├── testbench/          # PySide6 algorithm test bench (non-RT; see testbench/README.md)
-└── tests/
-```
-
-
-
-## Dependencies
-
-
-
-### Linux (Raspberry Pi target host)
-
-- `cmake` (>= 3.20)
-- `ninja-build`
-- C++20 compiler (`g++`or`clang++`)
-- `yaml-cpp`
-- `spdlog`
-
-Example install (Debian/Raspberry Pi OS):
+Example Debian/Raspberry Pi OS dependency installation:
 
 ```bash
 sudo apt update
-sudo apt install -y cmake ninja-build g++ libasound2-dev libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
+sudo apt install -y cmake ninja-build g++ pkg-config libasound2-dev libyaml-cpp-dev libspdlog-dev libsamplerate0-dev
+cmake --version
 ```
 
-
-
-### Windows development scaffold validation
-
-Milestone 0 can be configured and tested on Windows if CMake and a C++ toolchain are available. If `yaml-cpp`/`spdlog` are not installed, CMake fetches them automatically when `SONITUDE_FETCH_DEPS=ON`.
-
-## Build
-
-From repository root:
+Ensure the installed CMake meets the minimum before configuring. CMake can fetch missing supported dependencies with `SONITUDE_FETCH_DEPS=ON`; the following reproducible build instead requires them locally:
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSONITUDE_FETCH_DEPS=OFF
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-Or using presets:
+Portable/offline build, without Linux device runtime:
+
+```bash
+cmake -S . -B build-portable -G Ninja -DCMAKE_BUILD_TYPE=Release -DSONITUDE_WITH_ALSA=OFF -DSONITUDE_WITH_LIBSAMPLERATE=OFF
+cmake --build build-portable --parallel
+ctest --test-dir build-portable --output-on-failure
+```
+
+With ALSA disabled, `sonitude_realtime` and the ALSA device diagnostics are **not built**. Portable replay/stream tools and unit tests remain available.
+
+Presets are also provided:
 
 ```bash
 cmake --preset default-debug
 cmake --build --preset build-debug
+ctest --test-dir build/debug --output-on-failure
 ```
 
-CMake presets use schema 6 and therefore require **CMake 3.25+**. Debug and release presets use separate directories (`build/debug`, `build/release`). CI continues to configure an explicit `build/` tree without presets.
+### Linux hardware runtime
 
-
-
-## Run
-
-Validate config only:
+Inspect and edit [config/default.yaml](config/default.yaml) for the connected devices, sample rate, channel map, geometry and calibration before running.
 
 ```bash
 ./build/sonitude_realtime --config config/default.yaml --validate-config
-```
-
-Linux passthrough (6-mic capture → ear-cup stereo → ASRC → playback):
-
-```bash
+./build/sonitude_device_probe --config config/default.yaml
 ./build/sonitude_realtime --config config/default.yaml --mode passthrough
+# Or run directional processing:
+./build/sonitude_realtime --config config/default.yaml --mode beamform
 ```
 
-Passthrough requires ALSA and configured capture/playback devices. On Windows, build and run unit tests only.
+`--validate-config` checks runtime configuration and geometry, then returns before device opening, calibration loading or DSP/profile initialization. It is not a complete readiness check.
 
-## Tests
+The checked-in launcher only selects passthrough. It is stored without the executable bit; invoke it with Bash:
 
 ```bash
-ctest --test-dir build --output-on-failure
+bash scripts/run_realtime.sh config/default.yaml
 ```
 
-Algorithm test bench (after building `sonitude_wav_replay` and
-`sonitude_stream_process`):
+Current default settings:
+
+| Setting | Checked-in value |
+| --- | --- |
+| Capture / playback devices | `hw:PicoMic,0` / `hw:Creative,0` |
+| Nominal sample rates / periods | 44,100 Hz / 64 frames / 3 periods |
+| Logical channel map | `[0, 1, 2, 3, 4, 5]` |
+| Calibration | `calibration_uploaded.yaml` |
+| Spatial backend | `adaptive_geometric` |
+| Steering model / assumed range | `near_field` / 0.45 m |
+| Suppression | Disabled; selected backend is `spectral` |
+| Binaural | Enabled, `compact_hrtf`, follows steering |
+| ODAS | Disabled; no live direction tracking by default |
+| Common EQ | Enabled flag, empty section list: no filter applied |
+
+These are configuration values, not validated hardware specifications. In particular, confirm channel mapping and the provenance/suitability of the uploaded calibration. The compact HRTF data remains an experimental raw-HRIR-prefix representation, not a validated embedded deployment profile.
+
+### Desktop test bench
+
+After building the portable tools, from the repository root on Linux/macOS:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r testbench/requirements-dev.txt
+export SONITUDE_BUILD_DIR="$PWD/build"
+export SONITUDE_REQUIRE_CPP=1
 cd testbench
-pip install -r requirements-dev.txt
-python -m pytest
+python -m pytest -q
+python -m app.main
 ```
 
-CI sets `SONITUDE_BUILD_DIR` and `SONITUDE_REQUIRE_CPP=1` so integration
-tests fail if those binaries are missing. Details: `[testbench/README.md](testbench/README.md)`.
+Point `SONITUDE_BUILD_DIR` at the directory actually built, such as `build-portable` or `build/debug`. On Windows, activate with `.venv\Scripts\activate` and set the environment variables using your shell's syntax. For headless tests, set `QT_QPA_PLATFORM=offscreen`.
 
+Without `SONITUDE_REQUIRE_CPP=1`, missing C++ binaries can cause integration tests to skip.
 
+## Calibration workflows
 
-## Device and milestone documentation
+| Workflow | Entry point | Output/use |
+| --- | --- | --- |
+| Channel diagnostics | `sonitude_calibration_capture`, `sonitude_calibration_estimate` | Synthetic/offline diagnostics and scalar calibration YAML |
+| Python scalar compiler | `python -m tools.calibration`, Calibration tab | Delay/gain/polarity variants A–E and reports; runtime overlays |
+| Measured array compiler | `tools/calibration/compile_array.py` | SMV3 profile plus NPZ/CSV/JSON diagnostics for `fixed_measured` |
 
-- **Codebase snapshot (scope, DSP, layout, interfaces):** `[docs/CodebaseState.md](docs/CodebaseState.md)`
-- Architecture and thread/data ownership: `[docs/architecture.md](docs/architecture.md)`
-- Linux/ALSA setup and runtime policy: `[docs/device_setup.md](docs/device_setup.md)`
-- Calibration format and tooling roadmap: `[docs/calibration.md](docs/calibration.md)`
-- Latency measurement method and caveats: `[docs/latency_measurement.md](docs/latency_measurement.md)`
-- Binaural renderer (DSP, HRTF tables, protocol v2 tools): `[docs/binaural_renderer.md](docs/binaural_renderer.md)`
-- Full milestone gate checklist and evidence tracking: `[docs/milestones.md](docs/milestones.md)`
-- Algorithm test bench (PySide6, non-RT; short-file taps, long-file streaming, live preview): `[testbench/README.md](testbench/README.md)`
+The measured compiler accepts synchronized six-channel sweeps with a known stimulus, or synchronized exported IR WAV/FLAC files. See [calibration guide](docs/calibration.md) and [example manifest](config/array_ir_manifest.example.yaml). Replace the example's placeholder recording paths with actual data before running:
 
+```bash
+python tools/calibration/compile_array.py --manifest config/array_ir_manifest.example.yaml --output-prefix build/array_profile_measured
+```
+
+Set `spatial.backend: fixed_measured` and `spatial.profile_path` to the generated binary to select that path. The checked-in default does not select it.
+
+Scalar `delay_samples` is consumed by geometric steering, not the time-domain `CalibrationApplier`. Measured profiles encode synchronized delay in complex IR/RTF phase; the array compiler deliberately ignores scalar delay corrections. Keep runtime gain/polarity/EQ and profile-conditioning assumptions consistent.
+
+REW `.mdat` import is metadata support, not general IR extraction. A compiled artifact or single-direction recording does not establish full measured azimuth coverage or hardware acceptance.
+
+## Unfinished work and known issues
+
+Audit basis: source review at `c096136`, repository workflows and open PR metadata, 2026-09-10. These findings have not been reproduced on audio hardware.
+
+| Priority | Finding / remaining action | Evidence |
+| --- | --- | --- |
+| High: RT liveness risk | `SnapshotBuffer::acquire()` spins without a bound while a publication is in progress. If a higher-priority FIFO audio reader preempts the lower-priority writer on the same CPU with an odd sequence, the reader can prevent that writer from completing. Replace with bounded last-good-snapshot behavior or a suitable handoff and validate under contention. This is a source-derived scheduling risk, not a reproduced hang. | [snapshot](src/rt/param_snapshot.hpp), [runtime](src/main.cpp) |
+| High: output correctness | Fixed-measured and experimental dual-reference stereo paths process suppression on a temporary mono average, but output the original stereo buffers. Common mono EQ and test-bench blend likewise do not affect that stereo output. Streaming can still set its suppression-applied flag. Route intended processing into the audible stereo path and add output-level regression coverage. The fixed MVDR's internal mask is separate from this post-suppression defect. | [runtime](src/main.cpp), [stream](src/tools/stream_process.cpp), [replay](src/tools/wav_replay.cpp) |
+| High: failure reporting | Runtime capture-wait and repeated playback/queue failures stop the loop but reach `return 0`. Propagate a failure exit status and verify process-supervisor behavior. | [runtime](src/main.cpp) |
+| High: RT contract | Failed memory locking and FIFO scheduling only warn and continue; playback starts before its scheduling call. Complete the required/degraded-mode policy and scheduling acceptance checks. | [runtime](src/main.cpp), [draft PR #28](https://github.com/derraan/Sonitude/pull/28) |
+| Medium: channel consistency | Passthrough hardcodes channels 4/5, while default steering ear references are 0/5. Resolve against measured wiring/geometry; do not assume both identify the same ear pair. | [runtime](src/main.cpp), [default config](config/default.yaml) |
+| Medium: operational checks | Launcher lacks executable permission; direct execution fails on Unix. Use Bash as shown above. Config-only validation does not load all runtime assets. | [launcher](scripts/run_realtime.sh), [runtime](src/main.cpp) |
+| Pending validation | Device format/channel mapping, accepted calibration, XRUN/occupancy soaks, shutdown/fault behavior, ODAS loss, steering/suppression transitions and measured latency percentiles. | [milestones](docs/milestones.md) |
+| Pending integration | Production VAD is absent from the control decision: ODAS confidence is used as a speech-probability proxy. Own-voice foundation remains in a draft PR. | [control loop](src/control/control_loop.cpp), [draft PR #29](https://github.com/derraan/Sonitude/pull/29) |
+| Documentation | Detailed milestone and architecture prose still contains older runtime descriptions. Reconcile these with implementation without marking hardware gates complete. | [milestones](docs/milestones.md), [architecture](docs/architecture.md), [codebase state](docs/CodebaseState.md) |
+
+### Open work on GitHub
+
+At the audit time, there were **two open draft PRs and no open standalone issues**:
+
+- [#28 — Integrated release candidate: thread safety, control, evidence, and CI](https://github.com/derraan/Sonitude/pull/28), targeting `main`. Its stated outstanding gates include Pi scheduling/memory-lock evidence, soaks, teardown/fault tests and hardware calibration. Reconcile with current main before integration; PR-body historical test results are not proof of current-main acceptance.
+- [#29 — Add own-voice subsystem foundation](https://github.com/derraan/Sonitude/pull/29), targeting `integration/release-candidate-2026-08-14`, not main. Runtime wiring, measured calibration/thresholds and hardware acceptance remain unfinished in its stated scope.
+
+The issue tracker therefore does not represent the complete backlog. The table above and [milestone tracker](docs/milestones.md) contain additional work.
+
+Milestone status recorded in that tracker: **M0 done; M1–M7 in progress; M8 pending**. Recorded status is not a fresh certification.
+
+## Automated checks and limits
+
+For audited main commit `c096136`:
+
+- [Linux build run](https://github.com/derraan/Sonitude/actions/runs/34435376645): libsamplerate ON/OFF builds, ASan/UBSan, ThreadSanitizer and minimal host jobs all succeeded.
+- [Gitleaks run](https://github.com/derraan/Sonitude/actions/runs/34435376859): succeeded.
+- Current [host CI](.github/workflows/linux-build.yml) runs CTest and test-bench pytest with real C++ tools.
+- That workflow does not build Pico firmware or run the Sound_Bubble neural workflow. Their readiness is not established by green host CI.
+- The README audit did not rerun local C++ builds: the review environment lacked CMake and required development libraries. CI results above are retrieved GitHub results.
+
+Green automated checks do not close hardware gates or disprove untested runtime routing/scheduling defects. No end-to-end latency, speech-separation performance or deployment-readiness claim is made here.
+
+## Further documentation
+
+- [Architecture and ownership](docs/architecture.md)
+- [Linux device setup](docs/device_setup.md)
+- [Calibration](docs/calibration.md)
+- [Binaural rendering](docs/binaural_renderer.md)
+- [Experimental spectral postfilter](docs/spectral_postfilter.md)
+- [Latency measurement](docs/latency_measurement.md)
+- [Milestone evidence](docs/milestones.md)
+- [Test-bench usage](testbench/README.md)
