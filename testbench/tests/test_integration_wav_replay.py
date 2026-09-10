@@ -270,7 +270,9 @@ def test_spectral_backend_differs_and_disabled_is_bit_exact(
         disable_limiter=True,
     )
     assert off.resolved.get("suppression_resolved") is False
-    assert off.resolved.get("suppression_backend_resolved") == "conservative"
+    assert off.resolved.get("suppression_backend_resolved") == read_runtime_config_summary(
+        DEFAULT_CONFIG_PATH
+    ).suppression.backend
     assert off.resolved.get("suppression_algorithmic_delay_samples") in (0, 0.0)
     assert "suppression_implementation_status" not in (off.resolved or {})
     assert spectral.resolved.get("suppression_backend_resolved") == "spectral"
