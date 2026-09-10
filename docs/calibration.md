@@ -12,7 +12,7 @@ Do not mark M3 `done` until hardware gate evidence is recorded in `docs/mileston
 | --- | --- | --- | --- |
 | **Python M3 compiler** | `python -m tools.calibration` or test-bench **Calibration** tab | Production scalar calibration (delay / gain / A–E YAML) from exported WAVs | Exported WAVs + optional stimulus WAV |
 | **C++ capture / estimate** | `sonitude_calibration_capture` + `sonitude_calibration_estimate` | Channel diagnostic (DC, gain, normalized-correlation lag, polarity) | Live 6-ch capture WAV |
-| **SMV3 IR compiler** | `tools/calibration/compile_array.py` | Measured spatial profile for `spatial.backend: fixed_measured` | Synchronized IR WAV/FLAC per direction |
+| **SMV3 array compiler** | `tools/calibration/compile_array.py` | Measured spatial profile for `spatial.backend: fixed_measured` | Synchronized 6-ch sweep recordings (+ stimulus) or pre-exported IR WAV/FLAC |
 
 REW `.mdat` is **optional metadata** for the Calibration tab (delay / peak / FR notes). It is **not** an IR deserializer and is **not** an input to `compile_session`. Exported WAVs remain authoritative for GCC-PHAT / absolute TOF.
 
@@ -375,9 +375,14 @@ Statuses: `PASS`, `WARNING`, `UNRESOLVED`, `INVALID`.
 
 ---
 
-# User guide 5 — Physical IR compiler (SMV3)
+# User guide 5 — Physical measured-profile compiler (SMV3)
 
-`tools/calibration/compile_array.py` imports **already exported** synchronized IRs and emits an SMV3 profile (`.bin`, `.npz`, `.csv`, `.report.json`) for `spatial.backend: fixed_measured`. It does not run REW/Audacity.
+`tools/calibration/compile_array.py` emits an SMV3 profile (`.bin`, `.npz`, `.csv`, `.report.json`) for `spatial.backend: fixed_measured`.
+
+Input modes:
+
+- `input: sweep` (schema v2): six-channel sweep recordings + known stimulus WAV. The compiler deconvolves each channel, applies one shared direct-path window per azimuth, then derives complex RTF steering.
+- `input: ir` (schema v1/v2): already exported synchronized IR WAV/FLAC.
 
 Layouts:
 
@@ -396,6 +401,7 @@ Notes:
 - Optional `calibration_yaml` applies `gain_linear` and `polarity` only.
 - `delay_samples` is ignored: synchronized IR phase already encodes delay.
 - Sample-rate mismatch and channel-count mismatch are hard errors.
+- For sweep mode, window policy and detected direct-arrival offsets are written into `.report.json`.
 - This artifact does not satisfy the M3 hardware-evidence gate by itself.
 
 Example manifest shape is in `config/array_ir_manifest.example.yaml`.

@@ -59,6 +59,7 @@ struct SpatialConfig
 {
   std::string backend = "adaptive_geometric";
   std::string profile_path;
+  std::string azimuth_interpolation = "nearest";
   bool mask_enabled = true;
   float eta_low_db = -3.0F;
   float eta_high_db = 3.0F;
@@ -89,6 +90,10 @@ struct SpectralSuppressionConfig
   std::size_t fft_size = 128;
   std::size_t hop_size = 32;
   float gain_floor_db = -12.0F;
+  bool amplitude_range_bias = true;
+  float speech_low_hz = 300.0F;
+  float speech_high_hz = 4000.0F;
+  float near_dominance_ratio = 1.4F;
 };
 
 struct SuppressionConfig

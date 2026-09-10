@@ -52,6 +52,31 @@ sonitude::dsp::ArrayProfile MakeUnityProfile(const float gamma)
   return p;
 }
 
+sonitude::dsp::ArrayProfile MakeDualAzimuthProfile()
+{
+  auto p = MakeUnityProfile(1.0F);
+  p.direction_count = 2;
+  p.azimuth_deg = {-30.0F, 30.0F};
+  const std::size_t n = 2U * 65U * 6U * 2U;
+  p.weights_ri.assign(n, 0.0F);
+  p.steering_ri.assign(n, 0.0F);
+  p.valid.assign(2U * 65U, 1);
+  p.dominance_scale.assign(65, 1.0F);
+  for (std::size_t b = 0; b < 65; ++b)
+  {
+    for (std::size_t ch = 0; ch < 6; ++ch)
+    {
+      const std::size_t i0 = ((((0U * 65U) + b) * 6U) + ch) * 2U;
+      const std::size_t i1 = ((((1U * 65U) + b) * 6U) + ch) * 2U;
+      p.steering_ri[i0] = 1.0F;
+      p.steering_ri[i1] = 1.0F;
+      p.weights_ri[i0] = 1.0F / 6.0F;
+      p.weights_ri[i1] = (ch == 0U) ? 1.0F : 0.0F;
+    }
+  }
+  return p;
+}
+
 std::vector<sonitude::audio::MicFrame> IdenticalMics(const std::vector<float>& src)
 {
   std::vector<sonitude::audio::MicFrame> out(src.size());
@@ -104,5 +129,26 @@ void RunFixedMvdrTests()
     Require(std::fabs(l_rms - s_rms) < (0.12 * s_rms), "g=1 DAS reconstruction near source");
     Require(bf.solveCountForTest() == 0, "fixed path must not solve");
     Require(bf.factorizationCountForTest() == 0, "fixed path must not factor");
+  }
+
+  {
+    auto profile = MakeDualAzimuthProfile();
+    sonitude::dsp::FixedBinauralMvdr bf;
+    sonitude::dsp::FixedMvdrMaskParams mask;
+    mask.constant_mask = 1.0F;
+    bf.configure(profile, kFs, kFrames, mask, 150.0F, sonitude::dsp::AzimuthInterpolationMode::LinearBlend);
+    bf.setTarget({0.0F, 0.0F});
+    std::vector<sonitude::audio::MicFrame> sparse(kFrames);
+    for (std::size_t i = 0; i < kFrames; ++i)
+    {
+      sparse[i][0] = src[i];
+    }
+    std::vector<float> left(kFrames, 0.0F);
+    std::vector<float> right(kFrames, 0.0F);
+    bf.processStereo(sparse, left, right);
+    const double l_rms = sonitude::tests::support::ComputeRms(left, 512);
+    const double s_rms = sonitude::tests::support::ComputeRms(src, 512);
+    Require(l_rms > (0.40 * s_rms) && l_rms < (0.75 * s_rms),
+            "linear azimuth blending should interpolate between adjacent looks");
   }
 }

@@ -1,10 +1,12 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "dsp/beamformer.hpp"
@@ -579,6 +581,85 @@ void TestTwoTalkersGuardContrast()
               " off=" + std::to_string(att_o));
   Require(att_t > -6.0, "desired talker should not be floored, att=" + std::to_string(att_t));
 }
+
+void TestAmplitudeRangeBiasesSpeechBand()
+{
+  sonitude::dsp::SpectralPostfilter pf;
+  Require(pf.prepare(44100.0, 256, {.enabled = true, .gain_floor_db = -12.0F}), "range prepare");
+  pf.setControl(true, 1.0F);
+  constexpr std::size_t kFft = 128;
+  constexpr std::size_t kSpeech = 4;
+  constexpr std::size_t kOut = 20;
+  std::array<std::vector<float>, sonitude::audio::kMicChannels> mic_re{};
+  std::array<std::vector<float>, sonitude::audio::kMicChannels> mic_im{};
+  for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+  {
+    mic_re[ch].assign(kFft, 0.0F);
+    mic_im[ch].assign(kFft, 0.0F);
+  }
+  auto run_hops = [&](const bool near) {
+    pf.reset();
+    pf.setControl(true, 1.0F);
+    std::vector<float> y_re(kFft, 0.0F);
+    std::vector<float> y_im(kFft, 0.0F);
+    for (std::size_t hop = 0; hop < 120; ++hop)
+    {
+      std::fill(y_re.begin(), y_re.end(), 0.0F);
+      std::fill(y_im.begin(), y_im.end(), 0.0F);
+      y_re[kSpeech] = 1.0F;
+      y_re[kOut] = 1.0F;
+      for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+      {
+        std::fill(mic_re[ch].begin(), mic_re[ch].end(), 0.0F);
+        const float amp = (near && ch == 5) ? 2.0F : 0.4F;
+        for (std::size_t k = 1; k <= 11; ++k)
+        {
+          mic_re[ch][k] = amp;
+        }
+      }
+      std::array<std::span<const float>, sonitude::audio::kMicChannels> re_s{};
+      std::array<std::span<const float>, sonitude::audio::kMicChannels> im_s{};
+      for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+      {
+        re_s[ch] = mic_re[ch];
+        im_s[ch] = mic_im[ch];
+      }
+      pf.updateAmplitudeProximity(re_s, im_s);
+      pf.processSpectrum(y_re, y_im);
+    }
+    return std::pair<float, float>{std::fabs(y_re[kSpeech]), std::fabs(y_re[kOut])};
+  };
+
+  for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+  {
+    for (std::size_t k = 1; k <= 11; ++k)
+    {
+      mic_re[ch][k] = 0.4F;
+    }
+  }
+  std::array<std::span<const float>, sonitude::audio::kMicChannels> re_eq{};
+  std::array<std::span<const float>, sonitude::audio::kMicChannels> im_eq{};
+  for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
+  {
+    re_eq[ch] = mic_re[ch];
+    im_eq[ch] = mic_im[ch];
+  }
+  for (std::size_t hop = 0; hop < 40; ++hop)
+  {
+    pf.updateAmplitudeProximity(re_eq, im_eq);
+  }
+  Require(pf.amplitudeProximityForTest() < 0.15F,
+          "equal mic amplitudes must not look near-field, p=" +
+              std::to_string(pf.amplitudeProximityForTest()));
+
+  const auto near = run_hops(true);
+  Require(pf.amplitudeProximityForTest() > 0.8F,
+          "dominant nearest mic must raise proximity, p=" +
+              std::to_string(pf.amplitudeProximityForTest()));
+  Require(near.first > 0.7F, "near-field speech bin should stay open");
+  Require(near.second < 0.35F, "out-of-band bins should sit on the Wiener floor");
+  Require(near.first > near.second * 2.0F, "speech band must be preferred over the rest");
+}
 }  // namespace
 
 void RunSpectralPostfilterTests()
@@ -596,5 +677,6 @@ void RunSpectralPostfilterTests()
   TestLiveTuningPreservesHistory();
   TestLiveGainFloorChangeIsContinuous();
   TestExplicitResetClearsTuningHistory();
+  TestAmplitudeRangeBiasesSpeechBand();
   TestTwoTalkersGuardContrast();
 }

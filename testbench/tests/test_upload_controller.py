@@ -89,6 +89,12 @@ def test_commit_runtime_config_writes_backup_and_patches_fields(tmp_path: Path) 
     assert raw["suppression"]["activity_threshold"] == 0.045
     assert raw["suppression"]["confidence_threshold"] == 0.7
     assert raw["steering"]["ambient_floor_linear"] == 0.12
+    assert raw["steering"]["model"] == "near_field"
+    assert raw["steering"]["source_distance_m"] == 0.45
+    assert raw["suppression"]["spectral"]["amplitude_range_bias"] is True
+    assert raw["suppression"]["spectral"]["speech_low_hz"] == 300.0
+    assert raw["suppression"]["spectral"]["speech_high_hz"] == 4000.0
+    assert raw["suppression"]["spectral"]["near_dominance_ratio"] == 1.4
     assert raw["binaural"]["enabled"] is True
     assert raw["binaural"]["backend"] == "compact_hrtf"
     assert raw["binaural"]["direction"]["follow_steering"] is True
@@ -115,3 +121,36 @@ def test_commit_runtime_config_auto_mode_preserves_yaml_enabled(tmp_path: Path) 
 
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert raw["suppression"]["enabled"] is True
+
+
+def test_commit_runtime_config_sets_fixed_measured_backend(tmp_path: Path) -> None:
+    config_path = tmp_path / "config" / "default.yaml"
+    _write_runtime_config(config_path, suppression_enabled=False)
+    cal_src = tmp_path / "compiled" / "calibration_session_E_full.yaml"
+    profile_src = tmp_path / "compiled" / "array_profile_session.bin"
+    cal_src.parent.mkdir(parents=True, exist_ok=True)
+    cal_src.write_text("sample_rate_hz: 44100\n", encoding="utf-8")
+    profile_src.write_bytes(b"SMV3")
+
+    snapshot = _snapshot("on")
+    snapshot = DspCommitSnapshot(
+        suppression_mode=snapshot.suppression_mode,
+        suppression_backend=snapshot.suppression_backend,
+        suppressor=snapshot.suppressor,
+        binaural=snapshot.binaural,
+        spatial_backend="fixed_measured",
+        spatial_profile_path=profile_src,
+    )
+    result = commit_runtime_config(
+        config_path,
+        base_config=config_path,
+        calibration_src=cal_src,
+        dsp=snapshot,
+    )
+
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert raw["spatial"]["backend"] == "fixed_measured"
+    assert raw["spatial"]["profile_path"] == "array_profile_session.bin"
+    assert raw["binaural"]["enabled"] is False
+    assert raw["steering"]["experimental_dual_reference_mvdr"] is False
+    assert result.spatial_backend == "fixed_measured"

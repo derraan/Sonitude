@@ -116,6 +116,15 @@ enum class SuppressionMode
   Off
 };
 
+sonitude::dsp::AzimuthInterpolationMode ParseAzimuthInterpolation(const std::string& mode)
+{
+  if (mode == "linear_blend")
+  {
+    return sonitude::dsp::AzimuthInterpolationMode::LinearBlend;
+  }
+  return sonitude::dsp::AzimuthInterpolationMode::Nearest;
+}
+
 struct BinauralRuntime
 {
   std::unique_ptr<sonitude::dsp::HrtfTable> compact_table;
@@ -548,7 +557,12 @@ int main(int argc, char** argv)
       mask.eta_low_db = runtime.spatial.eta_low_db;
       mask.eta_high_db = runtime.spatial.eta_high_db;
       mask.smooth_sec = runtime.spatial.mask_smooth_sec;
-      fixed_beamformer.configure(profile, sample_rate_hz, max_block_frames, mask);
+      fixed_beamformer.configure(profile,
+                                 sample_rate_hz,
+                                 max_block_frames,
+                                 mask,
+                                 runtime.steering.steering_ramp_ms,
+                                 ParseAzimuthInterpolation(runtime.spatial.azimuth_interpolation));
     }
     else
     {
@@ -587,7 +601,11 @@ int main(int argc, char** argv)
                                        .fft_size = runtime.suppression.spectral.fft_size,
                                        .hop_size = runtime.suppression.spectral.hop_size,
                                        .gain_floor_db = runtime.suppression.spectral.gain_floor_db,
-                                       .confidence_threshold = runtime.suppression.confidence_threshold}});
+                                       .confidence_threshold = runtime.suppression.confidence_threshold,
+                                       .amplitude_range_bias = runtime.suppression.spectral.amplitude_range_bias,
+                                       .speech_low_hz = runtime.suppression.spectral.speech_low_hz,
+                                       .speech_high_hz = runtime.suppression.spectral.speech_high_hz,
+                                       .near_dominance_ratio = runtime.suppression.spectral.near_dominance_ratio}});
     if (!use_fixed)
     {
       beamformer.setSpectralPostfilter(suppressor.spectralFilter());

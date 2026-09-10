@@ -18,7 +18,9 @@ __all__ = [
     "CalibrationCommitSnapshot",
     "DspCommitSnapshot",
     "UploadCommitResult",
+    "apply_dsp_fields",
     "commit_runtime_config",
+    "patch_runtime_yaml_dsp",
 ]
 
 _UPLOADED_CALIBRATION_NAME = "calibration_uploaded.yaml"
@@ -30,6 +32,8 @@ class CalibrationCommitSnapshot:
     variant_yaml: Path | None
     common_eq_enabled: bool
     common_eq_sections: list[dict[str, Any]] | None
+    spatial_backend: str | None = None
+    spatial_profile_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,9 @@ class DspCommitSnapshot:
     suppression_backend: str | None
     suppressor: SuppressorRequest
     binaural: BinauralRequest
+    spatial_backend: str | None = None
+    spatial_profile_path: Path | None = None
+    source_distance_m: float = 0.45
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,8 @@ class UploadCommitResult:
     backup_path: Path
     resolved_suppression_enabled: bool
     suppression_mode: SuppressionMode
+    spatial_backend: str | None
+    spatial_profile_path: Path | None
 
 
 def _timestamp_backup_name(config_path: Path) -> str:
@@ -83,6 +92,80 @@ def _normalize_common_eq_sections(sections: list[dict[str, Any]]) -> list[dict[s
     return normalized
 
 
+def apply_dsp_fields(raw: dict[str, Any], dsp: DspCommitSnapshot) -> None:
+    """Write RT DSP knobs into a runtime YAML mapping. Always forces near-field MVDR."""
+    suppression = raw.setdefault("suppression", {})
+    if not isinstance(suppression, dict):
+        raise RuntimeError("Runtime config field 'suppression' must be a mapping.")
+    mode = parse_suppression_mode(dsp.suppression_mode)
+    yaml_enabled = bool(suppression.get("enabled", False))
+    if mode is SuppressionMode.ON:
+        suppression["enabled"] = True
+    elif mode is SuppressionMode.OFF:
+        suppression["enabled"] = False
+    else:
+        suppression["enabled"] = yaml_enabled
+
+    if dsp.suppression_backend:
+        suppression["backend"] = dsp.suppression_backend
+    suppression["fade_ms"] = float(dsp.suppressor.fade_ms)
+    suppression["activity_threshold"] = float(dsp.suppressor.activity_threshold)
+    suppression["confidence_threshold"] = float(dsp.suppressor.confidence_threshold)
+
+    spectral = suppression.setdefault("spectral", {})
+    if not isinstance(spectral, dict):
+        raise RuntimeError("Runtime config field 'suppression.spectral' must be a mapping.")
+    spectral["gain_floor_db"] = float(dsp.suppressor.spectral_gain_floor_db)
+    spectral["amplitude_range_bias"] = bool(dsp.suppressor.amplitude_range_bias)
+    spectral["speech_low_hz"] = float(dsp.suppressor.speech_low_hz)
+    spectral["speech_high_hz"] = float(dsp.suppressor.speech_high_hz)
+    spectral["near_dominance_ratio"] = float(dsp.suppressor.near_dominance_ratio)
+
+    steering = raw.setdefault("steering", {})
+    if not isinstance(steering, dict):
+        raise RuntimeError("Runtime config field 'steering' must be a mapping.")
+    steering["model"] = "near_field"
+    steering["source_distance_m"] = float(dsp.source_distance_m)
+    steering["ambient_floor_linear"] = float(dsp.suppressor.ambient_floor_linear)
+
+    binaural = raw.setdefault("binaural", {})
+    if not isinstance(binaural, dict):
+        raise RuntimeError("Runtime config field 'binaural' must be a mapping.")
+    direction = binaural.setdefault("direction", {})
+    if not isinstance(direction, dict):
+        raise RuntimeError("Runtime config field 'binaural.direction' must be a mapping.")
+    binaural["enabled"] = bool(dsp.binaural.enabled)
+    if dsp.binaural.backend:
+        binaural["backend"] = dsp.binaural.backend
+    direction["follow_steering"] = bool(dsp.binaural.follow_beamformer_steering)
+    direction["azimuth_deg"] = float(dsp.binaural.azimuth_deg)
+    direction["elevation_deg"] = float(dsp.binaural.elevation_deg)
+    if dsp.spatial_backend or dsp.spatial_profile_path:
+        spatial = raw.setdefault("spatial", {})
+        if not isinstance(spatial, dict):
+            raise RuntimeError("Runtime config field 'spatial' must be a mapping.")
+        if dsp.spatial_backend:
+            spatial["backend"] = str(dsp.spatial_backend)
+        if dsp.spatial_profile_path:
+            profile = Path(dsp.spatial_profile_path)
+            spatial["profile_path"] = profile.name if profile.is_absolute() else str(profile)
+        if str(spatial.get("backend")) == "fixed_measured":
+            binaural["enabled"] = False
+            steering["experimental_dual_reference_mvdr"] = False
+
+
+def patch_runtime_yaml_dsp(path: str | Path, dsp: DspCommitSnapshot) -> Path:
+    """Rewrite session/runtime YAML with the current testbench DSP snapshot."""
+    dest = Path(path)
+    with open(dest, encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle)
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"Runtime config is not a mapping: {dest}")
+    apply_dsp_fields(raw, dsp)
+    dest.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return dest
+
+
 def commit_runtime_config(
     dest: str | Path = DEFAULT_CONFIG_PATH,
     *,
@@ -115,42 +198,7 @@ def commit_runtime_config(
     calibration_copy_path = dest_path.parent / _UPLOADED_CALIBRATION_NAME
     copy2(calibration_src_path, calibration_copy_path)
     raw["calibration_path"] = _UPLOADED_CALIBRATION_NAME
-
-    suppression = raw.setdefault("suppression", {})
-    if not isinstance(suppression, dict):
-        raise RuntimeError("Runtime config field 'suppression' must be a mapping.")
-    mode = parse_suppression_mode(dsp.suppression_mode)
-    yaml_enabled = bool(suppression.get("enabled", False))
-    if mode is SuppressionMode.ON:
-        suppression["enabled"] = True
-    elif mode is SuppressionMode.OFF:
-        suppression["enabled"] = False
-    else:
-        suppression["enabled"] = yaml_enabled
-
-    if dsp.suppression_backend:
-        suppression["backend"] = dsp.suppression_backend
-    suppression["fade_ms"] = float(dsp.suppressor.fade_ms)
-    suppression["activity_threshold"] = float(dsp.suppressor.activity_threshold)
-    suppression["confidence_threshold"] = float(dsp.suppressor.confidence_threshold)
-
-    steering = raw.setdefault("steering", {})
-    if not isinstance(steering, dict):
-        raise RuntimeError("Runtime config field 'steering' must be a mapping.")
-    steering["ambient_floor_linear"] = float(dsp.suppressor.ambient_floor_linear)
-
-    binaural = raw.setdefault("binaural", {})
-    if not isinstance(binaural, dict):
-        raise RuntimeError("Runtime config field 'binaural' must be a mapping.")
-    direction = binaural.setdefault("direction", {})
-    if not isinstance(direction, dict):
-        raise RuntimeError("Runtime config field 'binaural.direction' must be a mapping.")
-    binaural["enabled"] = bool(dsp.binaural.enabled)
-    if dsp.binaural.backend:
-        binaural["backend"] = dsp.binaural.backend
-    direction["follow_steering"] = bool(dsp.binaural.follow_beamformer_steering)
-    direction["azimuth_deg"] = float(dsp.binaural.azimuth_deg)
-    direction["elevation_deg"] = float(dsp.binaural.elevation_deg)
+    apply_dsp_fields(raw, dsp)
 
     if common_eq_sections is not None:
         raw["common_eq"] = {
@@ -159,10 +207,16 @@ def commit_runtime_config(
         }
 
     dest_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    suppression = raw["suppression"]
+    mode = parse_suppression_mode(dsp.suppression_mode)
     return UploadCommitResult(
         committed_config_path=dest_path,
         calibration_copy_path=calibration_copy_path,
         backup_path=backup_path,
         resolved_suppression_enabled=bool(suppression["enabled"]),
         suppression_mode=mode,
+        spatial_backend=str(raw.get("spatial", {}).get("backend")) if isinstance(raw.get("spatial"), dict) else None,
+        spatial_profile_path=(
+            Path(str(raw["spatial"]["profile_path"])) if isinstance(raw.get("spatial"), dict) and raw["spatial"].get("profile_path") else None
+        ),
     )

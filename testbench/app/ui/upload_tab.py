@@ -133,10 +133,21 @@ class UploadTab(QWidget):
         save_splitter(self._main_splitter, KEY_UPLOAD_H)
 
     def _selected_dsp_snapshot(self) -> DspCommitSnapshot:
+        cal = self._calibration_tab.calibration_commit_snapshot()
         source = self._source_combo.currentData()
         if source == "recorded":
-            return self._recorded_tab.dsp_commit_snapshot()
-        return self._realtime_tab.dsp_commit_snapshot()
+            base = self._recorded_tab.dsp_commit_snapshot()
+        else:
+            base = self._realtime_tab.dsp_commit_snapshot()
+        return DspCommitSnapshot(
+            suppression_mode=base.suppression_mode,
+            suppression_backend=base.suppression_backend,
+            suppressor=base.suppressor,
+            binaural=base.binaural,
+            spatial_backend=cal.spatial_backend,
+            spatial_profile_path=cal.spatial_profile_path,
+            source_distance_m=base.source_distance_m,
+        )
 
     def _refresh_summary(self) -> None:
         cal = self._calibration_tab.calibration_commit_snapshot()
@@ -186,11 +197,18 @@ class UploadTab(QWidget):
                 f"Suppression activity_threshold: {suppressor.activity_threshold:.4f}",
                 f"Suppression confidence_threshold: {suppressor.confidence_threshold:.2f}",
                 f"Steering ambient_floor_linear: {suppressor.ambient_floor_linear:.3f}",
+                "MVDR model: near_field",
+                f"MVDR look distance: {snapshot.source_distance_m:.2f} m",
+                f"Wiener amplitude range bias: {suppressor.amplitude_range_bias}",
+                f"Wiener speech band: {suppressor.speech_low_hz:.0f}–{suppressor.speech_high_hz:.0f} Hz",
+                f"Near dominance ratio: {suppressor.near_dominance_ratio:.2f}",
                 f"Binaural enabled: {binaural.enabled}",
                 f"Binaural backend: {binaural.backend or '(unchanged)'}",
                 f"Binaural follow_steering: {binaural.follow_beamformer_steering}",
                 f"Binaural azimuth_deg: {binaural.azimuth_deg:.1f}",
                 f"Binaural elevation_deg: {binaural.elevation_deg:.1f}",
+                f"Spatial backend: {snapshot.spatial_backend or '(unchanged)'}",
+                f"Spatial profile_path: {snapshot.spatial_profile_path or '(unchanged)'}",
             ]
         )
 
@@ -241,6 +259,8 @@ class UploadTab(QWidget):
                 [
                     f"Suppression mode request: {result.suppression_mode.value}",
                     f"Resolved suppression.enabled: {result.resolved_suppression_enabled}",
+                    f"Spatial backend: {result.spatial_backend}",
+                    f"Spatial profile_path: {result.spatial_profile_path}",
                     f"Committed config path: {result.committed_config_path}",
                     f"Copied calibration path: {result.calibration_copy_path}",
                     f"Backup path: {result.backup_path}",

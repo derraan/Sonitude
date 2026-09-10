@@ -11,12 +11,14 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from calibration.compile_array import (
     compile_from_irs,
+    conditioning_hash,
     load_ir_cube,
     load_manifest,
     main,
     make_synthetic_impulse_cube,
     pack_profile,
 )
+from calibration.deconvolve import DirectPathWindowSpec, direct_path_window, regularized_deconvolution
 
 
 def _write_multichannel(path: Path, cube: np.ndarray, direction_index: int, sr: int) -> None:
@@ -70,7 +72,7 @@ def test_load_ir_cube_multichannel(tmp_path: Path):
         encoding="utf-8",
     )
     manifest = load_manifest(manifest_path)
-    loaded, azimuths, sr = load_ir_cube(manifest, tmp_path)
+    loaded, azimuths, sr, _ = load_ir_cube(manifest, tmp_path)
     assert sr == sample_rate
     assert azimuths == [0.0, 30.0]
     assert loaded.shape == cube.shape
@@ -98,7 +100,7 @@ def test_load_ir_cube_per_mic_matches_multichannel(tmp_path: Path):
         encoding="utf-8",
     )
     manifest = load_manifest(manifest_path)
-    loaded, azimuths, _ = load_ir_cube(manifest, tmp_path)
+    loaded, azimuths, _, _ = load_ir_cube(manifest, tmp_path)
     assert azimuths == [0.0, -20.0]
     assert np.allclose(loaded[0], loaded[1], atol=1.0e-6)
 
@@ -131,10 +133,11 @@ def test_physical_compile_matches_direct_compile_and_header_flag(tmp_path: Path)
     assert main(["--manifest", str(manifest_path), "--output-prefix", str(tmp_path / "compiled")]) == 0
 
     manifest = load_manifest(manifest_path)
-    loaded, azimuths, _ = load_ir_cube(manifest, tmp_path)
+    loaded, azimuths, _, _ = load_ir_cube(manifest, tmp_path)
     expected = compile_from_irs(loaded, azimuths, sample_rate, reference_mic=2, left_ear=0, right_ear=5)
     expected["synthetic"] = False
     expected["geometry_id"] = "soundbubble_vertical_v1"
+    expected["conditioning_hash_bytes"] = conditioning_hash(np.ones(6), np.ones(6))
     expected_blob = pack_profile(expected)
     out_blob = (tmp_path / "compiled.bin").read_bytes()
     assert out_blob == expected_blob
@@ -183,3 +186,66 @@ def test_load_ir_cube_rejects_invalid_inputs(tmp_path: Path):
 def test_main_requires_mode_flag(tmp_path: Path):
     with pytest.raises(SystemExit):
         main(["--output-prefix", str(tmp_path / "out")])
+
+
+def test_regularized_deconvolution_recovers_impulse():
+    rng = np.random.default_rng(12)
+    stimulus = rng.normal(0.0, 0.2, size=512)
+    true_ir = np.zeros(512, dtype=np.float64)
+    true_ir[40] = 1.0
+    true_ir[58] = -0.22
+    recording = np.convolve(stimulus, true_ir, mode="full")[:512]
+    recovered = regularized_deconvolution(recording, stimulus, eps_rel=1.0e-6)
+    assert int(np.argmax(np.abs(recovered))) == 40
+    assert recovered[40] == pytest.approx(1.0, rel=0.06, abs=0.06)
+
+
+def test_direct_path_window_preserves_inter_mic_delay():
+    n = 400
+    irs = np.zeros((6, n), dtype=np.float64)
+    offsets = [72, 75, 79, 83, 86, 90]
+    for idx, peak in enumerate(offsets):
+        irs[idx, peak] = 1.0
+    result = direct_path_window(irs, DirectPathWindowSpec(pre_samples=4, length_samples=64))
+    assert result.start_sample == 68
+    peaks = [int(np.argmax(np.abs(result.windowed[ch]))) for ch in range(6)]
+    rel = [p - peaks[0] for p in peaks]
+    assert rel == [v - offsets[0] for v in offsets]
+
+
+def test_manifest_v2_sweep_compiles(tmp_path: Path):
+    sample_rate = 44100
+    n = 512
+    t = np.arange(n, dtype=np.float64)
+    stimulus = np.sin(2.0 * np.pi * 0.01 * t)
+    sf.write(str(tmp_path / "stimulus.wav"), stimulus, sample_rate, subtype="FLOAT")
+
+    # Two directions with known direct-path offsets.
+    cube = np.zeros((2, 6, n), dtype=np.float64)
+    for ch in range(6):
+        cube[0, ch, 50 + ch] = 1.0
+        cube[1, ch, 65 + ch] = 1.0
+    for di in range(2):
+        rec = np.zeros((n, 6), dtype=np.float64)
+        for ch in range(6):
+            rec[:, ch] = np.convolve(stimulus, cube[di, ch], mode="full")[:n]
+        sf.write(str(tmp_path / f"d{di}.wav"), rec, sample_rate, subtype="FLOAT")
+
+    manifest = {
+        "schema_version": 2,
+        "input": "sweep",
+        "stimulus": "stimulus.wav",
+        "sample_rate_hz": sample_rate,
+        "layout": "multichannel",
+        "window": {"pre_samples": 4, "length_samples": 96, "taper": "rect"},
+        "directions": [
+            {"azimuth_deg": 0.0, "path": "d0.wav"},
+            {"azimuth_deg": 30.0, "path": "d1.wav"},
+        ],
+    }
+    manifest_path = tmp_path / "manifest_v2.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert main(["--manifest", str(manifest_path), "--output-prefix", str(tmp_path / "profile")]) == 0
+    report = json.loads((tmp_path / "profile.report.json").read_text(encoding="utf-8"))
+    assert report["input_mode"] == "sweep"
+    assert len(report["windowing"]) == 2

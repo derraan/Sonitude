@@ -7,6 +7,7 @@ import math
 import yaml
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -37,6 +38,7 @@ def _linear_to_db(linear: float) -> float:
 class SuppressorControls(QWidget):
     changed = Signal()
     backendChanged = Signal()
+    yamlReloadNeeded = Signal()
 
     def __init__(self, capabilities: ToolCapabilities, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -163,12 +165,47 @@ class SuppressorControls(QWidget):
             "How quickly the noise floor rises when level increases. Lower = faster noise tracking."
         )
 
+        self._amplitude_range_bias = QCheckBox("Amplitude range bias (near-mic speech band)")
+        self._amplitude_range_bias.setChecked(True)
+        self._amplitude_range_bias.setToolTip(
+            "When the closest mic dominates 300–4 kHz, pull speech-band Wiener gain toward 1 "
+            "and hold other bins at the gain floor. Written to YAML; restart the stream to apply."
+        )
+
+        self._speech_low = QDoubleSpinBox()
+        self._speech_low.setRange(80.0, 2000.0)
+        self._speech_low.setSingleStep(20.0)
+        self._speech_low.setDecimals(0)
+        self._speech_low.setSuffix(" Hz")
+        self._speech_low.setValue(300.0)
+        self._speech_low.setToolTip("Low edge of the proximity speech band.")
+
+        self._speech_high = QDoubleSpinBox()
+        self._speech_high.setRange(1000.0, 8000.0)
+        self._speech_high.setSingleStep(100.0)
+        self._speech_high.setDecimals(0)
+        self._speech_high.setSuffix(" Hz")
+        self._speech_high.setValue(4000.0)
+        self._speech_high.setToolTip("High edge of the proximity speech band.")
+
+        self._near_dominance = QDoubleSpinBox()
+        self._near_dominance.setRange(1.05, 8.0)
+        self._near_dominance.setSingleStep(0.05)
+        self._near_dominance.setDecimals(2)
+        self._near_dominance.setValue(1.4)
+        self._near_dominance.setToolTip(
+            "max/mean mic amplitude in the speech band that maps to proximity=1."
+        )
+
         self._spectral_widgets = (
             self._spectral_gain_floor,
             self._spectral_protect,
             self._spectral_overestimate,
             self._spectral_tonal,
             self._spectral_noise_rise,
+            self._speech_low,
+            self._speech_high,
+            self._near_dominance,
         )
 
         self._conservative_note = QLabel("")
@@ -201,6 +238,10 @@ class SuppressorControls(QWidget):
         spectral_form.addRow("Noise overestimate:", self._spectral_overestimate)
         spectral_form.addRow("Tonal guard:", self._spectral_tonal)
         spectral_form.addRow("Noise adapt time:", self._spectral_noise_rise)
+        spectral_form.addRow(self._amplitude_range_bias)
+        spectral_form.addRow("Speech band low:", self._speech_low)
+        spectral_form.addRow("Speech band high:", self._speech_high)
+        spectral_form.addRow("Near dominance ratio:", self._near_dominance)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -232,6 +273,9 @@ class SuppressorControls(QWidget):
                 widget.valueChanged.connect(self._on_value_changed)
         self._mode.currentIndexChanged.connect(lambda _i: self.changed.emit())
         self._backend.currentIndexChanged.connect(self._on_backend_changed)
+        self._amplitude_range_bias.toggled.connect(self._on_yaml_knob_changed)
+        for widget in (self._speech_low, self._speech_high, self._near_dominance):
+            widget.valueChanged.connect(self._on_yaml_knob_changed)
 
     def suppression_mode(self) -> str:
         return self._mode.currentData() or SuppressionMode.AUTO.value
@@ -255,12 +299,19 @@ class SuppressorControls(QWidget):
             spectral_noise_overestimate=self._spectral_overestimate.value(),
             spectral_tonal_ratio=self._spectral_tonal.value(),
             spectral_noise_rise_ms=self._spectral_noise_rise.value(),
+            amplitude_range_bias=self._amplitude_range_bias.isChecked(),
+            speech_low_hz=self._speech_low.value(),
+            speech_high_hz=self._speech_high.value(),
+            near_dominance_ratio=self._near_dominance.value(),
         )
 
     def _on_backend_changed(self, _index: int) -> None:
         self._sync_backend_widgets()
         self.changed.emit()
         self.backendChanged.emit()
+
+    def _on_yaml_knob_changed(self, *_args) -> None:
+        self.yamlReloadNeeded.emit()
 
     def _on_value_changed(self, _value: float) -> None:
         if self.sender() is self._ambient_floor:
@@ -295,6 +346,7 @@ class SuppressorControls(QWidget):
         self._spectral_box.setEnabled(spectral_enabled)
         for widget in self._spectral_widgets:
             widget.setEnabled(spectral_enabled)
+        self._amplitude_range_bias.setEnabled(spectral_enabled)
         if conservative:
             self._conservative_note.setText(
                 "Broadband gain gate on beamformed mono: when focus is active and gates pass, "
@@ -302,8 +354,9 @@ class SuppressorControls(QWidget):
             )
         elif spectral:
             self._conservative_note.setText(
-                "Spectral backend: tune noise detection and Wiener depth below. "
-                "Focus, live confidence, and confidence threshold gate when learning runs."
+                "Spectral Wiener: live knobs (floor / protect / overestimate / tonal / noise rise) "
+                "apply per block. Amplitude range bias and speech-band edges are YAML-only and "
+                "restart the stream. Set Mode to ON to hear suppression."
             )
         else:
             self._conservative_note.setText("Backend off — beamformed mono passes through unchanged.")
@@ -365,5 +418,13 @@ class SuppressorControls(QWidget):
             spectral = (raw.get("suppression") or {}).get("spectral") or {}
             if isinstance(spectral, dict):
                 self._spectral_gain_floor.setValue(float(spectral.get("gain_floor_db", -12.0)))
+                if "amplitude_range_bias" in spectral:
+                    self._amplitude_range_bias.setChecked(bool(spectral["amplitude_range_bias"]))
+                if spectral.get("speech_low_hz") is not None:
+                    self._speech_low.setValue(float(spectral["speech_low_hz"]))
+                if spectral.get("speech_high_hz") is not None:
+                    self._speech_high.setValue(float(spectral["speech_high_hz"]))
+                if spectral.get("near_dominance_ratio") is not None:
+                    self._near_dominance.setValue(float(spectral["near_dominance_ratio"]))
         except Exception:  # noqa: BLE001 - keep built-in defaults
             pass

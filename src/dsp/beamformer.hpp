@@ -65,7 +65,6 @@ class MvdrBeamformer
 
  private:
   using DelayArray = std::array<double, audio::kMicChannels>;
-  using MicPosArray = std::array<std::array<double, 3>, audio::kMicChannels>;
 
   struct MicHopContext
   {
@@ -103,7 +102,6 @@ class MvdrBeamformer
 
   bool configured_ = false;
   bool binaural_output_ = false;
-  bool near_field_ = true;
   std::uint32_t sample_rate_hz_ = 0;
   std::size_t ramp_samples_ = 1;
   std::size_t fade_cursor_ = 0;
@@ -114,7 +112,6 @@ class MvdrBeamformer
   app::SteeringConfig steering_config_{};
   audio::BeamformerSteering active_target_{};
   audio::BeamformerSteering pending_target_{};
-  MicPosArray mic_positions_{};
   DelayArray calibration_delays_{};
   DelayArray current_delays_{};
   DelayArray pending_delays_{};

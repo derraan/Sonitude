@@ -142,12 +142,10 @@ class PipelineConfigPicker(QGroupBox):
     def materialize_config(self) -> Path:
         runtime = self.runtime_path()
         cal = self.calibration_path()
-        if cal is None or not cal.is_file():
-            return runtime
         self._session_yaml.parent.mkdir(parents=True, exist_ok=True)
         write_dsp_runtime_overlay(
             self._session_yaml,
-            calibration_yaml=cal,
+            calibration_yaml=cal if cal is not None and cal.is_file() else None,
             base_config=runtime,
         )
         return self._session_yaml

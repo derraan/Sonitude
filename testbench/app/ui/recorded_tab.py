@@ -33,7 +33,7 @@ from app.audio_io.stream_io import FileOverview, load_file_overviews_parallel
 from app.config_reader import DEFAULT_CONFIG_PATH, read_runtime_config_summary
 from app.controller.batch_controller import BatchWorker
 from app.controller.file_preview_controller import FilePreviewWorker
-from app.controller.upload_controller import DspCommitSnapshot
+from app.controller.upload_controller import DspCommitSnapshot, patch_runtime_yaml_dsp
 from app.processing.capabilities import query_tool_capabilities
 from app.storage.models import SteeringEvent, SuppressorRequest
 from app.storage.result_store import ResultStore
@@ -298,8 +298,10 @@ class RecordedDataTab(QWidget):
         self._steering.azimuthChanged.connect(self._push_live_params)
         self._steering.blendChanged.connect(lambda _w: self._push_live_params())
         self._beamformer.changed.connect(self._push_live_params)
+        self._beamformer.yamlReloadNeeded.connect(self._on_yaml_dsp_changed)
         self._suppressor.changed.connect(self._push_live_params)
         self._suppressor.backendChanged.connect(self._on_suppression_backend_changed)
+        self._suppressor.yamlReloadNeeded.connect(self._on_yaml_dsp_changed)
         self._binaural.changed.connect(self._push_live_params)
         self.visualization_panel = VisualizationPanel()
         self.visualization_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -363,6 +365,7 @@ class RecordedDataTab(QWidget):
 
     def _sync_config_path(self) -> None:
         self._config_path = self._pipeline.materialize_config()
+        patch_runtime_yaml_dsp(self._config_path, self.dsp_commit_snapshot())
 
     def _on_pipeline_changed(self) -> None:
         self._sync_config_path()
@@ -379,6 +382,7 @@ class RecordedDataTab(QWidget):
             suppression_backend=self._suppressor.suppression_backend(),
             suppressor=self._suppressor.request(),
             binaural=self._binaural.request(),
+            source_distance_m=self._beamformer.source_distance_m(),
         )
 
     def _on_select_file(self) -> None:
@@ -536,6 +540,9 @@ class RecordedDataTab(QWidget):
         return self._selected_paths[row]
 
     def _on_suppression_backend_changed(self) -> None:
+        self._on_yaml_dsp_changed()
+
+    def _on_yaml_dsp_changed(self) -> None:
         if self._preview is not None and self._preview.isRunning():
             self._on_live_stop()
             self._on_live_play()

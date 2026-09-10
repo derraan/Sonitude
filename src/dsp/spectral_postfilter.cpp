@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <array>
 
 namespace sonitude::dsp
 {
@@ -264,7 +265,15 @@ bool SpectralPostfilter::prepare(const double sample_rate,
 
   config_ = config;
   config_.confidence_threshold = std::clamp(config.confidence_threshold, 0.0F, 1.0F);
+  config_.speech_low_hz = std::clamp(config.speech_low_hz, 50.0F, 2000.0F);
+  config_.speech_high_hz = std::clamp(config.speech_high_hz, 1000.0F, 12000.0F);
+  if (config_.speech_high_hz <= config_.speech_low_hz)
+  {
+    return false;
+  }
+  config_.near_dominance_ratio = std::clamp(config.near_dominance_ratio, 1.05F, 8.0F);
   tuning_.gain_floor_db = std::clamp(config_.gain_floor_db, -80.0F, 0.0F);
+  sample_rate_hz_ = sample_rate;
   hop_hz_ = sample_rate / static_cast<double>(config_.hop_size);
   const std::size_t n_bins = (config_.fft_size / 2U) + 1U;
   const float floor_lin = std::clamp(DbToLinear(tuning_.gain_floor_db), 0.0F, 1.0F);
@@ -282,10 +291,12 @@ bool SpectralPostfilter::prepare(const double sample_rate,
   spatial_coeff_ = CoeffFromTau(kTauSpatialSec, hop_hz_);
   last_mean_gain_ = 1.0F;
   apply_mix_ = 0.0F;
+  proximity_ = 0.0F;
   have_spatial_ = false;
   focus_active_ = true;
   confidence_ = 1.0F;
   estimator_hold_ = false;
+  RefreshSpeechBins();
   ready_ = true;
   return true;
 }
@@ -300,6 +311,7 @@ void SpectralPostfilter::reset() noexcept
   std::fill(max_guard_power_.begin(), max_guard_power_.end(), 0.0F);
   last_mean_gain_ = 1.0F;
   apply_mix_ = 0.0F;
+  proximity_ = 0.0F;
   have_spatial_ = false;
   estimator_hold_ = false;
 }
@@ -347,6 +359,54 @@ void SpectralPostfilter::setTuning(const SpectralTuningParams& tuning) noexcept
 void SpectralPostfilter::setEstimatorHold(const bool hold) noexcept
 {
   estimator_hold_ = hold;
+}
+
+void SpectralPostfilter::RefreshSpeechBins() noexcept
+{
+  const std::size_t n_bins = (config_.fft_size / 2U) + 1U;
+  const double df = sample_rate_hz_ / static_cast<double>(config_.fft_size);
+  const auto hz_to_bin = [&](const float hz) {
+    return static_cast<std::size_t>(
+        std::llround(static_cast<double>(hz) / std::max(df, 1.0e-6)));
+  };
+  speech_lo_bin_ = std::clamp(hz_to_bin(config_.speech_low_hz), std::size_t{1}, n_bins - 2U);
+  speech_hi_bin_ = std::clamp(hz_to_bin(config_.speech_high_hz), speech_lo_bin_, n_bins - 2U);
+}
+
+void SpectralPostfilter::updateAmplitudeProximity(
+    const std::array<std::span<const float>, audio::kMicChannels>& re,
+    const std::array<std::span<const float>, audio::kMicChannels>& im) noexcept
+{
+  if (!ready_ || !config_.amplitude_range_bias)
+  {
+    proximity_ = 0.0F;
+    return;
+  }
+  const std::size_t n_bins = power_.size();
+  float max_p = kEps;
+  float sum_p = 0.0F;
+  for (std::size_t ch = 0; ch < audio::kMicChannels; ++ch)
+  {
+    if (re[ch].size() < n_bins || im[ch].size() < n_bins)
+    {
+      proximity_ = 0.0F;
+      return;
+    }
+    float acc = 0.0F;
+    for (std::size_t k = speech_lo_bin_; k <= speech_hi_bin_; ++k)
+    {
+      const float rv = Sanitize(re[ch][k]);
+      const float iv = Sanitize(im[ch][k]);
+      acc += (rv * rv) + (iv * iv);
+    }
+    max_p = std::max(max_p, acc);
+    sum_p += acc;
+  }
+  const float mean_p = std::max(sum_p / static_cast<float>(audio::kMicChannels), kEps);
+  const float dominance = max_p / mean_p;
+  const float span = std::max(config_.near_dominance_ratio - 1.0F, 0.05F);
+  const float instant = std::clamp((dominance - 1.0F) / span, 0.0F, 1.0F);
+  proximity_ = std::clamp((spatial_coeff_ * proximity_) + ((1.0F - spatial_coeff_) * instant), 0.0F, 1.0F);
 }
 
 void SpectralPostfilter::processSpectrum(const std::span<float> re,
@@ -431,6 +491,18 @@ void SpectralPostfilter::processSpectrum(const std::span<float> re,
     if (have_spatial_ && focused && apply_mix_ < 1.0e-4F)
     {
       gain = spatial_gain;
+    }
+    if (config_.amplitude_range_bias && apply_mix_ > 1.0e-4F)
+    {
+      const bool speech_bin = (k >= speech_lo_bin_) && (k <= speech_hi_bin_);
+      if (speech_bin)
+      {
+        gain = gain + (proximity_ * (1.0F - gain));
+      }
+      else
+      {
+        gain = wiener_.gainFloor();
+      }
     }
     gain = std::clamp(gain, wiener_.gainFloor(), 1.0F);
     gains_[k] = gain;

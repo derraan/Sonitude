@@ -308,6 +308,30 @@ void ValidateArrayProfile(const ArrayProfile& profile,
   {
     throw std::runtime_error("array profile transform sign is not the runtime forward DFT");
   }
+  if (profile.azimuth_deg.size() != profile.direction_count)
+  {
+    throw std::runtime_error("array profile azimuth count mismatch");
+  }
+  if (!profile.identity.synthetic && profile.direction_count > 1)
+  {
+    std::vector<double> az(profile.direction_count, 0.0);
+    for (std::size_t i = 0; i < profile.direction_count; ++i)
+    {
+      az[i] = spatial::NormalizeAzimuthDeg(static_cast<double>(profile.azimuth_deg[i]));
+    }
+    std::sort(az.begin(), az.end());
+    double max_gap = 0.0;
+    for (std::size_t i = 0; i < az.size(); ++i)
+    {
+      const double a = az[i];
+      const double b = (i + 1U < az.size()) ? az[i + 1U] : (az.front() + 360.0);
+      max_gap = std::max(max_gap, b - a);
+    }
+    if (max_gap > 200.0)
+    {
+      throw std::runtime_error("array profile azimuth coverage gap exceeds 200 degrees");
+    }
+  }
 }
 
 std::size_t NearestAzimuthIndex(const ArrayProfile& profile, const float azimuth_deg)
@@ -330,5 +354,48 @@ std::size_t NearestAzimuthIndex(const ArrayProfile& profile, const float azimuth
     }
   }
   return best;
+}
+
+AzimuthBracket BracketAzimuth(const ArrayProfile& profile, const float azimuth_deg)
+{
+  if (profile.azimuth_deg.empty())
+  {
+    throw std::runtime_error("array profile has no azimuth table");
+  }
+  if (profile.azimuth_deg.size() == 1U)
+  {
+    return {};
+  }
+
+  const double target = spatial::NormalizeAzimuthDeg(static_cast<double>(azimuth_deg));
+  std::vector<std::pair<double, std::size_t>> ordered;
+  ordered.reserve(profile.azimuth_deg.size());
+  for (std::size_t i = 0; i < profile.azimuth_deg.size(); ++i)
+  {
+    ordered.push_back(
+        {spatial::NormalizeAzimuthDeg(static_cast<double>(profile.azimuth_deg[i])), i});
+  }
+  std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+  for (std::size_t i = 0; i < ordered.size(); ++i)
+  {
+    const std::size_t j = (i + 1U) % ordered.size();
+    const double left = ordered[i].first;
+    const double right = (j == 0U) ? ordered[j].first + 360.0 : ordered[j].first;
+    double target_unwrapped = target;
+    if (target_unwrapped < left)
+    {
+      target_unwrapped += 360.0;
+    }
+    if (target_unwrapped >= left && target_unwrapped <= right)
+    {
+      const double width = std::max(1.0e-9, right - left);
+      const float blend = static_cast<float>(std::clamp((target_unwrapped - left) / width, 0.0, 1.0));
+      return {.left_index = ordered[i].second, .right_index = ordered[j].second, .blend = blend};
+    }
+  }
+
+  const std::size_t nearest = NearestAzimuthIndex(profile, azimuth_deg);
+  return {.left_index = nearest, .right_index = nearest, .blend = 0.0F};
 }
 }  // namespace sonitude::dsp

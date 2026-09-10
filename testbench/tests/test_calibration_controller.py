@@ -135,6 +135,26 @@ def test_write_dsp_runtime_overlay_absolutizes_paths(tmp_path: Path) -> None:
     assert Path(raw["calibration_path"]) == cal_yaml.resolve()
     assert Path(raw["geometry_path"]).is_file()
     assert raw["common_eq"]["sections"][0]["type"] == "PK"
+    assert raw["steering"]["model"] == "near_field"
+
+
+def test_write_dsp_runtime_overlay_sets_fixed_measured(tmp_path: Path) -> None:
+    cal_yaml = tmp_path / "calibration_session_E_full.yaml"
+    profile = tmp_path / "array_profile_session.bin"
+    cal_yaml.write_text("sample_rate_hz: 44100\n", encoding="utf-8")
+    profile.write_bytes(b"SMV3")
+    written = write_dsp_runtime_overlay(
+        tmp_path / "runtime_config_overlay.yaml",
+        calibration_yaml=cal_yaml,
+        base_config=DEFAULT_CONFIG_PATH,
+        spatial_backend="fixed_measured",
+        spatial_profile_path=profile,
+    )
+    raw = yaml.safe_load(written.read_text(encoding="utf-8"))
+    assert raw["spatial"]["backend"] == "fixed_measured"
+    assert Path(raw["spatial"]["profile_path"]) == profile.resolve()
+    assert raw["binaural"]["enabled"] is False
+    assert raw["steering"]["experimental_dual_reference_mvdr"] is False
 
 
 def test_compile_session_relative_with_extra_angle(tmp_path: Path) -> None:
