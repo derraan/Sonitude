@@ -8,7 +8,6 @@
 #include <stdexcept>
 #include <unordered_set>
 
-#include <spdlog/spdlog.h>
 #include <yaml-cpp/yaml.h>
 
 namespace sonitude::app
@@ -477,15 +476,9 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error("ambient_floor_linear must be in [0, 1]");
   }
-  if (config.steering.model != "near_field" && config.steering.model != "far_field")
+  if (config.steering.model != "near_field")
   {
-    throw std::runtime_error("steering.model must be near_field (or deprecated far_field)");
-  }
-  if (config.steering.model == "far_field")
-  {
-    spdlog::warn(
-        "steering.model=far_field is deprecated; the real-time pipeline uses near_field MVDR. "
-        "Keep far_field only for offline polar/unit tests.");
+    throw std::runtime_error("steering.model must be near_field");
   }
   if (config.steering.source_distance_m <= 0.0F || config.steering.source_distance_m > 5.0F)
   {

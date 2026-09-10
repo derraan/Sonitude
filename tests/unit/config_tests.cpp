@@ -87,6 +87,21 @@ void TestRuntimeConfigUnknownSuppressionBackendFails()
   Require(threw, "unknown suppression backend should throw");
 }
 
+void TestRuntimeConfigFarFieldSteeringFails()
+{
+  bool threw = false;
+  try
+  {
+    (void)sonitude::app::LoadRuntimeConfigFromFile(
+        FixturePath("tests/fixtures/runtime_invalid_steering_far_field.yaml"));
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "far_field steering.model should throw");
+}
+
 void TestRuntimeConfigUnknownBinauralBackendFails()
 {
   bool threw = false;
@@ -415,6 +430,7 @@ int main()
     TestRuntimeConfigDuplicateChannelFails();
     TestRuntimeConfigUnknownBinauralBackendFails();
     TestRuntimeConfigUnknownSuppressionBackendFails();
+    TestRuntimeConfigFarFieldSteeringFails();
     TestRuntimeConfigOdasContradictionFails();
     TestRuntimeConfigAsrcNanFails();
     TestRuntimeConfigTelemetryPeriodZeroFails();

@@ -182,7 +182,7 @@ Per mic, per sample:
 
 Core **directional listening** DSP — **narrowband MVDR** (`MvdrBeamformer`):
 
-1. From mic geometry and speed of sound, form the far-field steering vector **d** (plus calibration delay) for look **u**.
+1. From mic geometry and speed of sound, form the near-field steering vector **d** (plus calibration delay) for look **u**.
 2. 128/32 STFT of all six channels; per bin solve distortionless MVDR (delay-and-sum fallback on DC/Nyquist, failed solve, or excess white-noise gain).
 3. Inverse STFT → audible **mono**. Three extra looks (+90°, −90°, 180°) are formed the same way for spectral contrast only.
 

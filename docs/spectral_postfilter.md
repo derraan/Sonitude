@@ -138,8 +138,7 @@ at the tail. Absolute error threshold in tests: `2e-4`.
 Per hop, per bin (except DC/Nyquist, which stay delay-and-sum): recursive
 covariance with ~80 ms forgetting, diagonal loading, distortionless solve
 `w = R^{-1}d / (d^H R^{-1}d)`, white-noise-gain clamp back to delay-and-sum.
-Steering vector uses the same far-field + calibration delay law as the former
-time-domain beamformer.
+Steering vector uses spherical near-field delays (plus calibration delay) at `source_distance_m`.
 Covariance updates freeze during the steering crossfade.
 
 ### Guard-look contrast (spectral backend)

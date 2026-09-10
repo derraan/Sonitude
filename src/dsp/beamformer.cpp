@@ -225,8 +225,6 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   }
 
   steering_config_ = steering_config;
-  // RT default is near_field. far_field remains for offline polar/unit tests only.
-  near_field_ = steering_config_.model != "far_field";
   binaural_output_ = steering_config_.experimental_dual_reference_mvdr;
   sample_rate_hz_ = sample_rate_hz;
   ramp_samples_ = std::max<std::size_t>(
@@ -256,7 +254,6 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   for (std::size_t i = 0; i < audio::kMicChannels; ++i)
   {
     const auto& mic = geometry.microphones[i];
-    mic_positions_[i] = {mic.x, mic.y, mic.z};
     const auto it = cal_by_id.find(mic.id);
     if (it == cal_by_id.end())
     {
@@ -414,26 +411,7 @@ MvdrBeamformer::DelayArray MvdrBeamformer::computeRelativeDelays(
     const audio::BeamformerSteering target,
     const std::size_t reference_mic_index) const
 {
-  DelayArray geom{};
-  if (near_field_)
-  {
-    geom = steering_model_.computeNearFieldDelays(target, reference_mic_index);
-  }
-  else
-  {
-    const auto u = spatial::UnitVectorFromAzElDeg(target.azimuth_deg, target.elevation_deg);
-    const double ref_dot = (u[0] * mic_positions_[reference_mic_index][0]) +
-                           (u[1] * mic_positions_[reference_mic_index][1]) +
-                           (u[2] * mic_positions_[reference_mic_index][2]);
-    for (std::size_t i = 0; i < audio::kMicChannels; ++i)
-    {
-      const double dot = (u[0] * mic_positions_[i][0]) + (u[1] * mic_positions_[i][1]) +
-                         (u[2] * mic_positions_[i][2]);
-      const double tau_sec =
-          -((dot - ref_dot) / static_cast<double>(steering_config_.speed_of_sound_mps));
-      geom[i] = tau_sec * static_cast<double>(sample_rate_hz_);
-    }
-  }
+  DelayArray geom = steering_model_.computeNearFieldDelays(target, reference_mic_index);
 
   const double ref_cal = calibration_delays_[reference_mic_index];
   DelayArray out{};

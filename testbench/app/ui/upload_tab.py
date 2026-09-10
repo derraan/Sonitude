@@ -197,7 +197,7 @@ class UploadTab(QWidget):
                 f"Suppression activity_threshold: {suppressor.activity_threshold:.4f}",
                 f"Suppression confidence_threshold: {suppressor.confidence_threshold:.2f}",
                 f"Steering ambient_floor_linear: {suppressor.ambient_floor_linear:.3f}",
-                "MVDR model: near_field (far_field deprecated)",
+                "MVDR model: near_field",
                 f"MVDR look distance: {snapshot.source_distance_m:.2f} m",
                 f"Wiener amplitude range bias: {suppressor.amplitude_range_bias}",
                 f"Wiener speech band: {suppressor.speech_low_hz:.0f}–{suppressor.speech_high_hz:.0f} Hz",

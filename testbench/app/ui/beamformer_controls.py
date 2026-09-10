@@ -60,12 +60,11 @@ class BeamformerControls(QWidget):
         self._source_distance.setSuffix(" m")
         self._source_distance.setValue(0.45)
         self._source_distance.setToolTip(
-            "Spherical near-field look distance. Far-field plane-wave MVDR is deprecated. "
-            "This is written into session YAML and requires a stream restart."
+            "Spherical near-field look distance. Written into session YAML and requires a stream restart."
         )
 
         self._note = QLabel(
-            "Near-field MVDR (far-field deprecated). WNG / covariance / loading apply live. "
+            "Near-field MVDR. WNG / covariance / loading apply live. "
             "Look distance is YAML-only and restarts the stream."
         )
         apply_secondary_note(self._note)
