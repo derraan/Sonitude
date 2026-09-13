@@ -1,0 +1,8 @@
+numpy>=1.24
+tensorflow>=2.13
+soundfile>=0.12
+pyroomacoustics>=0.7
+pytest>=7.4
+# Optional for evaluation:
+# pesq>=0.0.4
+# pystoi>=0.4.1
