@@ -220,6 +220,7 @@ Green automated checks do not close hardware gates or disprove untested runtime 
 - [Calibration](docs/calibration.md)
 - [Binaural rendering](docs/binaural_renderer.md)
 - [Experimental spectral postfilter](docs/spectral_postfilter.md)
+- [DSENet Colab training](docs/dsenet_colab_training_guide.md)
 - [Latency measurement](docs/latency_measurement.md)
 - [Milestone evidence](docs/milestones.md)
 - [Test-bench usage](testbench/README.md)
