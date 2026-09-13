@@ -27,7 +27,7 @@ The ordinary `adaptive_geometric` beamform path is:
 2. Per-channel DC-offset subtraction, polarity, gain and DC blocking.
 3. Optional per-microphone biquad EQ.
 4. Adaptive near-field MVDR.
-5. Optional suppression, common biquad EQ and mono peak limiting.
+5. Optional suppression (**Wiener spectral in the M7 pipeline**, or conservative PCM), common biquad EQ and mono peak limiting.
 6. Binaural rendering, linked stereo peak limiting, then playback resampling/ALSA.
 
 Binaural rendering **is wired into the Linux runtime**. The former duplicated-mono output fallback is rejected in the ordinary beamform path. The configured renderer must initialize successfully.
@@ -216,6 +216,7 @@ Green automated checks do not close hardware gates or disprove untested runtime 
 ## Further documentation
 
 - [Architecture and ownership](docs/architecture.md)
+- [Codebase snapshot and scope vetoes](docs/CodebaseState.md)
 - [Linux device setup](docs/device_setup.md)
 - [Calibration](docs/calibration.md)
 - [Binaural rendering](docs/binaural_renderer.md)

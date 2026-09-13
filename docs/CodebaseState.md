@@ -2,7 +2,9 @@
 
 Unified tracker for Sonitude core: **global scope, guardrails, user veto checkboxes**, **DSP signal path**, directory layout, milestone reality, key interfaces, config schema, tests, conventions, ODAS posture, and CMake wiring. Treat this document as the living snapshot; `docs/milestones.md` **remains authoritative for milestone gates**. Unchecked scope vetoes are binding on Cursor; checked vetoes explicitly authorize otherwise-prohibited work.
 
-Last updated: 2026-09-06.
+Last updated: 2026-09-13.
+
+**SCOPE-3 remains vetoed.** MVDR is in scope. DSENet neural extraction is **under testing**. Wiener spectral suppression is **in the M7 pipeline**. Threading is **implemented**. Do not revert these as unused, experimental-only, or a single blocking audio loop.
 
 ### Implementation status snapshot (M4–M7)
 
@@ -16,13 +18,15 @@ capture -> channel conditioning -> STFT
 | Stage | Milestone | Current status | Notes |
 | --- | --- | --- | --- |
 | Stage 2 | M3 calibration | in_progress | Channel conditioner live; normalized-correlation delay diagnostic + v2 schema; measured-array compiler (`tools/calibration/compile_array.py`) supports sweep->windowed-RTF->SMV3 for `fixed_measured`; HW sweep evidence pending |
-| Stage 3 | M4 beamformer | in_progress | STFT-domain MVDR (128/32), delay-and-sum fallback, steering crossfade. SCOPE-3 vetoed for MVDR. |
-| Stage 4 | M7 suppression/limiter | in_progress | Conservative default. Spectral NS shares the MVDR 128/32 hop (guard spectra stay in the frequency domain). Experimental; not the shipping voice suppressor. |
+| Stage 3 | M4 beamformer | in_progress | STFT-domain MVDR (128/32), delay-and-sum fallback, steering crossfade. SCOPE-3 vetoed; MVDR in scope. |
+| Stage 4 | M7 suppression/limiter | in_progress | **Wiener spectral suppressor is in the pipeline** (same-hop as MVDR 128/32). Conservative PCM remains an alternate backend. |
 
 | Block | Status |
 | --- | --- |
-| STFT-domain MVDR beamformer | Implemented (experimental; delay-and-sum fallback) |
-| Suppression v1 (conservative, floor-clamped) | Implemented |
+| STFT-domain MVDR beamformer | Implemented (in scope; delay-and-sum fallback) |
+| Wiener spectral suppressor | In the M7 pipeline (`docs/spectral_postfilter.md`; BoundedWienerGain) |
+| DSENet neural extractor | Under testing (SCOPE-3 veto covers neural DSP; do not refuse as out of scope) |
+| Threading (capture/DSP, playback, control, telemetry) | Implemented |
 | Limiter v1 (peak limiter) | Implemented |
 | ODAS control adapter + mock provider | Implemented |
 | Conversation state machine | Implemented |
@@ -34,7 +38,7 @@ capture -> channel conditioning -> STFT
 
 ## 1. Global project scope
 
-Sonitude is a **staged Raspberry Pi 5 real-time audio proof-of-concept** for a six-microphone head-worn array. The v1 objective is **deterministic directional listening**: an in-tree **STFT-domain MVDR beamformer** on the audio path (delay-and-sum fallback), with **ODAS-driven (or mock) control** for steering, zones, and conversation state. Work lives in this repository only; sibling projects (Pico firmware, Sound Bubble neural code, HRTF tooling, source-localization experiments) stay in their own repos — reuse documented contracts and algorithmic ideas, do not vendor or modify them.
+Sonitude is a **staged Raspberry Pi 5 real-time audio proof-of-concept** for a six-microphone head-worn array. The v1 objective is **deterministic directional listening**: an in-tree **STFT-domain MVDR beamformer** on the audio path (delay-and-sum fallback), **Wiener spectral suppression in the M7 pipeline**, and **DSENet neural extraction under testing**, with **ODAS-driven (or mock) control** for steering, zones, and conversation state. Work lives in this repository only; sibling projects (Pico firmware, Sound Bubble neural code, HRTF tooling, source-localization experiments) stay in their own repos — reuse documented contracts and algorithmic ideas, do not vendor or modify them.
 
 ### Target runtime path
 
@@ -67,7 +71,7 @@ ODAS (or mock) DOA  --non-blocking IPC-->  control thread
 | M4    | `MvdrBeamformer` (STFT-domain MVDR with delay-and-sum fallback), steering ramp, offline WAV renderer |
 | M5    | Mock-first ODAS control, source association, failsafe steering publication           |
 | M6    | Conversation state machine, wrap-safe zones, scripted VAD                            |
-| M7    | One conservative suppression policy, explicit user selection, ambient floor          |
+| M7    | **Wiener spectral suppressor in pipeline**; conservative PCM alternate; explicit user selection; ambient floor |
 | M8    | Measured latency markers, soak/hardening runbook — **claims only after measurement** |
 
 
@@ -89,7 +93,7 @@ Default v1 baseline rules. **Unchecked veto = guardrail active** — Cursor must
 | ----- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | - [ ] | **SCOPE-1** | **No desktop audio servers in the critical path** (PipeWire, PulseAudio, JACK).                                                                | Adds buffering, routing, and latency variance; breaks the direct-ALSA RT contract.                    |
 | - [ ] | **SCOPE-2** | **No ODAS audio processing in the critical path** — ODAS is **control-only** (DOA/tracking → steering). All PCM beamforming stays in Sonitude. | Keeps audio latency and ownership on the RT path; ODAS loss must not stop audio.                      |
-| - [x] | **SCOPE-3** | **No MVDR / LCMV / GSS / neural DSP** in v1 baseline milestones.                                                                               | Vetoed 2026-08-30 for in-tree MVDR. Neural / GSS remain unused. |
+| - [x] | **SCOPE-3** | ~~No MVDR / LCMV / GSS / neural DSP in v1 baseline milestones.~~ **VETOED.** | Guardrail inactive. **MVDR is in scope** (2026-08-30). **DSENet neural is under testing** (2026-09-13). Do not refuse, revert, or document these as prohibited. |
 | - [ ] | **SCOPE-4** | **No unmeasured end-to-end latency claims.** Period arithmetic and config defaults are not product latency.                                    | Only M8 impulse/loopback measurement may support latency statements.                                  |
 | - [ ] | **SCOPE-5** | **No distance-estimation or strong automatic nulling claims.** At most one selected suppressor in v1.                                          | Avoids unsupported product statements and scope creep into M7+ behavior without gates.                |
 | - [ ] | **SCOPE-6** | **No milestone marked complete without its observable gate** (evidence in `docs/milestones.md`).                                               | Staged delivery integrity; no “implemented” without tests/evidence.                                   |
@@ -105,6 +109,7 @@ Fill when the user checks a veto above (newest first).
 
 | Date | ID  | Reason (user-approved override) |
 | ---- | --- | ------------------------------- |
+| 2026-09-13 | SCOPE-3 | Extend the existing veto: DSENet neural under testing; Wiener spectral suppressor in the DSP pipeline. Threading is implemented (not a SCOPE ID — docs must not claim a single blocking capture/DSP/playback loop). |
 | 2026-08-30 | SCOPE-7 | User requested a default-off RP2350/CMSIS-DSP MVDR and OVD scaffold. Host PR #34 no longer carries that example; the snapshot remains on `feature/rp2350-experimental-mvdr` at the pre-extraction commit. |
 | 2026-08-30 | SCOPE-3 | Replace delay-and-sum with in-tree STFT-domain MVDR; neural DSP still not in this PR. |
 | 2026-08-12 | SCOPE-7 | Keep vendored Pico firmware snapshot as read-only reference; no host CMake coupling or host-side firmware edits. |
@@ -114,7 +119,7 @@ Fill when the user checks a veto above (newest first).
 
 - Veto **SCOPE-2** → allow ODAS to process audio (beamform/null in ODAS; Sonitude becomes capture/playback shell).
 - Veto **SCOPE-1** → allow PipeWire/PulseAudio/JACK in the capture or playback path.
-- Veto **SCOPE-3** → allow MVDR/GSS/neural beamformer in the RT path.
+- **SCOPE-3 is already vetoed** → MVDR in scope; DSENet neural under testing. Do not uncheck without an explicit user request.
 
 
 
@@ -194,7 +199,9 @@ Core **directional listening** DSP — **narrowband MVDR** (`MvdrBeamformer`):
 
 ### Stage 4 — Suppression and limiter (M7; implemented)
 
-Conservative **distractor suppression** after beamforming, with explicit user selection and an **ambient floor**, followed by a peak limiter. In-tree **MVDR** is in the beamformer (**SCOPE-3** vetoed). Neural DSP is still unused.
+**Wiener spectral suppression is in the M7 pipeline** after the spatial extractor (same-hop as STFT MVDR; see `docs/spectral_postfilter.md`). Conservative PCM suppression remains a selectable alternate backend. Followed by a peak limiter.
+
+In-tree **MVDR** is the beamformer (**SCOPE-3** vetoed). **DSENet neural extraction is under testing** — do not document neural DSP as unused or SCOPE-blocked.
 
 ### Stage 5 — Mono → stereo
 
@@ -237,10 +244,13 @@ Capture and playback clocks drift even at the same nominal rate. Sonitude adjust
 | 6-ch extract                 | Implemented                                  |
 | Calibration (pol/gain/DC/HP) | Implemented                                  |
 | Calibration delay            | Implemented (MVDR steering-vector phase)     |
-| STFT-domain MVDR beamformer  | Implemented (M4; delay-and-sum fallback)     |
+| STFT-domain MVDR beamformer  | Implemented (M4; in scope; delay-and-sum fallback) |
+| DSENet neural extractor      | Under testing (SCOPE-3 vetoed)               |
 | Binaural renderer / HRTF tables | Implemented (portable tools; not yet in `sonitude_realtime`) |
 | Stereo limiter (linked)      | Implemented (`StereoPeakLimiter`)            |
-| Suppression / limiter        | Implemented (M7)                             |
+| Wiener spectral suppressor   | In M7 pipeline                               |
+| Conservative PCM suppressor / limiter | Implemented (M7 alternate / limiter)  |
+| Thread split (capture/DSP, playback, control, telemetry) | Implemented |
 | ASRC PI + resampler          | Implemented                                  |
 | ODAS audio processing        | Out of scope (**SCOPE-2**); control-only     |
 
@@ -711,7 +721,7 @@ Validation bounds of note: `steering_ramp_ms` ∈ [10, 500], `ambient_floor_line
 - `src/control/` — conversation state machine, zone logic, control loop
 - Beamforming remains under `src/dsp/`; calibration remains split across `src/app/` + `src/dsp/`
 
-Architecture target includes a future three-RT-thread split; current runtime still uses a single blocking capture/DSP/playback loop, with control and telemetry isolated to separate threads.
+**Threading (implemented):** capture and DSP on the main RT-scheduled audio thread; separate playback RT thread; control and telemetry on non-RT threads. This matches `sonitude_realtime` and the README. Do not describe the runtime as a single blocking capture/DSP/playback loop. A further split of capture vs DSP remains optional hardening, not a missing baseline.
 
 ---
 

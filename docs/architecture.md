@@ -2,7 +2,7 @@
 
 This document defines the target architecture, real-time latency budget, ODAS integration posture, and ownership constraints. `docs/milestones.md` remains authoritative for gate evidence; `docs/CodebaseState.md` for scope vetoes and interface snapshots.
 
-Last updated: 2026-08-29.
+Last updated: 2026-09-13. **SCOPE-3 is vetoed:** MVDR in scope; DSENet under testing; Wiener spectral suppression in the M7 pipeline. Threading is implemented.
 
 ---
 
@@ -20,7 +20,7 @@ Sonitude is a **hearable-class** low-latency pipeline, not a robot-audition batc
 | Control-path steering       | `steering_ramp_ms` default                         | **150 ms** crossfade (intentional audibility, not ODAS frame rate)       |
 
 
-**Implication:** Any separation or post-filtering block that needs **STFT frames of 8–16 ms+**, or outputs on **128-sample hops @ 16 kHz**, is incompatible with the audio-path target unless it runs **off the RT thread** and only influences slow steering — not live PCM.
+**Implication:** **ODAS** STFT audio stays **off** the Sonitude audio path (**SCOPE-2**). In-tree **STFT MVDR** and **Wiener spectral** suppression **are** on the authorized audio pipeline (128/32 hop). **DSENet** hops are authorized under testing. Keep hop/window bounded; do not make latency claims until M8. Do not delete spectral/neural stages because they are not period-scale FIR.
 
 The PySide6 algorithm test bench (`testbench/`) is explicitly **outside** this budget. It drives `sonitude_wav_replay` / `sonitude_stream_process` over subprocess IPC for correctness checks, including hour-scale file streaming and live steering while playing a recording. See `testbench/README.md`. Do not treat its block-round-trip latency as an M8 measurement.
 
@@ -51,10 +51,10 @@ steering snapshot -> STFT-domain MVDR (adaptive geometric comparison backend)
 
 `spatial.backend` selects the spatial core at startup (`adaptive_geometric` default, `fixed_measured` opt-in). Fixed mode loads an SMV3 coefficient artifact, performs one spatial inner product per bin, reconstructs both ears from the same target estimate, and blends physical ear-reference microphones with a residual dominance mask. It performs no covariance update or matrix solve on the audio thread. Do not treat a software-green PR as acoustic or latency qualification.
 
-The experimental spectral postfilter (`docs/spectral_postfilter.md`) shares the
-MVDR 128/32 hop. It is an alternative to the conservative PCM suppressor, off by
-default, and does not claim M8 latency or MCU fit.
-**SCOPE-3 is user-vetoed for in-tree STFT-domain MVDR** (2026-08-30). Neural DSP remains unused.
+The Wiener spectral postfilter (`docs/spectral_postfilter.md`) shares the
+MVDR 128/32 hop and **is in the M7 pipeline**. Conservative PCM remains an
+alternate backend. Do not treat Wiener/STFT suppression as out of scope.
+**SCOPE-3 is user-vetoed** (MVDR in scope; DSENet neural under testing). Latency claims still require M8.
 
 Direction convention (authoritative for steering and binaural rendering;
 helpers in `src/spatial/head_frame.hpp`):
@@ -77,15 +77,16 @@ ODAS/mock DOA -> source association -> source confidence and zone selection
 
 
 
-## Thread model (target)
+## Thread model (implemented)
 
-Current M2 runtime uses one blocking capture/DSP/playback audio loop; the three RT-worker split and per-thread scheduling isolation below remain pending hardening gates. Control and telemetry already run on separate threads.
+Threading is **implemented** in `sonitude_realtime` (Linux ALSA). Do not describe the runtime as a single blocking capture/DSP/playback loop.
 
-- **Capture worker thread (RT):** ALSA capture, sequence accounting, ring publication.
-- **Audio render thread (RT):** beamforming, suppression policy, binaural rendering (when wired), limiting, ASRC feed.
-- **Playback worker thread (RT):** ALSA playback, underrun recovery telemetry.
-- **Control thread (non-RT):** ODAS client, source association, state machine.
+- **Capture/DSP thread (RT-scheduled):** ALSA capture period, calibration, spatial DSP, suppression, publish to playback ring.
+- **Playback worker thread (RT-scheduled):** ring consume, ASRC/resampler, ALSA playback, underrun telemetry.
+- **Control thread (non-RT):** ODAS client, source association, state machine, steering snapshot publish.
 - **Telemetry thread (non-RT):** aggregate counters, structured output, diagnostics.
+
+Capture and DSP share one thread; playback is split. Further isolating capture from DSP is optional hardening, not a missing baseline.
 
 ---
 
@@ -130,7 +131,7 @@ Current M2 runtime uses one blocking capture/DSP/playback audio loop; the three 
 | Post-filtering | SS (spectral subtraction) or MS (masking) in STFT domain | **Post-filtered PCM streams**  |
 
 
-Sonitude v1 uses **SSL/SST metadata only** unless SCOPE-2 is vetoed. PCM beamforming and suppression stay in Sonitude (**SCOPE-2**, **SCOPE-3**).
+Sonitude uses **SSL/SST metadata only** unless SCOPE-2 is vetoed. PCM extraction and suppression stay in Sonitude (**SCOPE-2** still active). **SCOPE-3 is vetoed:** MVDR is in scope; DSENet neural is under testing.
 
 ### ODAS latency model
 
@@ -188,7 +189,7 @@ Survey of open-source and research options for **separation** and **post-filteri
 - **Audio RT** — suitable for live PCM on the RT audio thread at hearable latency
 - **Control** — suitable for non-RT steering / DOA only (Sonitude v1 ODAS role)
 - **Reference** — algorithm ideas or offline validation only
-- **Out of scope** — blocked by SCOPE-1/3 or wrong platform without explicit veto
+- **Out of scope** — blocked by SCOPE-1/2/4/5/6/7 or wrong platform without explicit veto. **SCOPE-3 is vetoed** and must not be used to mark MVDR, Wiener spectral, or DSENet out of scope.
 
 
 
@@ -220,8 +221,9 @@ Survey of open-source and research options for **separation** and **post-filteri
 
 | Approach                       | Link                                                                                                  | Latency                                                  | Sonitude fit               | Notes                                                                          |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------ |
-| **In-tree delay-and-sum (M4)** | `src/dsp/beamformer.`* on integration branch                                                          | **Period-scale** (~1.5 ms blocks @ 44.1 kHz / 64 frames) | **Audio RT** ✓             | Fractional-delay FIR + steering crossfade; v1 baseline (**SCOPE-3** compliant) |
-| **Custom MVDR on Pi**          | [rolyantrauts/mvdr](https://github.com/rolyantrauts/mvdr)                                             | Not published; FFTW + GCC-PHAT steering                  | **Out of scope** (SCOPE-3) | Useful RT architecture reference (NEON, ALSA pipe); 2-mic ReSpeaker focused    |
+| **In-tree STFT MVDR (M4)** | `src/dsp/` MVDR (128/32) | Shared STFT hop with Wiener | **Audio RT** ✓ | **SCOPE-3 vetoed. Live spatial core.** Delay-and-sum fallback. |
+| **In-tree delay-and-sum** | `src/dsp/beamformer.*` | Period-scale | **Audio RT** ✓ | Fallback / comparison path, not a SCOPE-3 requirement |
+| **Custom MVDR on Pi** | [rolyantrauts/mvdr](https://github.com/rolyantrauts/mvdr) | Not published | **Reference** | Useful RT architecture reference; 2-mic ReSpeaker focused |
 | **XMOS lib_mic_array**         | [XMOS mic array docs](https://www.xmos.com/documentation/XM-010267-UG/html/doc/rst/src/overview.html) | Frame size **configurable down to 1 sample**             | **Wrong hardware**         | PDM→PCM + beamforming on xcore.ai; not Pi/UAC path                             |
 | **pyroomacoustics**            | [LCAV/pyroomacoustics](https://github.com/LCAV/pyroomacoustics)                                       | Offline / simulation                                     | **Reference**              | DS, MVDR, SRP-PHAT for algorithm validation                                    |
 
@@ -233,11 +235,12 @@ Survey of open-source and research options for **separation** and **post-filteri
 
 | Project             | Link                                                                                                | Reported latency                                                                                                                                          | Sonitude fit               | Notes                                                                                                          |
 | ------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **FaSNet / TAC**    | [yluo42/TAC](https://github.com/yluo42/TAC), [FaSNet paper](https://arxiv.org/abs/1909.13387)       | Time-domain, **low-latency by design**; frame filters + DPRNN segments                                                                                    | **Out of scope** (SCOPE-3) | PyTorch research code; adaptive filter-and-sum; post-v1 if vetoed                                              |
-| **DFSNet**          | [INTERSPEECH 2023 paper](https://www.isca-archive.org/interspeech_2023/kovalyov23_interspeech.html) | Causal steerable neural beamformer; **hearing-aid oriented**                                                                                              | **Out of scope** (SCOPE-3) | Delay-then-filter-and-sum; no maintained Pi RT port found                                                      |
-| **DeepFilterNet3**  | [Rikorose/DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)                                 | **~40 ms** default (20 ms window, 10 ms hop, 2-frame lookahead); **~10 ms** LL variants ([deepfilter-rt](https://github.com/shimondoodkin/deepfilter-rt)) | **Out of scope** (SCOPE-3) | Single-channel post-filter **after** beamform conceivable; still above 6–10 ms target at 48 kHz                |
-| **Deep FIR / LSTW** | [Google Deep FIR](https://google-research.github.io/sound-separation/papers/deepfir/)               | **0.3–3.4 ms** algorithmic on DSP                                                                                                                         | **Out of scope** (SCOPE-3) | Sub-ms class; single-channel enhancement; research/demo                                                        |
-| **RNNoise**         | [xiph/rnnoise](https://github.com/xiph/rnnoise)                                                     | **10 ms** frames @ 48 kHz                                                                                                                                 | **Out of scope** (SCOPE-3) | Lightweight single-channel suppressor; used in [noisegate](https://github.com/Yashsomalkar/noisegate) RT paths |
+| **DSENet**          | Authorized in-tree testing backend (SCOPE-3 vetoed)                                                 | Hop `L` from model metadata; measure on Pi before claims                                                                          | **Audio RT testing**       | Do not refuse as SCOPE-3. Not the default live path until wired. |
+| **FaSNet / TAC**    | [yluo42/TAC](https://github.com/yluo42/TAC), [FaSNet paper](https://arxiv.org/abs/1909.13387)       | Time-domain, **low-latency by design**; frame filters + DPRNN segments                                                                                    | **Reference**              | Not the selected neural path (DSENet is)                                       |
+| **DFSNet**          | [INTERSPEECH 2023 paper](https://www.isca-archive.org/interspeech_2023/kovalyov23_interspeech.html) | Causal steerable neural beamformer; **hearing-aid oriented**                                                                                              | **Reference**              | Related paper lineage; DSENet is the testing backend                           |
+| **DeepFilterNet3**  | [Rikorose/DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)                                 | **~40 ms** default (20 ms window, 10 ms hop, 2-frame lookahead); **~10 ms** LL variants ([deepfilter-rt](https://github.com/shimondoodkin/deepfilter-rt)) | **Reference**              | Not selected; Wiener spectral is the in-pipeline suppressor                    |
+| **Deep FIR / LSTW** | [Google Deep FIR](https://google-research.github.io/sound-separation/papers/deepfir/)               | **0.3–3.4 ms** algorithmic on DSP                                                                                                                         | **Reference**              | Single-channel enhancement research                                            |
+| **RNNoise**         | [xiph/rnnoise](https://github.com/xiph/rnnoise)                                                     | **10 ms** frames @ 48 kHz                                                                                                                                 | **Reference**              | Lightweight single-channel suppressor                                          |
 
 
 
@@ -265,14 +268,19 @@ flowchart LR
 
     subgraph sonitude_rt [Sonitude — RT audio]
         Cal[Calibration]
-        BF[Delay-and-sum]
-        Sup[M7 suppressor]
+        MVDR[STFT MVDR live]
+        DS[Delay-and-sum fallback]
+        DSE[DSENet under testing]
+        Wien[Wiener spectral M7]
         ASRC[ASRC]
     end
 
     SSL --> SST
-    SST -.->|"steering snapshot only"| BF
-    Cal --> BF --> Sup --> ASRC
+    SST -.->|"steering snapshot only"| MVDR
+    SST -.->|"steering snapshot only"| DS
+    Cal --> MVDR --> Wien --> ASRC
+    Cal --> DS
+    Cal --> DSE --> ASRC
 ```
 
 
@@ -281,14 +289,15 @@ flowchart LR
 | Function              | v1 owner          | Rationale                                                                          |
 | --------------------- | ----------------- | ---------------------------------------------------------------------------------- |
 | DOA / source tracking | ODAS or mock (M5) | Mature SSL/SST; 8 ms/frame metadata acceptable on control thread                   |
-| Beamforming (PCM)     | Sonitude M4       | Period-scale time-domain; meets 6–10 ms budget                                     |
-| Suppression (PCM)     | Sonitude M7       | One conservative policy; bounded latency; no ODAS STFT post-filter                 |
-| Post-filter / NR      | Not ODAS in v1    | ODAS SS/MS is 20–80 ms+ class; DeepFilterNet etc. blocked by SCOPE-3 unless vetoed |
+| Beamforming (PCM)     | Sonitude M4       | STFT-domain MVDR live; delay-and-sum fallback; **MVDR in scope** |
+| Suppression (PCM)     | Sonitude M7       | **Wiener spectral in pipeline**; conservative PCM alternate |
+| Neural extraction     | Sonitude DSENet   | **Under testing**; not ODAS audio |
+| Post-filter / NR      | Not ODAS in v1    | ODAS SS/MS stays off the audio path (**SCOPE-2**). In-tree Wiener is authorized. |
 
 
 **If SCOPE-2 is vetoed** (ODAS processes audio): Sonitude becomes capture/playback shell; expect **~50–150 ms** listening latency and ODAS uptime dependency — incompatible with current M8 target without revising requirements.
 
-**If SCOPE-3 is vetoed** (neural/MVDR allowed): FaSNet, DeepFilterNet-LL, or openMHA plugin math become candidates for **post-beamform** stages on a **non-RT worker** with async ring delivery — still requires M8 measurement before latency claims.
+**SCOPE-3 is vetoed** (MVDR 2026-08-30; neural/DSENet testing and Wiener pipeline 2026-09-13). Latency claims still require M8 (**SCOPE-4**). Do not route those stages through ODAS PCM (**SCOPE-2**) or JACK (**SCOPE-1**).
 
 ---
 
@@ -349,7 +358,7 @@ openMHA ships reference implementations (with reproducible `.cfg` chains in `ref
 | openMHA plugin / chain | Function | Sonitude relevance |
 | ---------------------- | -------- | ------------------ |
 | **delay-and-sum beamformer** | Far-field steering, multichannel → mono | **Primary M4 reference** for steering geometry and weights |
-| **MVDR / binaural steering beamformer** [6] | Adaptive spatial filter, moving source | Post-v1 if **SCOPE-3** vetoed |
+| **MVDR / binaural steering beamformer** [6] | Adaptive spatial filter, moving source | **In-scope** algorithm reference for in-tree MVDR. Do not host `mha` (SCOPE-1). |
 | **ADM** (adaptive differential microphone) [7] | Two-mic rear-hemisphere rejection | Geometry mismatch (6-mic head array); ideas only |
 | **Binaural coherence filter** [4] | STFT gain from interaural coherence | M7 suppression **reference**; STFT latency too high for v1 RT path |
 | **SCNR** (single-channel NR) [5] | MMSE noise power estimation, spectral suppression | M7 **offline validation** reference; RT port needs minimal-hop variant |
@@ -362,36 +371,40 @@ openMHA ships reference implementations (with reproducible `.cfg` chains in `ref
 
 ## Sonitude adaptation of openMHA (design)
 
-Sonitude does **not** embed the openMHA runtime. **SCOPE-1** forbids JACK (openMHA's default live IO path), and **SCOPE-3** limits v1 to delay-and-sum plus one conservative suppressor. The adaptation is therefore a **documented port of algorithms, RT patterns, and validation methodology** — not a plugin-host integration.
+Sonitude does **not** embed the openMHA runtime. **SCOPE-1** forbids JACK. **SCOPE-3 is vetoed:** in-tree STFT MVDR is the live spatial core, Wiener spectral is in the M7 pipeline, and DSENet is under testing. The adaptation is a **documented port of algorithms, RT patterns, and validation methodology** — not a plugin-host integration.
 
 ```mermaid
 flowchart TB
     subgraph openmha_offtree [openMHA — out of tree reference]
         CFG[Reference .cfg chains]
         WAV[MHAIOFile offline render]
-        PLUG[Plugin math: DS / SCNR / coherence]
+        PLUG[Plugin math: DS / MVDR / SCNR / coherence]
     end
 
     subgraph sonitude [Sonitude — in tree RT]
-        ALSA[Direct ALSA 64-frame periods]
+        ALSA[Direct ALSA]
         CAL[CalibrationApplier]
-        DS[Time-domain delay-and-sum M4]
-        SUP[Conservative suppressor M7]
+        MVDRN[STFT MVDR M4 live]
+        DS[Delay-and-sum fallback]
+        WIEN[Wiener spectral M7 pipeline]
+        DSE[DSENet under testing]
         CTRL[ODAS/mock steering M5-M6]
     end
 
-    PLUG -.->|"math + latency budget"| DS
-    PLUG -.->|"M7 policy bounds"| SUP
+    PLUG -.->|"MVDR / SCNR math"| MVDRN
+    PLUG -.->|"Wiener / SCNR bounds"| WIEN
     CFG --> WAV
     WAV -->|"golden WAV diff tests"| DS
-    CTRL -.->|"steering angles only"| DS
-    CAL --> DS --> SUP --> ALSA
+    CTRL -.->|"steering angles only"| MVDRN
+    CAL --> MVDRN --> WIEN --> ALSA
+    CAL --> DS
+    CAL --> DSE --> ALSA
 ```
 
 ### Adaptation principles
 
 1. **Same problem class, different IO contract.** openMHA targets hearing-aid research with JACK or file IO and Pascal-level calibration [1], [2]. Sonitude targets a **Pi 5 + Pico UAC + USB DAC** path with **float `MicFrame` blocks**, YAML calibration, and **ODAS steering** instead of openMHA's in-chain SSL [8].
-2. **Time-domain first on the RT thread.** openMHA's flagship chains lean on shared STFT (`overlapadd`) for coherence filtering, SCNR, and MVDR [2], [4], [5]. Sonitude v1 keeps beamforming in the **time domain at capture period scale** (~1.45 ms @ 44.1 kHz / 64 frames) to preserve the audio-path budget in §Real-time latency budget.
+2. **STFT MVDR is the live spatial core.** openMHA flagship chains use shared STFT (`overlapadd`) for SCNR and MVDR [2], [4], [5]. Sonitude's live path uses **in-tree STFT MVDR (128/32)** plus **Wiener spectral** on the same hop. Delay-and-sum remains fallback. **DSENet** is under testing. M8 before latency claims.
 3. **RT-safe handoff mirrors openMHA config double-buffering.** openMHA prepares updated runtime configs on a configuration thread and swaps atomically into the processing thread [2]. Sonitude maps this to **immutable steering snapshots** published by the control thread and read lock-free on the audio render thread (already in §Thread model).
 4. **openMHA is the golden reference, not the shipping stack.** Offline file chains (`MHAIOFile`) render reference PCM for `sonitude_wav_replay` diff tests without pulling JACK or TCP control into CI.
 
@@ -401,9 +414,11 @@ flowchart TB
 | Sonitude block | Milestone | openMHA reference | Adaptation |
 | -------------- | --------- | ----------------- | ---------- |
 | **CalibrationApplier** | M3 | `transducers` plugin [1] | Port **ordering** (polarity → gain → high-pass), not Pascal SPL mapping; per-mic delays deferred to beamformer |
-| **Delay-and-sum beamformer** | M4 | `delay_and_sum` / reference DS configs | Reimplement in-tree: fractional-delay FIR + dual-beam crossfade; match steering vector and 1/N weights against openMHA offline render |
-| **Steering control** | M5–M6 | MVDR steering updates [6] (not v1) | ODAS/mock publishes azimuth/elevation only; no openMHA TCP steering |
-| **Suppression policy** | M7 | SCNR [5], binaural coherence [4] | **Policy bounds** from openMHA (max attenuation, ambient floor); v1 implements a **single conservative time-domain or minimal-latency** rule — not full STFT coherence chain |
+| **STFT MVDR** | M4 | MVDR / binaural steering [6] | **In scope.** Live spatial core; delay-and-sum fallback. Do not host `mha`. |
+| **Delay-and-sum beamformer** | M4 | `delay_and_sum` / reference DS configs | Fallback and openMHA golden-render comparison |
+| **Steering control** | M5–M6 | MVDR steering updates [6] | ODAS/mock publishes azimuth/elevation only; no openMHA TCP steering |
+| **Suppression policy** | M7 | SCNR [5], binaural coherence [4] | **Wiener spectral in pipeline** (same hop as MVDR). Conservative PCM remains an alternate. |
+| **DSENet** | testing | DNN examples (openMHA 4.18 notes) | Neural extraction **under testing**; not an openMHA host |
 | **Limiter / ASRC** | M2 | `limiter`, `resample` plugins | Independent Sonitude implementations; compare saturation behaviour offline only |
 
 ### M4 beamformer — openMHA-aligned design
@@ -413,25 +428,23 @@ The in-tree `MvdrBeamformer` (M4) follows the openMHA delay-and-sum convention f
 1. **Far-field plane-wave delays** from mic positions (YAML geometry) and steering direction **u**, using the same speed-of-sound parameter as config (`343 m/s` default).
 2. **Per-channel fractional delay** — 8-tap windowed-sinc FIR (Sonitude choice for Pi NEON); openMHA uses equivalent delay lines in the DS plugin.
 3. **Equal-weight sum** `1/6` → mono (`MicFrame` → scalar).
-4. **Click-free steering** — dual-beam crossfade over `steering_ramp_ms` (150 ms default). openMHA MVDR chains use related steering smoothing for moving sources [6]; Sonitude applies the same *intent* at the control–audio boundary without adaptive covariance estimation (**SCOPE-3**).
+4. **Click-free steering** — dual-look crossfade over `steering_ramp_ms` (150 ms default). In-tree MVDR covariance updates **are in scope** (SCOPE-3 vetoed); freeze covariance during the fade as implemented.
 
 **Validation gate (M4):** render identical 6-ch fixture WAV through (a) openMHA `MHAIOFile` + reference DS `.cfg` and (b) `sonitude_wav_replay`; assert RMS/phase match within tolerance at fixed steering angles. Evidence field in `docs/milestones.md`.
 
-### M7 suppression — openMHA-informed conservative policy
+### M7 suppression — Wiener spectral in pipeline
 
-openMHA's coherence filter [4] and SCNR [5] demonstrate that **spectral, multi-frame** enhancement is acceptable in hearing-aid research when total latency stays under ~10 ms with shared STFT. Sonitude's stricter **6–10 ms one-way** target and **64-sample periods** rule out a full `overlapadd` → coherence → `overlapadd` chain on the RT thread without M8 remeasurement.
+openMHA SCNR [5] is the reference for spectral enhancement. **Wiener spectral suppression is the authorized M7 pipeline stage** on the same hop as STFT MVDR (`docs/spectral_postfilter.md`). Conservative PCM remains a selectable alternate. Do not document M7 as envelope-only or as blocked STFT.
 
-v1 M7 adaptation:
-
-| Aspect | openMHA reference | Sonitude v1 choice |
+| Aspect | openMHA reference | Sonitude choice |
 | ------ | ----------------- | ------------------ |
-| Noise estimation | MMSE noise power tracker [5] | Simpler envelope follower or gated attenuation after beamform |
-| Spatial cue | Binaural coherence gains [4] | Already consumed by **beamformer steering**; no second spatial stage |
-| Max attenuation | Plugin-configured caps in `.cfg` | Config `ambient_floor_linear` (0.25 default) — never fully mute |
-| User selection | TCP/Matlab GUIs [1] | Explicit suppressor enable + zone selection (M6 state machine) |
+| Noise / residual model | MMSE noise power tracker [5] | **Wiener spectral** (`BoundedWienerGain`) in pipeline |
+| Spatial cue | Binaural coherence gains [4] | MVDR steering (live); DSENet under testing |
+| Max attenuation | Plugin-configured caps in `.cfg` | Gain floor — never fully mute |
+| User selection | TCP/Matlab GUIs [1] | `suppression.enabled` / `backend` + zone selection |
 | Validation | Reference SCNR `.cfg` on same fixture | Offline SNR comparison; **no latency claim** until M8 |
 
-If **SCOPE-3** is vetoed later, openMHA's **MVDR** [6] or **ADM** [7] chains become candidates for a **non-RT worker** feeding an async ring into the limiter — preserving SCOPE-1 (no JACK) by porting plugin math, not hosting `mha`.
+**SCOPE-3 is vetoed.** Preserve SCOPE-1 by porting plugin math, not hosting `mha`.
 
 ### Control path — deliberate non-adaptation
 
@@ -482,12 +495,12 @@ This satisfies reproducibility goals of the openMHA platform [1] while keeping o
 | --------- | ---------------------------- |
 | **SCOPE-1** (no JACK) | Blocks hosting `mha` with `MHAIOJack` in the live path; offline `MHAIOFile` only |
 | **SCOPE-2** (ODAS control-only) | No openMHA+ODAS hybrid audio chain |
-| **SCOPE-3** (MVDR in-tree; no neural) | In-tree STFT MVDR is the beamformer; openMHA MVDR/ADM/DNN configs stay reference-only |
+| **SCOPE-3** (**vetoed**) | Guardrail inactive. In-tree MVDR, Wiener spectral, and DSENet testing are authorized. openMHA remains reference-only (not linked). |
 | **SCOPE-7** (reference-only firmware vendoring) | openMHA remains out-of-tree and out of the Sonitude build graph (`libopenmha` not linked) |
 
 **If SCOPE-1 is vetoed:** a sidecar `mha` on JACK could process a tap — still incompatible with direct `hw:` latency claims unless remeasured (M8).
 
-**If SCOPE-3 is vetoed:** prioritize openMHA **MVDR** [6] or **SCNR** [5] math on a **non-RT worker** before neural stacks; openMHA 4.18 DNN examples (5.4 ms algorithmic) remain post-v1 benchmarks.
+**SCOPE-3 veto (active):** in-tree **MVDR** and **Wiener/SCNR** math; continue **DSENet** testing. Do not host `mha`. Do not claim latency until M8.
 
 ---
 
@@ -522,8 +535,11 @@ This satisfies reproducibility goals of the openMHA platform [1] while keeping o
 | ---------------------------------------- | --------------------------------------------------------------------- |
 | ALSA capture/playback, passthrough, ASRC | Implemented (M1–M2, gates pending Pi soak)                           |
 | Calibration load/apply/tools             | Implemented (M3, HW sweep pending)                                   |
-| Beamformer, ODAS adapter, state machine  | Implemented in code; milestone-gate evidence still pending (M4–M6)   |
-| Suppression, limiter                     | Implemented in beamform path; milestone-gate evidence pending (M7)   |
+| Threading (capture/DSP RT, playback RT, control, telemetry) | **Implemented** |
+| STFT MVDR beamformer | **In scope** and implemented; delay-and-sum fallback |
+| DSENet | **Under testing** |
+| Wiener spectral suppressor | **In M7 pipeline** |
+| Suppression, limiter | Implemented; milestone-gate evidence pending (M7) |
 | Latency instrumentation                  | Pending hardware measurement and reporting (M8)                       |
 | ODAS latency / alternative survey        | Documented here; **not measured on project hardware**                 |
 | openMHA adaptation (reference + offline) | Documented here ([§Sonitude adaptation](#sonitude-adaptation-of-openmha-design)); not integrated in runtime |

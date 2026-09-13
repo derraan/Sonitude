@@ -6,7 +6,7 @@ This runbook records reproducible, out-of-tree reference checks against openMHA 
 
 - No JACK/desktop-audio runtime integration in Sonitude critical path (SCOPE-1).
 - No ODAS PCM processing in Sonitude audio path (SCOPE-2).
-- No MVDR/GSS/neural adoption in this workflow (SCOPE-3).
+- This workflow compares delay-and-sum / openMHA file renders. It does **not** forbid in-tree MVDR, Wiener spectral, or DSENet: **SCOPE-3 is vetoed**. Those backends belong in other tests, not this DS golden render.
 - No latency claim updates from this workflow (SCOPE-4).
 - No milestone completion without recorded evidence values (SCOPE-6).
 - No openMHA source vendoring into this repository (SCOPE-7).
