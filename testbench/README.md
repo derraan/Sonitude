@@ -18,10 +18,10 @@ PySide6 GUI  →  Controller (QThread)  →  subprocess  →  C++ CLI  →  soni
 | `sonitude_stream_process` | Live capture, long-file batch, and Recorded-tab live preview: protocol v2 stdin/stdout |
 
 The C++ chain is `CalibrationApplier → MvdrBeamformer →
-SuppressionStage (off | conservative | experimental spectral) → PeakLimiter`,
+SuppressionStage (off | conservative | Wiener spectral) → PeakLimiter`,
 plus optional `BinauralRenderer`. Spectral selection is YAML
 `suppression.backend` / CLI `--suppression-backend`; the GUI does not expose
-it (no DSP in Python). See `docs/spectral_postfilter.md`.
+it (no DSP in Python). Wiener spectral is in the M7 pipeline; see `docs/spectral_postfilter.md`.
 Python never implements HRTF/ITD. Binaural controls are **capability-gated** from
 `--capabilities`. This tree implements `mono_reference`, `itd_ild`,
 `compact_hrtf`, and `full_hrtf_reference`. `compact_hrtf` is an
