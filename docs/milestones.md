@@ -74,8 +74,7 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
 - Evidence/result:
   - RT primitives (SPSC ring, block pool, ASRC controller, resampler interfaces) and tests implemented.
   - M2 passthrough mode in `sonitude_realtime` implemented.
-  - Current runtime keeps blocking capture, DSP, and playback on one audio loop; separate RT capture/render/playback workers and per-thread scheduling remain pending M2 hardening gates.
-  - Hardware soak evidence (30 min occupancy/XRUN log) pending Pi execution.
+  - **Threading implemented:** capture/DSP on the RT-scheduled main audio thread, playback RT worker, control and telemetry non-RT. Not a single blocking capture/DSP/playback loop. Hardware soak evidence (30 min occupancy/XRUN log) still pending Pi execution.
 
 ## Milestone 3 - Calibration and offline analysis
 
@@ -123,11 +122,11 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
   - deterministic hysteresis transitions validated by tests
   - telemetry visibility for state and confidence
 
-## Milestone 7 - Suppression v1
+## Milestone 7 - Suppression
 
 - Status: `in_progress`
 - Gate:
-  - one-distractor conservative suppression policy integrated
+  - Wiener spectral suppressor in the M7 pipeline
   - smooth fade in/out and safe fallback verified
 - Evidence command template:
   - `ctest --test-dir build --output-on-failure`
@@ -135,10 +134,11 @@ This file tracks execution status, evidence, and unresolved assumptions for Mile
   - `./build/sonitude_wav_replay --input <six_channel_wav> --config config/default.yaml --script <steering_csv> --output <unsuppressed_mono_wav> --suppression off`
   - `--enable-suppression` remains an ON alias; `--disable-suppression` forces OFF even when YAML `suppression.enabled` is true.
 - Evidence/result:
-  - Conservative suppressor (`ConservativeSuppressor`) added with ambient-floor clamp, confidence gating, and failsafe ramp-to-unity behavior.
-  - Peak limiter (`PeakLimiter`) added after suppression in the beamform path.
-  - Deterministic unit tests added for suppressor gain floor/fallback and limiter ceiling/release behavior.
-  - Runtime and offline wiring are implemented, but reference SNR logs and hardware transition checks are pending; milestone remains `in_progress`.
+  - **Wiener spectral suppressor is in the authorized M7 pipeline** (same-hop as STFT MVDR; `docs/spectral_postfilter.md`). Do not document as experimental-only or SCOPE-blocked.
+  - Conservative PCM suppressor remains a selectable alternate backend.
+  - Peak limiter after suppression in the beamform path.
+  - Deterministic unit tests exist for suppressor floor/fallback and limiter ceiling/release.
+  - SNR logs and hardware transition checks pending; milestone remains `in_progress`.
 
 ## Milestone 8 - Measurement and hardening
 

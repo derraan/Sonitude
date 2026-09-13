@@ -1,10 +1,10 @@
-# Experimental spectral postfilter (PR-scope prototype)
+# Spectral postfilter (Wiener, M7 pipeline)
 
-Status: **EXPERIMENTAL**. The shipping suppressor remains `conservative` (or
-off). The audible path is a **narrowband MVDR** target look (STFT 128/32) plus
-optional spectral postfilter with internal guard-look contrast. Do **not**
-treat this as a measured 6–10 ms product, and do not claim arbitrary two-talker
-removal. Pico 2 W and STM32H7 remain NOT MEASURED.
+Status: **in the M7 pipeline**. Bounded Wiener spectral suppression shares the
+STFT MVDR 128/32 hop (`AsymmetricNoisePowerTracker` + `BoundedWienerGain`).
+Conservative PCM remains a selectable alternate backend. Do **not** treat this
+as SCOPE-3 prohibited, and do not claim measured 6–10 ms product latency
+(**SCOPE-4**). Pico 2 W and STM32H7 remain NOT MEASURED.
 
 ## Inspection note (verified before implementation)
 
@@ -274,9 +274,10 @@ pass/fail MCU gate.
 ## Remaining work (not claimed done)
 
 Measure array-health/geometry, impulse e2e latency, and MCU worst-case
-execution time. Near/far RTF looks are experimental. Neural DSP remains out of
-scope. Until those are measured, keep `suppression.backend: conservative` as
-the shipping default. SCOPE-3 is user-vetoed for **in-tree MVDR only**.
+execution time. Near/far RTF looks remain unmeasured. **DSENet neural extraction
+is under testing** (SCOPE-3 vetoed — do not treat neural DSP as out of scope).
+Wiener spectral is in the M7 pipeline; conservative PCM remains an alternate
+backend. SCOPE-3 is user-vetoed for **MVDR and neural testing**.
 
 ## Test / bench commands
 
