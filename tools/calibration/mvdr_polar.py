@@ -239,6 +239,9 @@ def polar_plot_coords(azimuths_deg: np.ndarray, pattern_db: np.ndarray) -> tuple
 
 
 def plot_polar(azimuths_deg: np.ndarray, pattern_db: np.ndarray, out_path: Path, title: str) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     theta, radius = polar_plot_coords(azimuths_deg, pattern_db)
@@ -329,8 +332,17 @@ def main(argv: list[str] | None = None) -> int:
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--synthetic", action="store_true", help="use geometric near-field synthetic IRs")
     src.add_argument("--manifest", type=str, help="IR/sweep manifest for measured ATFs")
-    p.add_argument("--geometry", type=str, default="config/geometry_soundbubble_initial.yaml")
-    p.add_argument("--runtime", type=str, default="config/default.yaml")
+    repo_root = Path(__file__).resolve().parents[2]
+    p.add_argument(
+        "--geometry",
+        type=str,
+        default=str(repo_root / "config" / "geometry_soundbubble_initial.yaml"),
+    )
+    p.add_argument(
+        "--runtime",
+        type=str,
+        default=str(repo_root / "config" / "default.yaml"),
+    )
     p.add_argument("--look-az", type=float, default=0.0)
     p.add_argument("--distance-m", type=float, default=1.0, help="near-field look/measurement distance")
     p.add_argument("--sample-rate", type=int, default=44100)
@@ -348,7 +360,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--plot", type=str, default="", help="optional PNG path")
     p.add_argument("--json-out", type=str, default="", help="optional JSON report path")
     args = p.parse_args(argv)
-    mvdr = load_mvdr_tuning(Path(args.runtime))
+    geometry_path = Path(args.geometry)
+    runtime_path = Path(args.runtime)
+    if not geometry_path.is_file():
+        geometry_path = repo_root / args.geometry
+    if not runtime_path.is_file():
+        runtime_path = repo_root / args.runtime
+    args.geometry = str(geometry_path)
+    args.runtime = str(runtime_path)
+    mvdr = load_mvdr_tuning(runtime_path)
     diag_load = float(mvdr["diag_load"] if args.diag_load is None else args.diag_load)
     max_weight_norm = float(
         mvdr["max_white_noise_gain"] if args.max_weight_norm is None else args.max_weight_norm

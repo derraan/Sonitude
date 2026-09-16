@@ -135,6 +135,8 @@ def test_polar_cli_synthetic(tmp_path: Path):
             "--synthetic",
             "--geometry",
             str(ROOT / "config" / "geometry_soundbubble_initial.yaml"),
+            "--runtime",
+            str(ROOT / "config" / "default.yaml"),
             "--look-az",
             "0",
             "--az-step",

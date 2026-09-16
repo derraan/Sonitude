@@ -22,14 +22,35 @@ from app.storage.models import BinauralRequest, SteeringEvent
 
 @pytest.fixture
 def six_channel_fixture(tmp_path: Path) -> Path:
+    """Coherent near-field look=0 source so adaptive MVDR preserves energy.
+
+    Independent per-mic noise alone is nulled by Capon after DAS removal, which
+    drops the envelope below the conservative activity threshold and makes the
+    PCM-stage suppression integration test look like a no-op.
+    """
+    import sys
+
     config_summary = read_runtime_config_summary(DEFAULT_CONFIG_PATH)
     sample_rate = config_summary.capture_sample_rate_hz
+    raw = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    source_distance_m = float((raw.get("steering") or {}).get("source_distance_m", 0.45))
     duration_s = 1.0
     n = int(sample_rate * duration_s)
-    t = np.linspace(0, duration_s, n, endpoint=False)
+    t = np.arange(n, dtype=np.float64) / float(sample_rate)
     tone = 0.3 * np.sin(2 * np.pi * 400 * t)
+    tools_root = Path(__file__).resolve().parents[2] / "tools"
+    if str(tools_root) not in sys.path:
+        sys.path.insert(0, str(tools_root))
+    from calibration.geometry import geometric_delay_samples_spherical, load_geometry
+
+    geometry = load_geometry(Path(__file__).resolve().parents[2] / "config" / "geometry_soundbubble_initial.yaml")
+    delays = geometric_delay_samples_spherical(geometry, sample_rate, 0.0, 0.0, source_distance_m)
     rng = np.random.default_rng(7)
-    data = np.stack([tone + rng.normal(0, 0.02, n) for _ in range(6)], axis=1).astype(np.float32)
+    channels = []
+    for m in range(6):
+        shifted = np.interp(t * sample_rate - delays[m], np.arange(n), tone, left=0.0, right=0.0)
+        channels.append(shifted + rng.normal(0, 0.01, n))
+    data = np.stack(channels, axis=1).astype(np.float32)
     path = tmp_path / "fixture_6ch.wav"
     sf.write(str(path), data, sample_rate, subtype="FLOAT")
     return path
@@ -109,22 +130,35 @@ def test_suppression_actually_changes_the_output(
 def test_conservative_suppression_is_a_separate_pcm_stage(
     six_channel_fixture: Path, tmp_path: Path, wav_replay_binary: Path
 ) -> None:
+    # Adaptive Capon self-nulls a look-dominated covariance enough that the
+    # beamformed envelope can sit below the product activity_threshold (0.03).
+    # Use a low threshold so this test still asserts the PCM stage path itself.
+    config_dir = DEFAULT_CONFIG_PATH.parent
+    raw = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["geometry_path"] = str((config_dir / raw["geometry_path"]).resolve())
+    raw["calibration_path"] = str((config_dir / raw["calibration_path"]).resolve())
+    raw["suppression"]["activity_threshold"] = 0.001
+    cfg = tmp_path / "conservative_pcm.yaml"
+    cfg.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
     events = [SteeringEvent(time_s=0.0, azimuth_deg=0.0, elevation_deg=0.0)]
     without_suppression = run_wav_replay(
         six_channel_fixture,
-        DEFAULT_CONFIG_PATH,
+        cfg,
         events,
         tmp_path / "no_suppression",
         suppression="off",
+        disable_limiter=True,
         binary_path=wav_replay_binary,
     )
     with_conservative = run_wav_replay(
         six_channel_fixture,
-        DEFAULT_CONFIG_PATH,
+        cfg,
         events,
         tmp_path / "with_conservative",
         suppression="on",
         suppression_backend="conservative",
+        disable_limiter=True,
         binary_path=wav_replay_binary,
     )
     beamformed_a, _ = audio_loader.load_wav(without_suppression.beamformed_wav)
