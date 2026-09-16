@@ -223,8 +223,7 @@ def polar_plot_coords(azimuths_deg: np.ndarray, pattern_db: np.ndarray) -> tuple
     order = np.argsort(azimuths_deg)
     az = np.asarray(azimuths_deg, dtype=np.float64)[order]
     pat = np.asarray(pattern_db, dtype=np.float64)[order]
-    # Do NOT add an extra π/2 rotation: theta_zero='N' + clockwise already puts
-    # angle 0 at the top. A prior (π/2 - θ) shift drew look=0° at the East lobe.
+    # matplotlib default polar is 0° at East. We set theta_zero='N' before plot.
     theta = np.deg2rad(az)
     floor = float(np.min(pat))
     radius = pat - floor + 1.0
@@ -239,10 +238,16 @@ def plot_polar(azimuths_deg: np.ndarray, pattern_db: np.ndarray, out_path: Path,
 
     theta, radius = polar_plot_coords(azimuths_deg, pattern_db)
     fig, ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=(7, 7))
-    ax.plot(theta, radius, color="#0b3d5c", linewidth=2.0)
-    ax.fill(theta, radius, color="#0b3d5c", alpha=0.18)
+    # Set the compass before drawing so saved figures cannot inherit the
+    # matplotlib default (0° at East, counterclockwise).
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
+    ax.set_thetagrids(
+        [0, 45, 90, 135, 180, 225, 270, 315],
+        labels=["0° front", "45°", "90° right", "135°", "180° back", "225°", "270° left", "315°"],
+    )
+    ax.plot(theta, radius, color="#0b3d5c", linewidth=2.0)
+    ax.fill(theta, radius, color="#0b3d5c", alpha=0.18)
     ax.set_title(title)
     ax.set_ylim(0, float(np.max(radius)) * 1.05)
     fig.tight_layout()
