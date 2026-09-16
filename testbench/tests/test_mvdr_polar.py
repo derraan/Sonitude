@@ -12,6 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
+from calibration.compile_array import compile_from_irs  # noqa: E402
 from calibration.geometry import load_geometry, load_mvdr_tuning  # noqa: E402
 from calibration.mvdr_polar import (  # noqa: E402
     atf_from_irs,

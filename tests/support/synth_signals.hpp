@@ -85,7 +85,8 @@ inline std::vector<audio::MicFrame> GenerateSphericalPointSource(
     const float azimuth_deg,
     const float elevation_deg,
     const float source_distance_m,
-    const float speed_of_sound_mps)
+    const float speed_of_sound_mps,
+    const bool include_amplitude = true)
 {
   const auto u = spatial::UnitVectorFromAzElDeg(azimuth_deg, elevation_deg);
   const std::array<double, 3> source = {u[0] * static_cast<double>(source_distance_m),
@@ -106,7 +107,7 @@ inline std::vector<audio::MicFrame> GenerateSphericalPointSource(
     const double dist_m = std::max(1.0e-6, mic_distance(geometry.microphones[m]));
     const double tau_sec = (dist_m - ref_dist) / static_cast<double>(speed_of_sound_mps);
     delays[m] = tau_sec * static_cast<double>(sample_rate_hz);
-    amps[m] = ref_dist / dist_m;
+    amps[m] = include_amplitude ? (ref_dist / dist_m) : 1.0;
   }
   std::vector<audio::MicFrame> out(mono_source.size());
   for (std::size_t i = 0; i < mono_source.size(); ++i)

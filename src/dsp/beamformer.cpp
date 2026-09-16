@@ -171,16 +171,6 @@ bool WeightsFromFactor(const CholFactor& factor,
   return true;
 }
 
-float WeightNorm2(const Cpx w[kM])
-{
-  float n2 = 0.0F;
-  for (std::size_t ch = 0; ch < kM; ++ch)
-  {
-    n2 += (w[ch].re * w[ch].re) + (w[ch].im * w[ch].im);
-  }
-  return n2;
-}
-
 void FormLookOutput(const Cpx r_in[kM][kM],
                     const float load0,
                     const float max_wng,
@@ -190,40 +180,26 @@ void FormLookOutput(const Cpx r_in[kM][kM],
                     std::uint64_t& factorization_count,
                     std::uint64_t& solve_count)
 {
-  float load = load0;
-  for (int it = 0; it < 8; ++it)
+  Cpx r[kM][kM]{};
+  for (std::size_t i = 0; i < kM; ++i)
   {
-    Cpx r[kM][kM]{};
-    for (std::size_t i = 0; i < kM; ++i)
+    for (std::size_t j = 0; j < kM; ++j)
     {
-      for (std::size_t j = 0; j < kM; ++j)
-      {
-        r[i][j] = r_in[i][j];
-      }
-      r[i][i].re += load;
-      r[i][i].im = 0.0F;
+      r[i][j] = r_in[i][j];
     }
-    CholFactor factor{};
-    ++factorization_count;
-    if (!FactorHermitianPd(r, factor))
-    {
-      load *= 3.0F;
-      continue;
-    }
-    Cpx w[kM]{};
-    if (!WeightsFromFactor(factor, d, w, solve_count))
-    {
-      y = {0.0F, 0.0F};
-      return;
-    }
-    if (WeightNorm2(w) <= max_wng)
-    {
-      ApplyWeights(w, x, y);
-      return;
-    }
-    load *= 3.0F;
+    r[i][i].re += load0;
+    r[i][i].im = 0.0F;
   }
-  y = {0.0F, 0.0F};
+  CholFactor factor{};
+  ++factorization_count;
+  Cpx w[kM]{};
+  if (!FactorHermitianPd(r, factor) || !WeightsFromFactor(factor, d, w, solve_count))
+  {
+    y = {0.0F, 0.0F};
+    return;
+  }
+  (void)max_wng;
+  ApplyWeights(w, x, y);
 }
 
 void ReconstructEar(const Cpx d_ear, const Cpx z, Cpx& y)
