@@ -53,6 +53,14 @@ def test_polar_plot_puts_look_zero_at_north():
     assert abs(float(az[np.argsort(az)][peak_i])) < 1e-9
 
 
+def test_polar_plot_does_not_close_front_hemisphere():
+    az = np.array([-90.0, -60.0, 0.0, 60.0, 90.0])
+    pat = np.zeros(5)
+    theta, radius = polar_plot_coords(az, pat)
+    assert theta.size == az.size
+    assert radius.size == az.size
+
+
 def test_axis_swap_rejected_by_geometry_loader():
     geometry = ROOT / "config" / "geometry_soundbubble_initial.yaml"
     broken = yaml.safe_load(geometry.read_text())

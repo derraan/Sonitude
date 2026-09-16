@@ -137,8 +137,11 @@ def polar_plot_coords(azimuths_deg: np.ndarray, pattern_db: np.ndarray) -> tuple
     theta = np.deg2rad(az)
     floor = float(np.min(pat))
     radius = pat - floor + 1.0
-    theta = np.concatenate([theta, theta[:1]])
-    radius = np.concatenate([radius, radius[:1]])
+    wrap_gap = (float(az[0]) + 360.0) - float(az[-1])
+    step = float(np.max(np.diff(az))) if az.size > 1 else 360.0
+    if wrap_gap <= step * 1.5 + 1e-6:
+        theta = np.concatenate([theta, theta[:1]])
+        radius = np.concatenate([radius, radius[:1]])
     return theta, radius
 
 
@@ -157,7 +160,9 @@ def plot_polar(azimuths_deg: np.ndarray, pattern_db: np.ndarray, out_path: Path,
         labels=["0° front", "45°", "90° right", "135°", "180° back", "225°", "270° left", "315°"],
     )
     ax.plot(theta, radius, color="#0b3d5c", linewidth=2.0)
-    ax.fill(theta, radius, color="#0b3d5c", alpha=0.18)
+    closed = theta.size > 1 and abs(float(theta[0] - theta[-1])) < 1e-12
+    if closed:
+        ax.fill(theta, radius, color="#0b3d5c", alpha=0.18)
     ax.set_title(title)
     ax.set_ylim(0, float(np.max(radius)) * 1.05)
     fig.tight_layout()
