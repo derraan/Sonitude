@@ -18,6 +18,7 @@ from calibration.mvdr_polar import (  # noqa: E402
     beampattern_db,
     main as polar_main,
     mvdr_weights_for_look,
+    polar_plot_coords,
     speech_bin_slice,
     summarize_suppression,
     _synthetic_nearfield_irs,
@@ -32,6 +33,20 @@ def test_geometry_head_frame_places_ears_on_x_axis():
     # Ears slightly behind the arc so front/back is not ambiguous.
     assert mics["M0_left_ear"]["y"] < 0.0
     assert mics["M5_right_ear"]["y"] < 0.0
+
+
+def test_polar_plot_puts_look_zero_at_north():
+    """Regression: do not double-rotate so look=0° lands on the East lobe."""
+    az = np.array([-90.0, 0.0, 90.0, 180.0])
+    # Look-normalized: peak at 0°, deep nulls at ±90°.
+    pat = np.array([-15.0, 0.0, -15.0, -8.0])
+    theta, radius = polar_plot_coords(az, pat)
+    # Drop closing sample for argmax.
+    peak_i = int(np.argmax(radius[:-1]))
+    peak_theta = float(theta[peak_i])
+    # With theta_zero='N' and clockwise, mpl theta≈0 is the top (0° label).
+    assert abs(peak_theta) < 1e-9
+    assert abs(float(az[np.argsort(az)][peak_i])) < 1e-9
 
 
 def test_nearfield_mvdr_polar_peaks_near_look():

@@ -212,20 +212,39 @@ def summarize_suppression(azimuths: np.ndarray, pattern_db: np.ndarray, look_az:
     }
 
 
+def polar_plot_coords(azimuths_deg: np.ndarray, pattern_db: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Map head-frame azimuth / look-normalized dB to matplotlib polar coords.
+
+    Convention: nose-forward (0°) at the top, positive azimuth clockwise toward
+    listener-right — matching head_frame and set_theta_zero_location('N') with
+    clockwise direction. Radius is look-normalized dB shifted so the deepest
+    null sits near the origin (larger radius = stronger response).
+    """
+    order = np.argsort(azimuths_deg)
+    az = np.asarray(azimuths_deg, dtype=np.float64)[order]
+    pat = np.asarray(pattern_db, dtype=np.float64)[order]
+    # Do NOT add an extra π/2 rotation: theta_zero='N' + clockwise already puts
+    # angle 0 at the top. A prior (π/2 - θ) shift drew look=0° at the East lobe.
+    theta = np.deg2rad(az)
+    floor = float(np.min(pat))
+    radius = pat - floor + 1.0
+    # Close the contour for fill/plot.
+    theta = np.concatenate([theta, theta[:1]])
+    radius = np.concatenate([radius, radius[:1]])
+    return theta, radius
+
+
 def plot_polar(azimuths_deg: np.ndarray, pattern_db: np.ndarray, out_path: Path, title: str) -> None:
     import matplotlib.pyplot as plt
 
-    theta = np.deg2rad(azimuths_deg)
-    # Shift so 0° (nose-forward) is at the top of the plot.
-    theta_plot = (np.pi / 2.0) - theta
-    r = pattern_db - float(np.min(pattern_db)) + 1.0
+    theta, radius = polar_plot_coords(azimuths_deg, pattern_db)
     fig, ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=(7, 7))
-    ax.plot(theta_plot, r, color="#0b3d5c", linewidth=2.0)
-    ax.fill(theta_plot, r, color="#0b3d5c", alpha=0.18)
+    ax.plot(theta, radius, color="#0b3d5c", linewidth=2.0)
+    ax.fill(theta, radius, color="#0b3d5c", alpha=0.18)
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     ax.set_title(title)
-    ax.set_ylim(0, float(np.max(r)) * 1.05)
+    ax.set_ylim(0, float(np.max(radius)) * 1.05)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=140)
