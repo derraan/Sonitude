@@ -17,19 +17,21 @@ namespace sonitude::dsp
 {
 class SpectralPostfilter;
 
-// Adaptive geometric MVDR comparison backend.
-// max_white_noise_gain caps squared weight norm relative to the unit-magnitude
-// delay-and-sum norm 1/M. It is not a true white-noise-gain in measured-RTF
-// coordinates and must not be reused unchanged for compiled weights.
-// allow_das_fallback: when false (default), failed solves / WNG trips keep a
-// distortionless matched-filter or soft-clamped MVDR weight — never DelayAndSum.
+// Adaptive geometric MVDR. Tuning must be loaded from runtime YAML
+// (spatial.mvdr); do not treat the struct member zeros as product defaults.
 struct MvdrTuningParams
 {
-  float diag_load = 0.08F;
-  float max_white_noise_gain = 4.0F;
-  float cov_tau_sec = 0.080F;
-  bool allow_das_fallback = false;
+  float diag_load = 0.0F;
+  float max_white_noise_gain = 0.0F;
+  float cov_tau_sec = 0.0F;
 };
+
+inline MvdrTuningParams TuningFromRuntime(const app::MvdrConfig& cfg) noexcept
+{
+  return {.diag_load = cfg.diag_load,
+          .max_white_noise_gain = cfg.max_white_noise_gain,
+          .cov_tau_sec = cfg.cov_tau_sec};
+}
 
 class MvdrBeamformer
 {
@@ -38,7 +40,8 @@ class MvdrBeamformer
                  const app::SteeringConfig& steering_config,
                  const app::CalibrationConfig& calibration,
                  std::uint32_t sample_rate_hz,
-                 std::size_t max_block_frames);
+                 std::size_t max_block_frames,
+                 const MvdrTuningParams& tuning);
   void setTarget(audio::BeamformerSteering target);
   void setTuning(const MvdrTuningParams& tuning) noexcept;
   void setSpectralPostfilter(SpectralPostfilter* filter) noexcept { spectral_filter_ = filter; }

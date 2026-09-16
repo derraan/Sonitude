@@ -7,6 +7,7 @@
 #include "audio/audio_types.hpp"
 #include "dsp/steering_lut.hpp"
 #include "spatial/angles.hpp"
+#include "tests/support/canonical_array.hpp"
 
 namespace
 {
@@ -20,13 +21,7 @@ void Require(const bool condition, const std::string& message)
 
 sonitude::app::GeometryConfig BuildGeometry()
 {
-  sonitude::app::GeometryConfig geometry;
-  geometry.profile_name = "steering_lut_unit_geometry";
-  geometry.microphones = {
-      {"M0", -0.038, 0.168, 0.0}, {"M1", 0.038, 0.168, 0.0}, {"M2", -0.090, 0.050, 0.0},
-      {"M3", 0.090, 0.050, 0.0},  {"M4", -0.060, 0.000, 0.0}, {"M5", 0.060, 0.000, 0.0},
-  };
-  return geometry;
+  return sonitude::tests::support::LoadCanonicalGeometry();
 }
 
 sonitude::app::SteeringConfig BuildSteering(const float source_distance_m)

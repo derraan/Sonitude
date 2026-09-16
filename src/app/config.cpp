@@ -219,6 +219,17 @@ RuntimeConfig LoadRuntimeConfigFromFile(const std::string& path)
     {
       config.spatial.mask_smooth_sec = RequireScalar<float>(spatial, "mask_smooth_sec");
     }
+    const YAML::Node mvdr = spatial["mvdr"];
+    if (mvdr)
+    {
+      config.spatial.mvdr.diag_load = RequireScalar<float>(mvdr, "diag_load");
+      config.spatial.mvdr.max_white_noise_gain = RequireScalar<float>(mvdr, "max_white_noise_gain");
+      config.spatial.mvdr.cov_tau_sec = RequireScalar<float>(mvdr, "cov_tau_sec");
+    }
+  }
+  if (config.spatial.backend == "adaptive_geometric" && (!spatial || !spatial["mvdr"]))
+  {
+    throw std::runtime_error("spatial.mvdr is required when spatial.backend=adaptive_geometric");
   }
 
   const YAML::Node suppression = root["suppression"];
@@ -373,6 +384,16 @@ GeometryConfig LoadGeometryFromFile(const std::string& path)
   GeometryConfig geometry;
   geometry.profile_name = RequireScalar<std::string>(root, "profile_name");
 
+  const YAML::Node frame = root["frame"];
+  if (!frame)
+  {
+    throw std::runtime_error("geometry must declare frame (head_frame_v1: +X right, +Y forward, +Z up)");
+  }
+  geometry.frame.convention = RequireScalar<std::string>(frame, "convention");
+  geometry.frame.right = RequireScalar<std::string>(frame, "right");
+  geometry.frame.forward = RequireScalar<std::string>(frame, "forward");
+  geometry.frame.up = RequireScalar<std::string>(frame, "up");
+
   const YAML::Node mics = root["microphones"];
   if (!mics || !mics.IsSequence())
   {
@@ -493,7 +514,26 @@ void ValidateRuntimeConfig(const RuntimeConfig& config)
   {
     throw std::runtime_error("spatial.azimuth_interpolation must be nearest or linear_blend");
   }
-  if (config.spatial.backend == "fixed_measured")
+  if (config.spatial.backend == "adaptive_geometric")
+  {
+    if (!std::isfinite(config.spatial.mvdr.diag_load) || config.spatial.mvdr.diag_load <= 0.0F ||
+        config.spatial.mvdr.diag_load > 1.0F)
+    {
+      throw std::runtime_error("spatial.mvdr.diag_load must be in (0, 1]");
+    }
+    if (!std::isfinite(config.spatial.mvdr.max_white_noise_gain) ||
+        config.spatial.mvdr.max_white_noise_gain < 1.0F ||
+        config.spatial.mvdr.max_white_noise_gain > 32.0F)
+    {
+      throw std::runtime_error("spatial.mvdr.max_white_noise_gain must be in [1, 32]");
+    }
+    if (!std::isfinite(config.spatial.mvdr.cov_tau_sec) || config.spatial.mvdr.cov_tau_sec < 0.010F ||
+        config.spatial.mvdr.cov_tau_sec > 2.0F)
+    {
+      throw std::runtime_error("spatial.mvdr.cov_tau_sec must be in [0.010, 2]");
+    }
+  }
+  else if (config.spatial.backend == "fixed_measured")
   {
     if (config.spatial.profile_path.empty())
     {
@@ -729,6 +769,15 @@ void ValidateGeometryConfig(const GeometryConfig& geometry)
   {
     throw std::runtime_error("geometry profile_name cannot be empty");
   }
+  if (geometry.frame.convention != "head_frame_v1")
+  {
+    throw std::runtime_error("geometry.frame.convention must be head_frame_v1");
+  }
+  if (geometry.frame.right != "+X" || geometry.frame.forward != "+Y" || geometry.frame.up != "+Z")
+  {
+    throw std::runtime_error(
+        "geometry.frame must be right=+X, forward=+Y, up=+Z (matches UnitVectorFromAzElDeg)");
+  }
 
   if (geometry.microphones.size() != 6)
   {
@@ -746,6 +795,12 @@ void ValidateGeometryConfig(const GeometryConfig& geometry)
     {
       throw std::runtime_error("geometry microphone ids must be unique");
     }
+  }
+  // USB order: index 0 is left ear, index 5 is right ear.
+  if (!(geometry.microphones[0].x < 0.0) || !(geometry.microphones[5].x > 0.0))
+  {
+    throw std::runtime_error(
+        "geometry USB0 must sit on -X (listener-left) and USB5 on +X (listener-right)");
   }
 }
 }  // namespace sonitude::app

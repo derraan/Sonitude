@@ -36,6 +36,7 @@ void GeometricSteeringLut::configure(const app::GeometryConfig& geometry,
   sample_rate_hz_ = sample_rate_hz;
   speed_of_sound_mps_ = steering.speed_of_sound_mps;
   source_distance_m_ = steering.source_distance_m;
+  app::ValidateGeometryConfig(geometry);
   if (geometry.microphones.size() != audio::kMicChannels)
   {
     throw std::runtime_error("GeometricSteeringLut requires six microphones");

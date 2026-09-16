@@ -570,7 +570,8 @@ int main(int argc, char** argv)
                            runtime.steering,
                            calibration,
                            sample_rate_hz,
-                           max_block_frames);
+                           max_block_frames,
+                           sonitude::dsp::TuningFromRuntime(runtime.spatial.mvdr));
     }
 
     const bool suppression_enabled = ResolveSuppression(suppression_mode, runtime.suppression.enabled);
@@ -694,9 +695,9 @@ int main(int argc, char** argv)
       float spectral_noise_overestimate = 2.0F;
       float spectral_tonal_ratio = 6.0F;
       float spectral_noise_rise_ms = 480.0F;
-      float mvdr_max_wn_gain = 4.0F;
-      float mvdr_cov_tau_ms = 80.0F;
-      float mvdr_diag_load = 0.08F;
+      float mvdr_max_wn_gain = runtime.spatial.mvdr.max_white_noise_gain;
+      float mvdr_cov_tau_ms = runtime.spatial.mvdr.cov_tau_sec * 1000.0F;
+      float mvdr_diag_load = runtime.spatial.mvdr.diag_load;
       if (!ReadExact(std::cin, &version, sizeof(version)) ||
           !ReadExact(std::cin, &message_type, sizeof(message_type)) ||
           !ReadExact(std::cin, &sequence, sizeof(sequence)) ||

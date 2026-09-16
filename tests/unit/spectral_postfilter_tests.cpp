@@ -13,6 +13,7 @@
 #include "dsp/spectral_postfilter.hpp"
 #include "dsp/streaming_stft.hpp"
 #include "tests/support/alloc_counter.hpp"
+#include "tests/support/canonical_array.hpp"
 #include "tests/support/synth_signals.hpp"
 
 namespace
@@ -164,28 +165,12 @@ void FilterPcm(sonitude::dsp::SpectralPostfilter& pf,
 
 sonitude::app::GeometryConfig TestGeometry()
 {
-  sonitude::app::GeometryConfig g;
-  g.profile_name = "unit_test_geometry";
-  g.microphones = {
-      {"M0", -0.038, 0.168, 0.0}, {"M1", 0.038, 0.168, 0.0}, {"M2", -0.090, 0.050, 0.0},
-      {"M3", 0.090, 0.050, 0.0},  {"M4", -0.060, 0.000, 0.0}, {"M5", 0.060, 0.000, 0.0},
-  };
-  return g;
+  return sonitude::tests::support::LoadCanonicalGeometry();
 }
 
 sonitude::app::CalibrationConfig TestCalibration()
 {
-  sonitude::app::CalibrationConfig c;
-  c.sample_rate_hz = 44100;
-  c.channels.resize(sonitude::audio::kMicChannels);
-  for (std::size_t i = 0; i < c.channels.size(); ++i)
-  {
-    c.channels[i].id = "M" + std::to_string(i);
-    c.channels[i].polarity = 1;
-    c.channels[i].gain_linear = 1.0F;
-    c.channels[i].delay_samples = 0.0F;
-  }
-  return c;
+  return sonitude::tests::support::IdentityCalibration(TestGeometry(), 44100);
 }
 
 void TestMalformedPrepare()
@@ -550,7 +535,7 @@ void TestTwoTalkersGuardContrast()
   const auto calibration = TestCalibration();
 
   sonitude::dsp::MvdrBeamformer raw;
-  raw.configure(geometry, steering, calibration, kFs, 256);
+  raw.configure(geometry, steering, calibration, kFs, 256, sonitude::tests::support::LoadCanonicalMvdrTuning());
   raw.setTarget({0.0F, 0.0F});
   std::vector<float> unfiltered(kFrames, 0.0F);
   raw.process(mic_t, unfiltered);
@@ -560,7 +545,7 @@ void TestTwoTalkersGuardContrast()
           "two-talker prepare");
   pf.setControl(true, 1.0F);
   sonitude::dsp::MvdrBeamformer bf;
-  bf.configure(geometry, steering, calibration, kFs, 256);
+  bf.configure(geometry, steering, calibration, kFs, 256, sonitude::tests::support::LoadCanonicalMvdrTuning());
   bf.setTarget({0.0F, 0.0F});
   bf.setSpectralPostfilter(&pf);
   Require(bf.algorithmicDelaySamples() == kSharedFftDelay, "MVDR first-arrival remains one STFT");

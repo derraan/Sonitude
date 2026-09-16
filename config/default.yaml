@@ -61,6 +61,10 @@ spatial:
   eta_low_db: -3.0
   eta_high_db: 3.0
   mask_smooth_sec: 0.02
+  mvdr:
+    diag_load: 0.08
+    max_white_noise_gain: 4.0
+    cov_tau_sec: 0.080
 state_machine:
   activation_hold_ms: 400
   confirmation_hold_ms: 250

@@ -24,6 +24,11 @@
 # USB channel index 0..5 retains the existing Sound Bubble/Sonitude order:
 #   0 left ear, 1 left arc, 2 left top, 3 right top, 4 right arc, 5 right ear.
 profile_name: "soundbubble_coplanar_v2"
+frame:
+  convention: head_frame_v1
+  right: "+X"
+  forward: "+Y"
+  up: "+Z"
 microphones:
   - id: M0_left_ear
     x: -0.1280

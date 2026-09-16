@@ -1,8 +1,8 @@
-profile_name: "test_geometry"
+profile_name: "bad_frame"
 frame:
   convention: head_frame_v1
-  right: "+X"
-  forward: "+Y"
+  right: "+Y"
+  forward: "+X"
   up: "+Z"
 microphones:
   - id: M0

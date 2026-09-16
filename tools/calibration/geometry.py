@@ -45,7 +45,36 @@ def load_geometry(path: str | Path) -> Geometry:
 
     if ids != MIC_IDS:
         raise RuntimeError(f"Geometry microphone IDs must match expected order: {MIC_IDS}")
+
+    frame = root.get("frame")
+    if not isinstance(frame, dict):
+        raise RuntimeError("geometry must declare frame (head_frame_v1: +X right, +Y forward, +Z up)")
+    convention = str(frame.get("convention", ""))
+    right = str(frame.get("right", ""))
+    forward = str(frame.get("forward", ""))
+    up = str(frame.get("up", ""))
+    if convention != "head_frame_v1" or right != "+X" or forward != "+Y" or up != "+Z":
+        raise RuntimeError(
+            "geometry.frame must be convention=head_frame_v1, right=+X, forward=+Y, up=+Z"
+        )
+    if not (xyz[0, 0] < 0.0 and xyz[5, 0] > 0.0):
+        raise RuntimeError("geometry USB0 must sit on -X (listener-left) and USB5 on +X (listener-right)")
+
     return Geometry(profile_name=profile_name, mic_ids=ids, xyz_m=xyz)
+
+
+def load_mvdr_tuning(path: str | Path) -> dict[str, float]:
+    with open(path, "r", encoding="utf-8") as handle:
+        root = yaml.safe_load(handle)
+    spatial = root.get("spatial")
+    if not isinstance(spatial, dict) or not isinstance(spatial.get("mvdr"), dict):
+        raise RuntimeError("runtime YAML must declare spatial.mvdr")
+    mvdr = spatial["mvdr"]
+    return {
+        "diag_load": float(mvdr["diag_load"]),
+        "max_white_noise_gain": float(mvdr["max_white_noise_gain"]),
+        "cov_tau_sec": float(mvdr["cov_tau_sec"]),
+    }
 
 
 def unit_vector_from_az_el_deg(azimuth_deg: float, elevation_deg: float) -> np.ndarray:
