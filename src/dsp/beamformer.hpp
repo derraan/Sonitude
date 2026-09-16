@@ -21,11 +21,14 @@ class SpectralPostfilter;
 // max_white_noise_gain caps squared weight norm relative to the unit-magnitude
 // delay-and-sum norm 1/M. It is not a true white-noise-gain in measured-RTF
 // coordinates and must not be reused unchanged for compiled weights.
+// allow_das_fallback: when false (default), failed solves / WNG trips keep a
+// distortionless matched-filter or soft-clamped MVDR weight — never DelayAndSum.
 struct MvdrTuningParams
 {
   float diag_load = 0.08F;
   float max_white_noise_gain = 4.0F;
   float cov_tau_sec = 0.080F;
+  bool allow_das_fallback = false;
 };
 
 class MvdrBeamformer

@@ -139,18 +139,58 @@ void DelayAndSum(const Cpx d[kM], const Cpx x[kM], Cpx& y)
   y = {acc.re / static_cast<float>(kM), acc.im / static_cast<float>(kM)};
 }
 
+// Distortionless matched filter w = d / (d^H d). Keeps the look constraint
+// without the equal-weight DelayAndSum average that flattens nulls.
+void MatchedFilter(const Cpx d[kM], const Cpx x[kM], Cpx& y)
+{
+  Cpx denom{0.0F, 0.0F};
+  for (std::size_t ch = 0; ch < kM; ++ch)
+  {
+    denom.re += (d[ch].re * d[ch].re) + (d[ch].im * d[ch].im);
+  }
+  const float inv = 1.0F / std::max(denom.re, 1.0e-12F);
+  Cpx acc{0.0F, 0.0F};
+  for (std::size_t ch = 0; ch < kM; ++ch)
+  {
+    const Cpx term = Mul(Conj(d[ch]), x[ch]);
+    acc.re += term.re * inv;
+    acc.im += term.im * inv;
+  }
+  y = acc;
+}
+
+void ApplyWeights(const Cpx w[kM], const Cpx x[kM], Cpx& y)
+{
+  Cpx acc{0.0F, 0.0F};
+  for (std::size_t ch = 0; ch < kM; ++ch)
+  {
+    const Cpx term = Mul(Conj(w[ch]), x[ch]);
+    acc.re += term.re;
+    acc.im += term.im;
+  }
+  y = acc;
+}
+
 void MvdrFromFactor(const CholFactor& factor,
                     const Cpx d[kM],
                     const Cpx x[kM],
                     Cpx& y,
                     const float max_white_noise_gain,
+                    const bool allow_das_fallback,
                     std::uint64_t& solve_count)
 {
   Cpx q[kM]{};
   ++solve_count;
   if (!SolveChol(factor, d, q))
   {
-    DelayAndSum(d, x, y);
+    if (allow_das_fallback)
+    {
+      DelayAndSum(d, x, y);
+    }
+    else
+    {
+      MatchedFilter(d, x, y);
+    }
     return;
   }
   Cpx denom{0.0F, 0.0F};
@@ -163,7 +203,14 @@ void MvdrFromFactor(const CholFactor& factor,
   const float mag2 = (denom.re * denom.re) + (denom.im * denom.im);
   if (!(mag2 > 1.0e-16F))
   {
-    DelayAndSum(d, x, y);
+    if (allow_das_fallback)
+    {
+      DelayAndSum(d, x, y);
+    }
+    else
+    {
+      MatchedFilter(d, x, y);
+    }
     return;
   }
   const float inv = 1.0F / mag2;
@@ -183,20 +230,48 @@ void MvdrFromFactor(const CholFactor& factor,
     unity.im += term.im;
   }
   const float ds_wn = 1.0F / static_cast<float>(kM);
-  if (wn > max_white_noise_gain * ds_wn || std::fabs(unity.re - 1.0F) > 0.25F ||
-      std::fabs(unity.im) > 0.25F)
+  const float max_wn = max_white_noise_gain * ds_wn;
+  const bool constraint_bad =
+      (std::fabs(unity.re - 1.0F) > 0.25F) || (std::fabs(unity.im) > 0.25F);
+  if (wn > max_wn || constraint_bad)
   {
-    DelayAndSum(d, x, y);
+    if (allow_das_fallback)
+    {
+      DelayAndSum(d, x, y);
+      return;
+    }
+    // Keep a distortionless matched filter instead of DelayAndSum. For the
+    // unit-magnitude geometric steering used by adaptive MVDR this matches the
+    // old DAS look gain while avoiding the equal-weight DAS path as a named
+    // spatial backend.
+    MatchedFilter(d, x, y);
     return;
   }
-  Cpx acc{0.0F, 0.0F};
-  for (std::size_t ch = 0; ch < kM; ++ch)
+  ApplyWeights(w, x, y);
+}
+
+void FormLookOutput(const CholFactor& factor,
+                    const bool edge,
+                    const Cpx d[kM],
+                    const Cpx x[kM],
+                    Cpx& y,
+                    const MvdrTuningParams& tuning,
+                    std::uint64_t& solve_count)
+{
+  if (edge || !factor.ok)
   {
-    const Cpx term = Mul(Conj(w[ch]), x[ch]);
-    acc.re += term.re;
-    acc.im += term.im;
+    if (tuning.allow_das_fallback)
+    {
+      DelayAndSum(d, x, y);
+    }
+    else
+    {
+      MatchedFilter(d, x, y);
+    }
+    return;
   }
-  y = acc;
+  MvdrFromFactor(factor, d, x, y, tuning.max_white_noise_gain, tuning.allow_das_fallback,
+                 solve_count);
 }
 
 void ReconstructEar(const Cpx d_ear, const Cpx z, Cpx& y)
@@ -535,6 +610,7 @@ void MvdrBeamformer::setTuning(const MvdrTuningParams& tuning) noexcept
   tuning_.diag_load = std::clamp(tuning.diag_load, 0.001F, 1.0F);
   tuning_.max_white_noise_gain = std::clamp(tuning.max_white_noise_gain, 1.0F, 32.0F);
   tuning_.cov_tau_sec = tau;
+  tuning_.allow_das_fallback = tuning.allow_das_fallback;
   if (tau_changed && configured_ && sample_rate_hz_ > 0)
   {
     const float hop_sec = static_cast<float>(kHopSize) / static_cast<float>(sample_rate_hz_);
@@ -686,14 +762,7 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
       }
     }
 
-    if (edge || !factor.ok)
-    {
-      DelayAndSum(d, x, y);
-    }
-    else
-    {
-      MvdrFromFactor(factor, d, x, y, tuning_.max_white_noise_gain, solve_count_);
-    }
+    FormLookOutput(factor, edge, d, x, y, tuning_, solve_count_);
     ++look_count_;
     y_re_[b] = y.re;
     y_im_[b] = y.im;
@@ -714,14 +783,7 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
       Cpx dp[kM]{};
       load_d(pending_steer_, b, dp);
       Cpx yp{};
-      if (edge || !factor.ok)
-      {
-        DelayAndSum(dp, x, yp);
-      }
-      else
-      {
-        MvdrFromFactor(factor, dp, x, yp, tuning_.max_white_noise_gain, solve_count_);
-      }
+      FormLookOutput(factor, edge, dp, x, yp, tuning_, solve_count_);
       ++look_count_;
       pending_y_re_[b] = yp.re;
       pending_y_im_[b] = yp.im;
@@ -745,14 +807,7 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
         Cpx dg[kM]{};
         load_d(guard_steer_[g], b, dg);
         Cpx yg{};
-        if (edge || !factor.ok)
-        {
-          DelayAndSum(dg, x, yg);
-        }
-        else
-        {
-          MvdrFromFactor(factor, dg, x, yg, tuning_.max_white_noise_gain, solve_count_);
-        }
+        FormLookOutput(factor, edge, dg, x, yg, tuning_, solve_count_);
         ++look_count_;
         guard_y_re_[g][b] = yg.re;
         guard_y_im_[g][b] = yg.im;

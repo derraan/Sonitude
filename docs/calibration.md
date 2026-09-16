@@ -396,12 +396,20 @@ python tools/calibration/compile_array.py \
   --output-prefix build/array_profile_measured
 ```
 
+Near-field MVDR polar / beampattern check (no delay-and-sum; look ATF excluded from Γ by default):
+
+```bash
+python -m tools.calibration.mvdr_polar --synthetic --look-az 0 --plot build/mvdr_polar.png
+python -m tools.calibration.mvdr_polar --manifest path/to/manifest.yaml --look-az 0
+```
+
 Notes:
 
 - Optional `calibration_yaml` applies `gain_linear` and `polarity` only.
 - `delay_samples` is ignored: synchronized IR phase already encodes delay.
 - Sample-rate mismatch and channel-count mismatch are hard errors.
 - For sweep mode, window policy and detected direct-arrival offsets are written into `.report.json`.
+- `exclude_look_from_noise` (default true) builds Capon Γ from non-look ATFs. Including the look direction in Γ was a common cause of flat IR-based MVDR polar plots.
 - This artifact does not satisfy the M3 hardware-evidence gate by itself.
 
 Example manifest shape is in `config/array_ir_manifest.example.yaml`.

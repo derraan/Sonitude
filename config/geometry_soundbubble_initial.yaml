@@ -1,45 +1,51 @@
 # Sound Bubble 6-microphone headphone layout reconstructed from
-# Chen et al., "Hearable devices with sound bubbles", Extended Data Fig. 1A.
+# Chen et al., "Hearable devices with sound bubbles", Extended Data Fig. 1A,
+# with small forward offsets from the Sound Bubble research mic table.
 #
-# Coordinate frame (Sonitude head-fixed Cartesian frame):
+# Coordinate frame MUST match src/spatial/head_frame.hpp:
 #   origin = midpoint between the left and right earcup microphone positions
-#   +X = listener-forward
-#   +Y = listener-right
+#   +X = listener-right
+#   +Y = listener-forward
 #   +Z = up
 #
-# Assumption: the six microphones are coplanar in the YZ plane, therefore X = 0.
-# Paper dimensions used:
-#   earcup pair separation      = 25.9 cm  -> Y = +/-12.95 cm
-#   outer headband separation   = 20.8 cm  -> Y = +/-10.4 cm
-#   inner headband separation   =  7.6 cm  -> Y = +/-3.8 cm
-#   earcup-to-outer height      = 11.5 cm  -> Z = 11.5 cm
-#   outer-to-inner height       =  5.3 cm  -> Z = 16.8 cm total
+# A prior revision stored left/right on Y with X = 0 and labeled +X as forward.
+# That disagreed with UnitVectorFromAzElDeg (az=0 → +Y) and steered the
+# near-field look toward listener-right instead of nose-forward.
+#
+# Paper / research dimensions (metres):
+#   earcup pair separation ~ 25.9 cm
+#   outer headband ~ 20.8 cm
+#   inner headband ~ 7.6 cm
+#   ear-to-outer height ~ 11.5 cm
+#   outer-to-inner height ~ 5.3 cm
+#   ear cups slightly behind the headband arc (Y < 0) so front/back is not
+#   perfectly ambiguous on this nearly coronal array.
 #
 # USB channel index 0..5 retains the existing Sound Bubble/Sonitude order:
 #   0 left ear, 1 left arc, 2 left top, 3 right top, 4 right arc, 5 right ear.
 profile_name: "soundbubble_coplanar_v2"
 microphones:
   - id: M0_left_ear
-    x: 0.0000
-    y: -0.1295
+    x: -0.1280
+    y: -0.0150
     z: 0.0000
   - id: M1_left_arc
-    x: 0.0000
-    y: -0.1040
-    z: 0.1150
+    x: -0.1020
+    y: 0.0000
+    z: 0.1130
   - id: M2_left_top
-    x: 0.0000
-    y: -0.0380
-    z: 0.1680
+    x: -0.0380
+    y: 0.0000
+    z: 0.1690
   - id: M3_right_top
-    x: 0.0000
-    y: 0.0380
-    z: 0.1680
+    x: 0.0380
+    y: 0.0000
+    z: 0.1690
   - id: M4_right_arc
-    x: 0.0000
-    y: 0.1040
-    z: 0.1150
+    x: 0.1060
+    y: 0.0000
+    z: 0.1170
   - id: M5_right_ear
-    x: 0.0000
-    y: 0.1295
-    z: 0.0000
+    x: 0.1310
+    y: -0.0150
+    z: 0.0070

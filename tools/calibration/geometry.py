@@ -49,6 +49,7 @@ def load_geometry(path: str | Path) -> Geometry:
 
 
 def unit_vector_from_az_el_deg(azimuth_deg: float, elevation_deg: float) -> np.ndarray:
+    """Head-frame unit vector: az=0 → +Y (forward), +az → +X (listener-right)."""
     az = np.deg2rad(azimuth_deg)
     el = np.deg2rad(elevation_deg)
     cos_el = np.cos(el)

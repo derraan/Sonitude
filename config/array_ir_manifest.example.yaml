@@ -7,6 +7,9 @@ hop_size: 32
 reference_mic: 2
 left_ear_mic: 0
 right_ear_mic: 5
+# Optional: when true (default), Capon Γ excludes the look ATF so MVDR nulls
+# can form. Set false to restore the older all-direction average.
+exclude_look_from_noise: true
 self_noise: 0.001
 max_weight_norm: 4.0
 # Optional M3 channel conditioner import. Only gain_linear and polarity are used.
