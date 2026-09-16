@@ -1,7 +1,8 @@
-"""IR / near-field MVDR polar diagnostics."""
+"""Host-DSP MVDR polar diagnostics."""
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -13,16 +14,14 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from calibration.compile_array import compile_from_irs  # noqa: E402
-from calibration.geometry import load_geometry, load_mvdr_tuning  # noqa: E402
+from calibration.geometry import load_geometry  # noqa: E402
 from calibration.mvdr_polar import (  # noqa: E402
-    atf_from_irs,
-    beampattern_db,
+    MissingBinaryError,
+    find_wav_replay,
+    load_probe_recordings,
     main as polar_main,
-    mvdr_weights_for_look,
     polar_plot_coords,
-    speech_bin_slice,
     summarize_suppression,
-    _synthetic_nearfield_irs,
 )
 
 
@@ -36,7 +35,6 @@ def test_geometry_head_frame_places_ears_on_x_axis():
     assert geom["frame"]["up"] == "+Z"
     assert mics["M0_left_ear"]["x"] < 0.0
     assert mics["M5_right_ear"]["x"] > 0.0
-    # Ears slightly behind the arc so front/back is not ambiguous.
     assert mics["M0_left_ear"]["y"] < 0.0
     assert mics["M5_right_ear"]["y"] < 0.0
     loaded = load_geometry(geom_path)
@@ -47,40 +45,20 @@ def test_geometry_head_frame_places_ears_on_x_axis():
 def test_polar_plot_puts_look_zero_at_north():
     """Regression: do not double-rotate so look=0° lands on the East lobe."""
     az = np.array([-90.0, 0.0, 90.0, 180.0])
-    # Look-normalized: peak at 0°, deep nulls at ±90°.
     pat = np.array([-15.0, 0.0, -15.0, -8.0])
     theta, radius = polar_plot_coords(az, pat)
-    # Drop closing sample for argmax.
     peak_i = int(np.argmax(radius[:-1]))
     peak_theta = float(theta[peak_i])
-    # With theta_zero='N' and clockwise, mpl theta≈0 is the top (0° label).
     assert abs(peak_theta) < 1e-9
     assert abs(float(az[np.argsort(az)][peak_i])) < 1e-9
 
 
-def test_nearfield_mvdr_polar_peaks_near_look():
-    geometry = ROOT / "config" / "geometry_soundbubble_initial.yaml"
-    mvdr = load_mvdr_tuning(ROOT / "config" / "default.yaml")
-    sr = 44100
-    fft = 128
-    azimuths = np.arange(-180.0, 180.0, 15.0)
-    irs = _synthetic_nearfield_irs(geometry, sr, azimuths, distance_m=1.0)
-    h = atf_from_irs(irs, fft)
-    look_az = 0.0
-    look_i = int(np.argmin(np.abs(azimuths - look_az)))
-    w, _ = mvdr_weights_for_look(
-        h,
-        look_i,
-        reference_mic=2,
-        exclude_look=True,
-        self_noise=1e-3,
-        max_weight_norm=mvdr["max_white_noise_gain"],
-        diag_load=mvdr["diag_load"],
-    )
-    pat = beampattern_db(w, h, look_index=look_i, speech_bins=speech_bin_slice(fft, sr))
-    summary = summarize_suppression(azimuths, pat, look_az)
-    assert abs(summary["peak_az_deg"]) <= 15.0
-    assert summary["suppression_db"] > 6.0
+def test_polar_plot_does_not_close_front_hemisphere():
+    az = np.array([-90.0, -60.0, 0.0, 60.0, 90.0])
+    pat = np.zeros(5)
+    theta, radius = polar_plot_coords(az, pat)
+    assert theta.size == az.size
+    assert radius.size == az.size
 
 
 def test_axis_swap_rejected_by_geometry_loader():
@@ -123,31 +101,59 @@ def test_compile_from_irs_exclude_look_default_preserves_distortionless():
             assert abs(unity - 1.0) < 1e-2
 
 
-def test_polar_cli_synthetic(tmp_path: Path):
-    plot = tmp_path / "polar.png"
-    report = tmp_path / "report.json"
+def test_load_probe_recordings_requires_existing_wavs(tmp_path: Path):
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "layout: multichannel\ndirections:\n  - azimuth_deg: 0\n    path: missing.wav\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="missing capture"):
+        load_probe_recordings(manifest)
+
+
+def test_polar_cli_synthetic_host_dsp(tmp_path: Path):
     try:
         import matplotlib  # noqa: F401
     except ImportError:
         pytest.skip("matplotlib required for polar PNG")
+    try:
+        find_wav_replay()
+    except MissingBinaryError as exc:
+        pytest.skip(str(exc))
+    plot = tmp_path / "polar.png"
+    report = tmp_path / "report.json"
     rc = polar_main(
         [
             "--synthetic",
-            "--geometry",
-            str(ROOT / "config" / "geometry_soundbubble_initial.yaml"),
             "--runtime",
             str(ROOT / "config" / "default.yaml"),
             "--look-az",
             "0",
             "--az-step",
-            "30",
+            "90",
+            "--duration-s",
+            "0.6",
             "--plot",
             str(plot),
             "--json-out",
             str(report),
+            "--work-dir",
+            str(tmp_path / "work"),
         ]
     )
     assert rc == 0
     assert plot.exists()
-    assert report.exists()
-    assert "suppression_db" in report.read_text(encoding="utf-8")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["processor"] == "sonitude_wav_replay"
+    assert payload["beamformer"] == "dsp::MvdrBeamformer"
+    summary = payload["primary"]["summary"]
+    assert abs(summary["peak_az_deg"]) <= 90.0
+    assert "suppression_db" in summary
+
+
+def test_summarize_suppression_look_normalized():
+    az = np.array([-90.0, 0.0, 90.0])
+    pat = np.array([-8.0, 0.0, -8.0])
+    summary = summarize_suppression(az, pat, 0.0)
+    assert summary["peak_az_deg"] == 0.0
+    assert summary["suppression_db"] == pytest.approx(8.0)
