@@ -35,6 +35,7 @@ try:
         SPEED_OF_SOUND_MPS,
         geometric_delay_samples_spherical,
         load_geometry,
+        load_mvdr_tuning,
         unit_vector_from_az_el_deg,
     )
 except ImportError:  # pragma: no cover
@@ -52,6 +53,7 @@ except ImportError:  # pragma: no cover
         SPEED_OF_SOUND_MPS,
         geometric_delay_samples_spherical,
         load_geometry,
+        load_mvdr_tuning,
         unit_vector_from_az_el_deg,
     )
 
@@ -145,7 +147,7 @@ def mvdr_weights_for_look(
     w = np.zeros_like(d)
     for k in range(n_bins):
         if not valid[k]:
-            w[k] = d[k] / (np.vdot(d[k], d[k]) + 1e-18)
+            w[k] = 0.0
             continue
         lam = max(float(diag_load), 1e-4)
         wk = None
@@ -155,6 +157,9 @@ def mvdr_weights_for_look(
                 break
             lam *= 3.0
         assert wk is not None
+        if not np.any(np.abs(wk) > 0.0):
+            w[k] = 0.0
+            continue
         unity = np.vdot(d[k], wk)
         if abs(unity - 1.0) > 1e-3 and abs(unity) > 1e-12:
             wk = wk / np.conj(unity)
@@ -325,14 +330,15 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("--synthetic", action="store_true", help="use geometric near-field synthetic IRs")
     src.add_argument("--manifest", type=str, help="IR/sweep manifest for measured ATFs")
     p.add_argument("--geometry", type=str, default="config/geometry_soundbubble_initial.yaml")
+    p.add_argument("--runtime", type=str, default="config/default.yaml")
     p.add_argument("--look-az", type=float, default=0.0)
     p.add_argument("--distance-m", type=float, default=1.0, help="near-field look/measurement distance")
     p.add_argument("--sample-rate", type=int, default=44100)
     p.add_argument("--fft-size", type=int, default=128)
     p.add_argument("--reference-mic", type=int, default=REFERENCE_INDEX)
     p.add_argument("--self-noise", type=float, default=1e-3)
-    p.add_argument("--max-weight-norm", type=float, default=32.0)
-    p.add_argument("--diag-load", type=float, default=1e-4)
+    p.add_argument("--max-weight-norm", type=float, default=None)
+    p.add_argument("--diag-load", type=float, default=None)
     p.add_argument(
         "--include-look-in-noise",
         action="store_true",
@@ -342,6 +348,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--plot", type=str, default="", help="optional PNG path")
     p.add_argument("--json-out", type=str, default="", help="optional JSON report path")
     args = p.parse_args(argv)
+    mvdr = load_mvdr_tuning(Path(args.runtime))
+    diag_load = float(mvdr["diag_load"] if args.diag_load is None else args.diag_load)
+    max_weight_norm = float(
+        mvdr["max_white_noise_gain"] if args.max_weight_norm is None else args.max_weight_norm
+    )
 
     if args.synthetic:
         azimuths = np.arange(-180.0, 180.0 + 1e-9, args.az_step)
@@ -371,8 +382,8 @@ def main(argv: list[str] | None = None) -> int:
         reference_mic=args.reference_mic,
         exclude_look=exclude_look,
         self_noise=args.self_noise,
-        max_weight_norm=args.max_weight_norm,
-        diag_load=args.diag_load,
+        max_weight_norm=max_weight_norm,
+        diag_load=diag_load,
     )
 
     # Compare against include-look (compile_array default) when investigating.
@@ -385,12 +396,13 @@ def main(argv: list[str] | None = None) -> int:
         reference_mic=args.reference_mic,
         exclude_look=False,
         self_noise=args.self_noise,
-        max_weight_norm=args.max_weight_norm,
-        diag_load=args.diag_load,
+        max_weight_norm=max_weight_norm,
+        diag_load=diag_load,
     )
 
     report = {
         "mode": "synthetic_near_field" if args.synthetic else "measured_ir",
+        "runtime": str(args.runtime),
         "geometry": str(args.geometry),
         "distance_m": args.distance_m,
         "primary": result,
@@ -400,6 +412,7 @@ def main(argv: list[str] | None = None) -> int:
             "Steering uses near-field spherical delays when --synthetic.",
             "Default noise model excludes the look ATF from Γ so Capon nulls can form.",
             "Pass --include-look-in-noise to match the older all-direction Γ average.",
+            "diag_load and max_white_noise_gain default to spatial.mvdr in --runtime YAML.",
             "Geometry must use head_frame axes (+X right, +Y forward); a swapped frame steers az=0 toward +90°.",
         ],
     }

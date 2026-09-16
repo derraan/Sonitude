@@ -68,7 +68,7 @@ def loaded_mvdr(gamma: np.ndarray, d: np.ndarray, lam: float) -> np.ndarray:
     q = np.linalg.solve(a, d)
     denom = np.vdot(d, q)
     if abs(denom) < 1e-18:
-        return d / (np.vdot(d, d) + 1e-18)
+        return np.zeros_like(d)
     return q / denom
 
 

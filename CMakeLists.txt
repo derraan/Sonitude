@@ -277,6 +277,11 @@ target_link_libraries(
   PRIVATE
     sonitude_core
 )
+target_compile_definitions(
+  sonitude_mvdr_bench
+  PRIVATE
+    SONITUDE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
 
 if(SONITUDE_BUILD_FUZZERS)
   if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")

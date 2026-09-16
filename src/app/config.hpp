@@ -49,10 +49,26 @@ struct GeometryMic
   double z = 0.0;
 };
 
+struct GeometryFrame
+{
+  std::string convention = "head_frame_v1";
+  std::string right = "+X";
+  std::string forward = "+Y";
+  std::string up = "+Z";
+};
+
 struct GeometryConfig
 {
   std::string profile_name;
+  GeometryFrame frame;
   std::vector<GeometryMic> microphones;
+};
+
+struct MvdrConfig
+{
+  float diag_load = 0.0F;
+  float max_white_noise_gain = 0.0F;
+  float cov_tau_sec = 0.0F;
 };
 
 struct SpatialConfig
@@ -64,6 +80,7 @@ struct SpatialConfig
   float eta_low_db = -3.0F;
   float eta_high_db = 3.0F;
   float mask_smooth_sec = 0.020F;
+  MvdrConfig mvdr;
 };
 
 struct SteeringConfig

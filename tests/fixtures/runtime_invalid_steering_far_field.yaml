@@ -52,6 +52,12 @@ telemetry:
   emit_csv: false
   emit_json: false
   stats_period_ms: 1000
+spatial:
+  backend: adaptive_geometric
+  mvdr:
+    diag_load: 0.08
+    max_white_noise_gain: 4.0
+    cov_tau_sec: 0.080
 realtime:
   capture_priority: 80
   playback_priority: 78

@@ -411,7 +411,8 @@ int main(int argc, char** argv)
                            runtime_config.steering,
                            calibration,
                            dsp_sample_rate_hz,
-                           4096);
+                           4096,
+                           sonitude::dsp::TuningFromRuntime(runtime_config.spatial.mvdr));
     }
     sonitude::dsp::SuppressionStage suppressor;
     const auto suppression_backend =

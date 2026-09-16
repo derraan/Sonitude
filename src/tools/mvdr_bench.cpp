@@ -10,36 +10,13 @@
 #include "app/config.hpp"
 #include "audio/audio_types.hpp"
 #include "dsp/beamformer.hpp"
-#include "dsp/fixed_binaural_mvdr.hpp"
-#include "dsp/array_profile.hpp"
+
+#ifndef SONITUDE_SOURCE_DIR
+#error "SONITUDE_SOURCE_DIR must be defined so mvdr_bench loads YAML config, not hardcoded geometry"
+#endif
 
 namespace
 {
-sonitude::app::GeometryConfig Geometry()
-{
-  sonitude::app::GeometryConfig g;
-  g.profile_name = "bench";
-  g.microphones = {
-      {"M0", -0.038, 0.168, 0.0}, {"M1", 0.038, 0.168, 0.0}, {"M2", -0.090, 0.050, 0.0},
-      {"M3", 0.090, 0.050, 0.0},  {"M4", -0.060, 0.000, 0.0}, {"M5", 0.060, 0.000, 0.0},
-  };
-  return g;
-}
-
-sonitude::app::CalibrationConfig Calibration()
-{
-  sonitude::app::CalibrationConfig c;
-  c.sample_rate_hz = 44100;
-  c.channels.resize(6);
-  for (std::size_t i = 0; i < 6; ++i)
-  {
-    c.channels[i].id = "M" + std::to_string(i);
-    c.channels[i].polarity = 1;
-    c.channels[i].gain_linear = 1.0F;
-  }
-  return c;
-}
-
 std::vector<sonitude::audio::MicFrame> Noise(const std::size_t frames)
 {
   std::vector<sonitude::audio::MicFrame> out(frames);
@@ -66,18 +43,23 @@ void Percentiles(const std::vector<double>& us, double& med, double& p95, double
 }
 }  // namespace
 
-int main()
+int main(int argc, char** argv)
 {
-  constexpr std::uint32_t kFs = 44100;
+  const std::string runtime_path =
+      (argc > 1) ? argv[1]
+                 : (std::string(SONITUDE_SOURCE_DIR) + "/config/default.yaml");
+  const auto runtime = sonitude::app::LoadRuntimeConfigFromFile(runtime_path);
+  const auto geometry = sonitude::app::LoadGeometryFromFile(runtime.geometry_path);
+  const auto calibration = sonitude::app::LoadCalibrationFromFile(runtime.calibration_path);
+
   constexpr std::size_t kBlock = 64;
   constexpr std::size_t kBlocks = 400;
   auto mic = Noise(kBlock * kBlocks);
-  sonitude::app::SteeringConfig steering;
-  steering.model = "near_field";
-  steering.reference_mic_index = 2;
+  const std::uint32_t kFs = runtime.capture.sample_rate_hz;
 
   sonitude::dsp::MvdrBeamformer adaptive;
-  adaptive.configure(Geometry(), steering, Calibration(), kFs, kBlock);
+  adaptive.configure(geometry, runtime.steering, calibration, kFs, kBlock,
+                     sonitude::dsp::TuningFromRuntime(runtime.spatial.mvdr));
   adaptive.setTarget({0.0F, 0.0F});
   adaptive.resetCovarianceDiagnosticsForTest();
   std::vector<float> mono(kBlock, 0.0F);
@@ -102,7 +84,8 @@ int main()
   double p99 = 0;
   double mx = 0;
   Percentiles(hop_us, med, p95, p99, mx);
-  std::cout << "backend=adaptive_geometric commit=local "
+  std::cout << "backend=" << runtime.spatial.backend << " config=" << runtime_path << ' '
+            << "geometry=" << runtime.geometry_path << ' '
             << "block=" << kBlock << " fft=128 hop=32 "
             << "factors=" << adaptive.factorizationCountForTest()
             << " solves=" << adaptive.solveCountForTest()

@@ -1,4 +1,9 @@
 profile_name: "bad_geometry"
+frame:
+  convention: head_frame_v1
+  right: "+X"
+  forward: "+Y"
+  up: "+Z"
 microphones:
   - id: M0
     x: 0.0

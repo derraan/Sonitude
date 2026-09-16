@@ -55,6 +55,10 @@ void TestRuntimeConfigValid()
   Require(config.calibration_dc_block_hz > 0.0F, "calibration_dc_block_hz should parse from runtime YAML");
   Require(config.common_eq.sections.empty(), "common_eq should parse empty section list");
   Require(config.realtime.capture_priority > 0, "realtime config should parse from runtime YAML");
+  Require(config.spatial.mvdr.diag_load > 0.0F, "spatial.mvdr.diag_load must load from YAML");
+  Require(config.spatial.mvdr.max_white_noise_gain >= 1.0F,
+          "spatial.mvdr.max_white_noise_gain must load from YAML");
+  Require(config.spatial.mvdr.cov_tau_sec >= 0.010F, "spatial.mvdr.cov_tau_sec must load from YAML");
 }
 
 void TestRuntimeConfigDuplicateChannelFails()
@@ -372,6 +376,26 @@ void TestGeometryValid()
       sonitude::app::LoadGeometryFromFile(FixturePath("tests/fixtures/geometry_valid.yaml"));
   Require(geometry.microphones.size() == sonitude::audio::kMicChannels,
           "valid geometry did not load six microphones");
+  Require(geometry.frame.convention == "head_frame_v1", "geometry frame convention must load from YAML");
+  Require(geometry.frame.right == "+X" && geometry.frame.forward == "+Y" && geometry.frame.up == "+Z",
+          "geometry frame axes must be +X right, +Y forward, +Z up");
+  Require(geometry.microphones.front().x < 0.0 && geometry.microphones.back().x > 0.0,
+          "USB0 must be listener-left (-X) and USB5 listener-right (+X)");
+}
+
+void TestGeometryInvalidFrameFails()
+{
+  bool threw = false;
+  try
+  {
+    (void)sonitude::app::LoadGeometryFromFile(
+        FixturePath("tests/fixtures/geometry_invalid_frame.yaml"));
+  }
+  catch (const std::exception&)
+  {
+    threw = true;
+  }
+  Require(threw, "wrong geometry.frame axes should throw");
 }
 
 void TestGeometryInvalidCountFails()
@@ -438,6 +462,7 @@ int main()
     TestRuntimeAudioContract();
     TestRuntimeAudioContractHeadroom();
     TestGeometryValid();
+    TestGeometryInvalidFrameFails();
     TestGeometryInvalidCountFails();
     TestAudioTypeInvariants();
     TestRuntimeConfigCommonEqValidation();

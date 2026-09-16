@@ -511,7 +511,8 @@ int main(int argc, char** argv)
                            runtime.steering,
                            calibration,
                            input_wav.sample_rate_hz,
-                           runtime.capture.period_frames);
+                           runtime.capture.period_frames,
+                           sonitude::dsp::TuningFromRuntime(runtime.spatial.mvdr));
       beamformer.setTarget(events.front().target);
     }
     float current_width_deg = events.front().width_deg;

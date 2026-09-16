@@ -127,38 +127,6 @@ bool SolveChol(const CholFactor& factor, const Cpx d[kM], Cpx q[kM])
   return true;
 }
 
-void DelayAndSum(const Cpx d[kM], const Cpx x[kM], Cpx& y)
-{
-  Cpx acc{0.0F, 0.0F};
-  for (std::size_t ch = 0; ch < kM; ++ch)
-  {
-    const Cpx term = Mul(Conj(d[ch]), x[ch]);
-    acc.re += term.re;
-    acc.im += term.im;
-  }
-  y = {acc.re / static_cast<float>(kM), acc.im / static_cast<float>(kM)};
-}
-
-// Distortionless matched filter w = d / (d^H d). Keeps the look constraint
-// without the equal-weight DelayAndSum average that flattens nulls.
-void MatchedFilter(const Cpx d[kM], const Cpx x[kM], Cpx& y)
-{
-  Cpx denom{0.0F, 0.0F};
-  for (std::size_t ch = 0; ch < kM; ++ch)
-  {
-    denom.re += (d[ch].re * d[ch].re) + (d[ch].im * d[ch].im);
-  }
-  const float inv = 1.0F / std::max(denom.re, 1.0e-12F);
-  Cpx acc{0.0F, 0.0F};
-  for (std::size_t ch = 0; ch < kM; ++ch)
-  {
-    const Cpx term = Mul(Conj(d[ch]), x[ch]);
-    acc.re += term.re * inv;
-    acc.im += term.im * inv;
-  }
-  y = acc;
-}
-
 void ApplyWeights(const Cpx w[kM], const Cpx x[kM], Cpx& y)
 {
   Cpx acc{0.0F, 0.0F};
@@ -171,27 +139,16 @@ void ApplyWeights(const Cpx w[kM], const Cpx x[kM], Cpx& y)
   y = acc;
 }
 
-void MvdrFromFactor(const CholFactor& factor,
-                    const Cpx d[kM],
-                    const Cpx x[kM],
-                    Cpx& y,
-                    const float max_white_noise_gain,
-                    const bool allow_das_fallback,
-                    std::uint64_t& solve_count)
+bool WeightsFromFactor(const CholFactor& factor,
+                       const Cpx d[kM],
+                       Cpx w[kM],
+                       std::uint64_t& solve_count)
 {
   Cpx q[kM]{};
   ++solve_count;
   if (!SolveChol(factor, d, q))
   {
-    if (allow_das_fallback)
-    {
-      DelayAndSum(d, x, y);
-    }
-    else
-    {
-      MatchedFilter(d, x, y);
-    }
-    return;
+    return false;
   }
   Cpx denom{0.0F, 0.0F};
   for (std::size_t ch = 0; ch < kM; ++ch)
@@ -203,75 +160,70 @@ void MvdrFromFactor(const CholFactor& factor,
   const float mag2 = (denom.re * denom.re) + (denom.im * denom.im);
   if (!(mag2 > 1.0e-16F))
   {
-    if (allow_das_fallback)
-    {
-      DelayAndSum(d, x, y);
-    }
-    else
-    {
-      MatchedFilter(d, x, y);
-    }
-    return;
+    return false;
   }
   const float inv = 1.0F / mag2;
   const Cpx inv_d{denom.re * inv, -denom.im * inv};
-  Cpx w[kM]{};
-  float wn = 0.0F;
   for (std::size_t ch = 0; ch < kM; ++ch)
   {
     w[ch] = Mul(q[ch], inv_d);
-    wn += (w[ch].re * w[ch].re) + (w[ch].im * w[ch].im);
   }
-  Cpx unity{0.0F, 0.0F};
-  for (std::size_t ch = 0; ch < kM; ++ch)
-  {
-    const Cpx term = Mul(Conj(d[ch]), w[ch]);
-    unity.re += term.re;
-    unity.im += term.im;
-  }
-  const float ds_wn = 1.0F / static_cast<float>(kM);
-  const float max_wn = max_white_noise_gain * ds_wn;
-  const bool constraint_bad =
-      (std::fabs(unity.re - 1.0F) > 0.25F) || (std::fabs(unity.im) > 0.25F);
-  if (wn > max_wn || constraint_bad)
-  {
-    if (allow_das_fallback)
-    {
-      DelayAndSum(d, x, y);
-      return;
-    }
-    // Keep a distortionless matched filter instead of DelayAndSum. For the
-    // unit-magnitude geometric steering used by adaptive MVDR this matches the
-    // old DAS look gain while avoiding the equal-weight DAS path as a named
-    // spatial backend.
-    MatchedFilter(d, x, y);
-    return;
-  }
-  ApplyWeights(w, x, y);
+  return true;
 }
 
-void FormLookOutput(const CholFactor& factor,
-                    const bool edge,
+float WeightNorm2(const Cpx w[kM])
+{
+  float n2 = 0.0F;
+  for (std::size_t ch = 0; ch < kM; ++ch)
+  {
+    n2 += (w[ch].re * w[ch].re) + (w[ch].im * w[ch].im);
+  }
+  return n2;
+}
+
+void FormLookOutput(const Cpx r_in[kM][kM],
+                    const float load0,
+                    const float max_wng,
                     const Cpx d[kM],
                     const Cpx x[kM],
                     Cpx& y,
-                    const MvdrTuningParams& tuning,
+                    std::uint64_t& factorization_count,
                     std::uint64_t& solve_count)
 {
-  if (edge || !factor.ok)
+  float load = load0;
+  for (int it = 0; it < 8; ++it)
   {
-    if (tuning.allow_das_fallback)
+    Cpx r[kM][kM]{};
+    for (std::size_t i = 0; i < kM; ++i)
     {
-      DelayAndSum(d, x, y);
+      for (std::size_t j = 0; j < kM; ++j)
+      {
+        r[i][j] = r_in[i][j];
+      }
+      r[i][i].re += load;
+      r[i][i].im = 0.0F;
     }
-    else
+    CholFactor factor{};
+    ++factorization_count;
+    if (!FactorHermitianPd(r, factor))
     {
-      MatchedFilter(d, x, y);
+      load *= 3.0F;
+      continue;
     }
-    return;
+    Cpx w[kM]{};
+    if (!WeightsFromFactor(factor, d, w, solve_count))
+    {
+      y = {0.0F, 0.0F};
+      return;
+    }
+    if (WeightNorm2(w) <= max_wng)
+    {
+      ApplyWeights(w, x, y);
+      return;
+    }
+    load *= 3.0F;
   }
-  MvdrFromFactor(factor, d, x, y, tuning.max_white_noise_gain, tuning.allow_das_fallback,
-                 solve_count);
+  y = {0.0F, 0.0F};
 }
 
 void ReconstructEar(const Cpx d_ear, const Cpx z, Cpx& y)
@@ -284,8 +236,10 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
                                const app::SteeringConfig& steering_config,
                                const app::CalibrationConfig& calibration,
                                const std::uint32_t sample_rate_hz,
-                               const std::size_t max_block_frames)
+                               const std::size_t max_block_frames,
+                               const MvdrTuningParams& tuning)
 {
+  app::ValidateGeometryConfig(geometry);
   if (geometry.microphones.size() != audio::kMicChannels)
   {
     throw std::runtime_error("geometry must contain exactly six microphones");
@@ -298,10 +252,18 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
   {
     throw std::runtime_error("sample_rate_hz must be non-zero");
   }
+  if (!std::isfinite(tuning.diag_load) || tuning.diag_load <= 0.0F || tuning.diag_load > 1.0F ||
+      !std::isfinite(tuning.max_white_noise_gain) || tuning.max_white_noise_gain < 1.0F ||
+      tuning.max_white_noise_gain > 32.0F || !std::isfinite(tuning.cov_tau_sec) ||
+      tuning.cov_tau_sec < 0.010F || tuning.cov_tau_sec > 2.0F)
+  {
+    throw std::runtime_error("MVDR tuning must come from spatial.mvdr and stay in validated ranges");
+  }
 
   steering_config_ = steering_config;
   binaural_output_ = steering_config_.experimental_dual_reference_mvdr;
   sample_rate_hz_ = sample_rate_hz;
+  setTuning(tuning);
   ramp_samples_ = std::max<std::size_t>(
       1U, static_cast<std::size_t>((steering_config_.steering_ramp_ms * 0.001F) *
                                    static_cast<float>(sample_rate_hz_)));
@@ -397,7 +359,7 @@ void MvdrBeamformer::configure(const app::GeometryConfig& geometry,
     guard_steer_[g].valid = false;
   }
   const float hop_sec = static_cast<float>(kHopSize) / static_cast<float>(sample_rate_hz_);
-  cov_beta_ = 1.0F - std::exp(-hop_sec / std::max(tuning_.cov_tau_sec, 1.0e-3F));
+  cov_beta_ = 1.0F - std::exp(-hop_sec / tuning_.cov_tau_sec);
 
   active_target_ = {0.0F, 0.0F};
   pending_target_ = active_target_;
@@ -600,17 +562,18 @@ void MvdrBeamformer::setTarget(const audio::BeamformerSteering target_in)
 
 void MvdrBeamformer::setTuning(const MvdrTuningParams& tuning) noexcept
 {
-  if (!std::isfinite(tuning.diag_load) || !std::isfinite(tuning.max_white_noise_gain) ||
-      !std::isfinite(tuning.cov_tau_sec))
+  if (!std::isfinite(tuning.diag_load) || tuning.diag_load <= 0.0F || tuning.diag_load > 1.0F ||
+      !std::isfinite(tuning.max_white_noise_gain) || tuning.max_white_noise_gain < 1.0F ||
+      tuning.max_white_noise_gain > 32.0F || !std::isfinite(tuning.cov_tau_sec) ||
+      tuning.cov_tau_sec < 0.010F || tuning.cov_tau_sec > 2.0F)
   {
     return;
   }
-  const float tau = std::clamp(tuning.cov_tau_sec, 0.010F, 2.0F);
+  const float tau = tuning.cov_tau_sec;
   const bool tau_changed = tau != tuning_.cov_tau_sec;
-  tuning_.diag_load = std::clamp(tuning.diag_load, 0.001F, 1.0F);
-  tuning_.max_white_noise_gain = std::clamp(tuning.max_white_noise_gain, 1.0F, 32.0F);
+  tuning_.diag_load = tuning.diag_load;
+  tuning_.max_white_noise_gain = tuning.max_white_noise_gain;
   tuning_.cov_tau_sec = tau;
-  tuning_.allow_das_fallback = tuning.allow_das_fallback;
   if (tau_changed && configured_ && sample_rate_hz_ > 0)
   {
     const float hop_sec = static_cast<float>(kHopSize) / static_cast<float>(sample_rate_hz_);
@@ -735,34 +698,20 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
     Cpx d[kM]{};
     load_d(current_steer_, b, d);
     Cpx y{};
-    const bool edge = (b == 0U || b + 1U == n_bins);
-    CholFactor factor{};
-    if (!edge)
+    Cpx r[kM][kM]{};
+    float trace = 0.0F;
+    for (std::size_t i = 0; i < kM; ++i)
     {
-      Cpx r[kM][kM]{};
-      float trace = 0.0F;
-      for (std::size_t i = 0; i < kM; ++i)
+      for (std::size_t j = 0; j < kM; ++j)
       {
-        for (std::size_t j = 0; j < kM; ++j)
-        {
-          r[i][j] = {cov_[b][i][j][0], cov_[b][i][j][1]};
-        }
-        trace += r[i][i].re;
+        r[i][j] = {cov_[b][i][j][0], cov_[b][i][j][1]};
       }
-      const float load = tuning_.diag_load * (trace / static_cast<float>(kM));
-      for (std::size_t i = 0; i < kM; ++i)
-      {
-        r[i][i].re += load;
-        r[i][i].im = 0.0F;
-      }
-      ++factorization_count_;
-      if (!FactorHermitianPd(r, factor))
-      {
-        factor.ok = false;
-      }
+      trace += r[i][i].re;
     }
+    const float load = tuning_.diag_load * (trace / static_cast<float>(kM));
 
-    FormLookOutput(factor, edge, d, x, y, tuning_, solve_count_);
+    FormLookOutput(r, load, tuning_.max_white_noise_gain, d, x, y, factorization_count_,
+                   solve_count_);
     ++look_count_;
     y_re_[b] = y.re;
     y_im_[b] = y.im;
@@ -783,7 +732,8 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
       Cpx dp[kM]{};
       load_d(pending_steer_, b, dp);
       Cpx yp{};
-      FormLookOutput(factor, edge, dp, x, yp, tuning_, solve_count_);
+      FormLookOutput(r, load, tuning_.max_white_noise_gain, dp, x, yp, factorization_count_,
+                     solve_count_);
       ++look_count_;
       pending_y_re_[b] = yp.re;
       pending_y_im_[b] = yp.im;
@@ -807,7 +757,8 @@ void MvdrBeamformer::FormLooksAndSynthesize(const std::size_t fft_size) noexcept
         Cpx dg[kM]{};
         load_d(guard_steer_[g], b, dg);
         Cpx yg{};
-        FormLookOutput(factor, edge, dg, x, yg, tuning_, solve_count_);
+        FormLookOutput(r, load, tuning_.max_white_noise_gain, dg, x, yg, factorization_count_,
+                       solve_count_);
         ++look_count_;
         guard_y_re_[g][b] = yg.re;
         guard_y_im_[g][b] = yg.im;
