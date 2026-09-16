@@ -234,6 +234,9 @@ def polar_plot_coords(azimuths_deg: np.ndarray, pattern_db: np.ndarray) -> tuple
 
 
 def plot_polar(azimuths_deg: np.ndarray, pattern_db: np.ndarray, out_path: Path, title: str) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     theta, radius = polar_plot_coords(azimuths_deg, pattern_db)
