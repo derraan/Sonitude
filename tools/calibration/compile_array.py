@@ -202,6 +202,7 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
         "right_ear_mic": int(raw.get("right_ear_mic", DEFAULT_RIGHT_EAR_MIC)),
         "self_noise": float(raw.get("self_noise", 1e-3)),
         "max_weight_norm": float(raw.get("max_weight_norm", 4.0)),
+        "exclude_look_from_noise": bool(raw.get("exclude_look_from_noise", True)),
         "calibration_yaml": raw.get("calibration_yaml"),
         "gains": raw.get("gains"),
         "polarity": raw.get("polarity"),
@@ -454,6 +455,7 @@ def compile_from_irs(
     max_weight_norm: float = 4.0,
     self_noise: float = 1e-3,
     conditioning_hash_bytes: bytes | None = None,
+    exclude_look_from_noise: bool = True,
 ) -> dict:
     if irs.ndim != 3 or irs.shape[1] != MICS:
         raise ValueError("irs must be [dir, 6, time]")
@@ -474,18 +476,25 @@ def compile_from_irs(
         d_all[di] = np.moveaxis(d_m, 0, 1)
         valid[di] = v.astype(np.uint8)
 
-    gamma = np.zeros((n_bins, MICS, MICS), dtype=np.complex128)
-    p = 1.0 / float(n_dir)
-    for k in range(n_bins):
-        acc = np.zeros((MICS, MICS), dtype=np.complex128)
-        for di in range(n_dir):
-            h = h_all[di, k, :][:, None]
-            acc += p * (h @ h.conj().T)
-        acc += self_noise * np.eye(MICS)
-        gamma[k] = 0.5 * (acc + acc.conj().T)
-
     w_all = np.zeros_like(d_all)
+    gamma = np.zeros((n_bins, MICS, MICS), dtype=np.complex128)
     for di in range(n_dir):
+        # Capon noise model: average outer products of non-look ATFs.
+        # Including the look ATF in Γ (previous default) dilutes null depth and
+        # is a common reason IR-based MVDR polar plots look nearly omnidirectional.
+        if exclude_look_from_noise and n_dir > 1:
+            indices = [j for j in range(n_dir) if j != di]
+        else:
+            indices = list(range(n_dir))
+        p = 1.0 / float(len(indices))
+        for k in range(n_bins):
+            acc = np.zeros((MICS, MICS), dtype=np.complex128)
+            for dj in indices:
+                h = h_all[dj, k, :][:, None]
+                acc += p * (h @ h.conj().T)
+            acc += self_noise * np.eye(MICS)
+            gamma[k] = 0.5 * (acc + acc.conj().T)
+
         for k in range(n_bins):
             if not valid[di, k]:
                 d = d_all[di, k, :]
@@ -607,6 +616,7 @@ def _compile_manifest(args: argparse.Namespace) -> None:
         max_weight_norm=float(manifest["max_weight_norm"]),
         self_noise=float(manifest["self_noise"]),
         conditioning_hash_bytes=cond_hash,
+        exclude_look_from_noise=bool(manifest.get("exclude_look_from_noise", True)),
     )
     profile["synthetic"] = False
     profile["geometry_id"] = str(manifest["geometry_id"])

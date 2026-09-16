@@ -294,13 +294,18 @@ void TestMvdrNullsOffAxisInterferer()
 {
   constexpr std::uint32_t kFs = 16000;
   constexpr std::size_t kFrames = 8192;
+  constexpr float kDistanceM = 0.45F;
   const auto geometry = BuildGeometry();
+  auto steering = BuildSteering();
+  steering.source_distance_m = kDistanceM;
   const auto target_src = sonitude::tests::support::GenerateSine(kFrames, kFs, 700.0);
   const auto interf_src = sonitude::tests::support::GenerateSine(kFrames, kFs, 1100.0);
-  auto mic = sonitude::tests::support::GeneratePlaneWave(
-      target_src, geometry, kFs, 0, 0.0F, 0.0F, 343.0F);
-  const auto interf = sonitude::tests::support::GeneratePlaneWave(
-      interf_src, geometry, kFs, 0, 90.0F, 0.0F, 343.0F);
+  auto mic = sonitude::tests::support::GenerateSphericalPointSource(
+      target_src, geometry, kFs, steering.reference_mic_index, 0.0F, 0.0F, kDistanceM,
+      steering.speed_of_sound_mps);
+  const auto interf = sonitude::tests::support::GenerateSphericalPointSource(
+      interf_src, geometry, kFs, steering.reference_mic_index, 90.0F, 0.0F, kDistanceM,
+      steering.speed_of_sound_mps);
   for (std::size_t i = 0; i < kFrames; ++i)
   {
     for (std::size_t ch = 0; ch < sonitude::audio::kMicChannels; ++ch)
@@ -310,7 +315,7 @@ void TestMvdrNullsOffAxisInterferer()
   }
 
   sonitude::dsp::MvdrBeamformer bf;
-  bf.configure(geometry, BuildSteering(), BuildCalibration(), kFs, kFrames);
+  bf.configure(geometry, steering, BuildCalibration(), kFs, kFrames);
   bf.setTarget({0.0F, 0.0F});
   std::vector<float> out(kFrames, 0.0F);
   bf.process(mic, out);

@@ -6,7 +6,8 @@ algorithm (via sonitude_wav_replay) at a sweep of candidate azimuths against
 one recording, measures the beamformed output energy at each candidate, and
 reports the azimuth of maximum energy as a measured "response peak" —
 i.e. the direction the beamformer's own gain pattern favors most for this
-signal, given its actual mic geometry and delay-and-sum weights.
+signal, given its actual mic geometry and near-field MVDR weights
+(delay-and-sum is not the primary spatial backend).
 
 This is an energy-based beam-response sweep, not a directional estimate from
 an independent DOA algorithm — no such component exists in the pipeline (see
