@@ -35,7 +35,7 @@ $OutputSR = 48000
 # ONNX Runtime threading. Pi 5 has 4 cores; keep intra <= cores-1 so the
 # PortAudio output callback thread can schedule and hold its GIL slot,
 # otherwise you will hit the ALSA xrun cascade the moment real signal
-# arrives. See PiSetup_BringUp.md §7a.
+# arrives. See edge/rpi5/PiSetup_BringUp.md §7a.
 $IntraOpThreads = 3
 $InterOpThreads = 1
 # Output ring-buffer depth in model hops. 4 = lowest latency, 8 = jitter-tolerant.

@@ -2,6 +2,9 @@
 
 This folder contains scripts for exporting the streaming Sound Bubble model to ONNX, benchmarking ONNX Runtime on CPU, and running the live 6-channel inference pipeline from Pico USB audio input.
 
+**Field bring-up / update after merges:** see [`rpi5/PiSetup_BringUp.md`](rpi5/PiSetup_BringUp.md)
+(Sound Bubble bootstrap, Sonitude C++ rebuild on the Pi, ALSA device selection, RT threading).
+
 ## 1) Install dependencies
 
 ```bash
