@@ -12,7 +12,9 @@
 Thumbs.db
 .DS_Store
 
-# Test bench (testbench/) — Python runtime artifacts and generated test data
+# Python runtime
+__pycache__/
+*.pyc
 testbench/.venv/
 testbench/venv/
 testbench/__pycache__/
