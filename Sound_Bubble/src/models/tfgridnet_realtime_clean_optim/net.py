@@ -23,7 +23,8 @@ class Net(nn.Module):
                  use_attn=False, lookahead=True, local_atten_len=100,
                  E = 4, chunk_causal=False, num_src = 1,
                  spectral_masking=False, use_first_ln=False, merge_method = "None",
-                 directional = False, conv_lstm = True, lstm_down=5, fb_type='stft'):
+                 directional = False, conv_lstm = True, lstm_down=5, fb_type='stft',
+                 count_distance_head=None, distance_head=None, speaker_head=None):
         super(Net, self).__init__()
         self.stft_chunk_size = stft_chunk_size
         self.stft_pad_size = stft_pad_size
@@ -39,7 +40,16 @@ class Net(nn.Module):
         
         nfreqs = self.nfft//2 + 1
 
-        # TF-GridNet        
+        # Legacy aux-head names removed; reject stale configs.
+        if distance_head is not None and distance_head.get("enabled", True):
+            raise ValueError(
+                "distance_head is removed. Use count_distance_head for combined speaker count + distance."
+            )
+        if speaker_head is not None and speaker_head.get("enabled", True):
+            raise ValueError(
+                "speaker_head is renamed to count_distance_head (combined speaker count + distance)."
+            )
+
         self.tfgridnet = TFGridNet(None,
                                    n_srcs=num_src,
                                    n_fft=self.nfft,
@@ -62,7 +72,8 @@ class Net(nn.Module):
                                    directional = directional,
                                    conv_lstm = conv_lstm,
                                    lstm_down=lstm_down,
-                                   fb_type=fb_type)
+                                   fb_type=fb_type,
+                                   count_distance_head=count_distance_head)
 
     def init_buffers(self, batch_size, device):
         return self.tfgridnet.init_buffers(batch_size, device)
@@ -73,13 +84,18 @@ class Net(nn.Module):
             pad_size = (self.stft_back_pad, self.stft_pad_size) if self.lookahead else (0, 0)
             x, mod = mod_pad(x, chunk_size=self.stft_chunk_size, pad=pad_size)
 
-        x, next_state = self.tfgridnet(x, input_state)
+        pred = self.tfgridnet(x, input_state)
+        if len(pred) == 2:
+            x, next_state = pred
+            aux_outputs = None
+        else:
+            x, next_state, aux_outputs = pred
         # x = x[..., : -self.stft_pad_size]
         
         if mod != 0:
             x = x[:, :, :-mod]
 
-        return x, next_state
+        return x, next_state, aux_outputs
 
     def forward(self, inputs, input_state = None, pad=True):
         x = inputs['mixture']
@@ -87,9 +103,11 @@ class Net(nn.Module):
         if input_state is None:
             input_state = self.init_buffers(x.shape[0], x.device)
 
-        x, next_state = self.predict(x, input_state, pad)
-
-        return {'output': x, 'next_state': next_state}
+        x, next_state, aux_outputs = self.predict(x, input_state, pad)
+        outputs = {'output': x, 'next_state': next_state}
+        if aux_outputs is not None:
+            outputs.update(aux_outputs)
+        return outputs
 
 if __name__ == "__main__":
     model_params = {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -27,6 +28,16 @@ class RuntimeContract:
     source_run_dir: Optional[str] = None
     source_checkpoint: Optional[str] = None
     trained_epochs: Optional[int] = None
+    distance_head_enabled: Optional[bool] = None
+    distance_head_trained: Optional[bool] = None
+    distance_valid_threshold: Optional[float] = None
+    distance_update_interval_s: Optional[float] = None
+    distance_history_tau_s: Optional[float] = None
+    count_head_enabled: Optional[bool] = None
+    count_head_trained: Optional[bool] = None
+    count_classes: Optional[list[str]] = None
+    count_min_confidence: Optional[float] = None
+    count_history_tau_s: Optional[float] = None
 
 
 def from_training_params(
@@ -47,6 +58,22 @@ def from_training_params(
     model_class = str(params["pl_module_args"].get("model") or "") or None
     dis_threshold_raw = (params.get("train_data_args") or {}).get("dis_threshold")
     dis_threshold = float(dis_threshold_raw) if dis_threshold_raw is not None else None
+    distance_cfg = (model_params.get("distance_head") or {})
+    distance_head_enabled = bool(distance_cfg.get("enabled", False))
+    distance_update_interval_s = model_chunk / max(1, model_sr)
+    distance_history_tau_s = float(distance_cfg.get("ema_tau_s", 1.0)) if distance_head_enabled else None
+    distance_valid_threshold = float(distance_cfg.get("valid_threshold", 0.5)) if distance_head_enabled else None
+    has_ckpt = bool(source_checkpoint and os.path.isfile(source_checkpoint))
+    distance_head_trained = bool(
+        distance_head_enabled and has_ckpt and trained_epochs is not None and int(trained_epochs) >= 0
+    )
+    count_cfg = (model_params.get("count_head") or {})
+    count_head_enabled = bool(count_cfg.get("enabled", False))
+    count_head_trained = bool(
+        count_head_enabled and has_ckpt and trained_epochs is not None and int(trained_epochs) >= 0
+    )
+    count_min_confidence = float(count_cfg.get("min_confidence", 0.6)) if count_head_enabled else None
+    count_history_tau_s = float(count_cfg.get("ema_tau_s", 0.5)) if count_head_enabled else None
     return RuntimeContract(
         model_sr=model_sr,
         model_num_ch=model_num_ch,
@@ -63,6 +90,16 @@ def from_training_params(
         source_run_dir=source_run_dir,
         source_checkpoint=source_checkpoint,
         trained_epochs=trained_epochs,
+        distance_head_enabled=distance_head_enabled,
+        distance_head_trained=distance_head_trained if distance_head_enabled else None,
+        distance_valid_threshold=distance_valid_threshold,
+        distance_update_interval_s=distance_update_interval_s if distance_head_enabled else None,
+        distance_history_tau_s=distance_history_tau_s,
+        count_head_enabled=count_head_enabled,
+        count_head_trained=count_head_trained if count_head_enabled else None,
+        count_classes=["0", "1", "2+"] if count_head_enabled else None,
+        count_min_confidence=count_min_confidence,
+        count_history_tau_s=count_history_tau_s,
     )
 
 
@@ -96,4 +133,14 @@ def load_contract(path: str | Path) -> RuntimeContract:
         source_run_dir=payload.get("source_run_dir"),
         source_checkpoint=payload.get("source_checkpoint"),
         trained_epochs=int(ep) if ep is not None else None,
+        distance_head_enabled=payload.get("distance_head_enabled"),
+        distance_head_trained=payload.get("distance_head_trained"),
+        distance_valid_threshold=float(payload["distance_valid_threshold"]) if payload.get("distance_valid_threshold") is not None else None,
+        distance_update_interval_s=float(payload["distance_update_interval_s"]) if payload.get("distance_update_interval_s") is not None else None,
+        distance_history_tau_s=float(payload["distance_history_tau_s"]) if payload.get("distance_history_tau_s") is not None else None,
+        count_head_enabled=payload.get("count_head_enabled"),
+        count_head_trained=payload.get("count_head_trained"),
+        count_classes=[str(x) for x in payload.get("count_classes", [])] if payload.get("count_classes") is not None else None,
+        count_min_confidence=float(payload["count_min_confidence"]) if payload.get("count_min_confidence") is not None else None,
+        count_history_tau_s=float(payload["count_history_tau_s"]) if payload.get("count_history_tau_s") is not None else None,
     )

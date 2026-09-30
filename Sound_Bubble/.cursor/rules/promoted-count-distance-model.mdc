@@ -1,0 +1,25 @@
+---
+description: Promote optim_pretrain_sonitude_dist_count_1_5m as current Sound Bubble count/distance model; ignore runs/old
+alwaysApply: true
+---
+
+# Promoted model for Sound Bubble count + distance
+
+## Current promoted checkpoint
+
+- **Path:** `runs/optim_pretrain_sonitude_dist_count_1_5m`
+- **Composition:** epoch-93 1.5 m audio backbone + epoch-46 count/distance head (assembled transplant)
+- **Former path:** `runs/ep93_audio_ep46_heads` (renamed; do not use the old name for new work)
+
+## Rules for future work
+
+1. **Default init / eval / export / demos / deployment** to `runs/optim_pretrain_sonitude_dist_count_1_5m` unless the user names another run.
+2. **Do not** treat anything under `runs/old/` as current (deferred stopband experiments).
+3. New training iterations should typically **`init_ckpt` from** `runs/optim_pretrain_sonitude_dist_count_1_5m/checkpoints/best.pt`.
+4. Treat this as the conceptual improved Sonitude 1.5 m model for further training and deployment.
+
+## Not promoted (context only)
+
+- `runs/old/*` — deferred stopband / failed recover paths
+- `runs/archived_stopband_v2_ep46` — ep46 weights archive for head reuse only
+- `runs/count_distance_head_optim_1_5m_suppress_v1` — experimental finetune; only promote if eval beats the promoted model and the user agrees

@@ -1,0 +1,19 @@
+C:\Users\darre\AppData\Local\Programs\Python\Python311\Lib\site-packages\torchmetrics\utilities\imports.py:22: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import DistributionNotFound, get_distribution
+  0%|          | 0/750 [00:00<?, ?it/s]Traceback (most recent call last):
+  File "C:\Users\darre\Sound_Bubble_optim_distance\src\train_pt.py", line 174, in train
+    train_loss = train_epoch(hl_module, train_loader, device)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\darre\Sound_Bubble_optim_distance\src\training\tain_val.py", line 65, in train_epoch
+    for batch_idx, batch in enumerate(train_loader):
+  File "C:\Users\darre\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\utils\data\dataloader.py", line 741, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "C:\Users\darre\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\utils\data\dataloader.py", line 1548, in _next_data
+    return self._process_data(data, worker_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\darre\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\utils\data\dataloader.py", line 1586, in _process_data
+    data.reraise()
+  File "C:\Users\darre\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\_utils.py", line 785, in reraise
+    raise exception
+soundfile.LibsndfileError: <exception str() failed>

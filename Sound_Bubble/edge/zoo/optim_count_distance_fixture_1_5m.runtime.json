@@ -1,0 +1,28 @@
+{
+  "model_sr": 24000,
+  "model_num_ch": 6,
+  "model_chunk": 192,
+  "model_pad": 96,
+  "frame_len": 288,
+  "expected_input_channels": 8,
+  "expected_channel_map": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "notes": "Auto-generated from experiment config used during ONNX export.",
+  "model_class": "src.models.tfgridnet_realtime_clean_optim.net.Net",
+  "dis_threshold": 1.5,
+  "source_config": "C:\\Users\\darre\\Sound_Bubble_optim_distance\\real_experiments\\count_distance_head_optim_1_5m.json",
+  "trained_epochs": 0,
+  "count_distance_head_enabled": true,
+  "count_distance_head_trained": false,
+  "speaker_num_slots": 2,
+  "speaker_active_threshold": 0.5,
+  "speaker_update_interval_s": 0.008,
+  "speaker_fast_tau_s": 0.35,
+  "speaker_slow_tau_s": 1.2
+}
