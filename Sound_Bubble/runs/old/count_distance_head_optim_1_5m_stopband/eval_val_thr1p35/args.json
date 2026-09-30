@@ -1,0 +1,12 @@
+{
+  "test_dir": "C:\\Users\\darre\\Sound_Bubble\\datasets\\syn_libri_edge_1_35m_ls\\val",
+  "baseline_run_dir": "runs\\count_distance_head_optim_1_5m",
+  "head_run_dir": "runs\\count_distance_head_optim_1_5m_stopband",
+  "output_dir": "runs\\count_distance_head_optim_1_5m_stopband\\eval_val_thr1p35",
+  "distance_threshold": 1.35,
+  "sr": 24000,
+  "vad_threshold_db": -35.0,
+  "active_threshold": 0.5,
+  "num_slots": 2,
+  "use_cuda": true
+}

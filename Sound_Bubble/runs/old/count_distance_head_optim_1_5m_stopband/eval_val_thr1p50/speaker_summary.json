@@ -1,0 +1,22 @@
+{
+  "samples": 400,
+  "count_distance_head_available": true,
+  "count_frame_accuracy": 0.2725,
+  "count_clip_accuracy": 0.2725,
+  "slot_distance_metrics_available": false,
+  "slot_distance_frames_evaluated": 0,
+  "slot_distance_mae_m": null,
+  "slot_distance_rmse_m": null,
+  "slot_distance_bias_m": null,
+  "false_active_rate_zero_target": 1.0,
+  "false_count_positive_rate_zero_target": 1.0,
+  "max_audio_waveform_abs_diff": 0.8143706917762756,
+  "mean_abs_sisdri_delta_db": 12.710947233631655,
+  "max_abs_sisdri_delta_db": 46.13353490829468,
+  "baseline_run_dir": "C:\\Users\\darre\\Sound_Bubble_optim_distance\\runs\\count_distance_head_optim_1_5m",
+  "head_run_dir": "C:\\Users\\darre\\Sound_Bubble_optim_distance\\runs\\count_distance_head_optim_1_5m_stopband",
+  "distance_threshold": 1.5,
+  "vad_threshold_db": -35.0,
+  "active_threshold": 0.5,
+  "num_slots": 2
+}

@@ -1,0 +1,95 @@
+{
+    "project_name": "SoundBubble_CountDistanceHead_Optim_StopbandNudge",
+    "pl_module": "src.hl_modules.distance_based_hl_module.PLModule",
+    "pl_module_args": {
+        "metrics": ["snr_i", "si_snr_i", "si_sdr_i"],
+        "model": "src.models.tfgridnet_realtime_clean_optim.net.Net",
+        "init_ckpt": "runs/count_distance_head_optim_1_5m/checkpoints/best.pt",
+        "model_params": {
+            "stft_chunk_size": 192,
+            "stft_pad_size": 96,
+            "num_ch": 6,
+            "D": 16,
+            "L": 4,
+            "I": 1,
+            "J": 1,
+            "B": 3,
+            "H": 64,
+            "E": 2,
+            "conv_lstm": true,
+            "lstm_down": 5,
+            "local_atten_len": 50,
+            "use_attn": false,
+            "lookahead": true,
+            "chunk_causal": true,
+            "use_first_ln": true,
+            "merge_method": "early_cat",
+            "count_distance_head": {
+                "enabled": true,
+                "hidden_dim": 32,
+                "num_slots": 2,
+                "fast_tau_s": 0.35,
+                "slow_tau_s": 1.2,
+                "sample_rate": 24000,
+                "active_threshold": 0.5
+            }
+        },
+        "count_distance_head": {
+            "enabled": true,
+            "freeze_backbone": false,
+            "w_count": 0.5,
+            "w_distance": 0.5,
+            "w_activity": 0.1,
+            "vad_threshold_db": -35.0
+        },
+        "samples_per_speaker_number": 5,
+        "optimizer": "torch.optim.Adam",
+        "optimizer_params": {
+            "lr": 0.0001
+        },
+        "loss": "src.losses.SNRLP.SNRLPLoss",
+        "loss_params": {
+            "snr_loss_name": "snr",
+            "neg_weight": 100
+        },
+        "scheduler": "torch.optim.lr_scheduler.ReduceLROnPlateau",
+        "scheduler_params": {
+            "mode": "min",
+            "patience": 5,
+            "factor": 0.5,
+            "min_lr": 1e-6
+        },
+        "sr": 24000,
+        "grad_clip": 1
+    },
+    "train_dataset": "src.datasets.general_multisrc_dataset_with_perturbations.Dataset",
+    "train_data_args": {
+        "dataset_dirs": [
+            {
+                "path": "C:/Users/darre/Sound_Bubble/datasets/syn_libri_edge_1_35m/train",
+                "max_samples": 3000
+            }
+        ],
+        "dis_threshold": 1.35,
+        "mic_config": ["mic00", "mic01", "mic02", "mic03", "mic04", "mic05"],
+        "downsample": 1,
+        "perturbations": []
+    },
+    "val_dataset": "src.datasets.general_multisrc_dataset_with_perturbations.Dataset",
+    "val_data_args": {
+        "dataset_dirs": [
+            {
+                "path": "C:/Users/darre/Sound_Bubble/datasets/syn_libri_edge_1_35m/val",
+                "max_samples": 400
+            }
+        ],
+        "dis_threshold": 1.35,
+        "prob_neg": 0,
+        "mic_config": ["mic00", "mic01", "mic02", "mic03", "mic04", "mic05"],
+        "downsample": 1
+    },
+    "epochs": 20,
+    "batch_size": 4,
+    "eval_batch_size": 4,
+    "num_workers": 4
+}

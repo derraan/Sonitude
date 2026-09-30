@@ -1,0 +1,26 @@
+---
+description: Active vs deferred train/val Python paths for Sonitude 1.5 m work
+alwaysApply: true
+---
+
+# Train / val Python layout
+
+## Active (use these)
+
+- `src/train_pt.py`, `src/training/tain_val.py`
+- `src/hl_modules/distance_based_hl_module.py`
+- `src/datasets/general_multisrc_dataset_with_perturbations.py`
+- `src/datasets/perturbations/*`
+- `src/validation/distance_sweep_dbfs.py`, `src/eval_count_distance.py`
+- `scripts/distance_sweep_dbfs.py`, `scripts/generate_libri_edge_dataset.py`
+- `generate_adaptive_dataset.py` (dataset generation)
+- Configs: `real_experiments/count_distance_head_optim_1_5m_suppress_v1.json`, `count_distance_head_optim_1_5m.json`
+
+## Deferred (do not use for new work)
+
+- `src/old/**` — legacy eval/dataset/print/visualize scripts
+- `helpers/old/**`, `scripts/old/**`
+- `real_experiments/old/**`, `syn_experiments/old/**`
+- `runs/old/**` — deferred checkpoints
+
+Promoted model: `runs/optim_pretrain_sonitude_dist_count_1_5m`

@@ -48,6 +48,15 @@ def _dis_embed_tensor(radius: float, batch_size: int) -> torch.Tensor:
     return row.unsqueeze(0).expand(batch_size, -1).contiguous()
 
 
+def _has_distance_head(model: torch.nn.Module) -> bool:
+    tfgridnet = getattr(model, "tfgridnet", None)
+    return bool(getattr(tfgridnet, "distance_head_enabled", False))
+
+def _has_count_head(model: torch.nn.Module) -> bool:
+    tfgridnet = getattr(model, "tfgridnet", None)
+    return bool(getattr(tfgridnet, "count_head_enabled", False))
+
+
 def _tokenized_sort_key(name: str) -> list[Any]:
     parts = re.split(r"(\d+)", name)
     key: list[Any] = []
@@ -115,11 +124,20 @@ class StreamingONNXWrapper(torch.nn.Module):
     one-hot `dis_embed` tensor passed into the model's inputs dict, which keeps
     the radius selectable at ONNX inference time instead of baking it in."""
 
-    def __init__(self, model: torch.nn.Module, state_layout: StateLayout, distance_aware: bool = False) -> None:
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        state_layout: StateLayout,
+        distance_aware: bool = False,
+        include_distance_outputs: bool = False,
+        include_count_outputs: bool = False,
+    ) -> None:
         super().__init__()
         self.model = model
         self.state_layout = state_layout
         self.distance_aware = bool(distance_aware)
+        self.include_distance_outputs = bool(include_distance_outputs)
+        self.include_count_outputs = bool(include_count_outputs)
 
     def _assemble_state(self, state_tensors: tuple[torch.Tensor, ...]) -> dict[str, Any]:
         input_state: dict[str, Any] = {}
@@ -134,6 +152,21 @@ class StreamingONNXWrapper(torch.nn.Module):
 
     def _pack_output(self, outputs: dict[str, Any]) -> tuple[torch.Tensor, ...]:
         out_tensors: list[torch.Tensor] = [outputs["output"]]
+        if self.include_distance_outputs:
+            if "distance_m" not in outputs or "distance_valid" not in outputs:
+                raise RuntimeError(
+                    "Model is configured to export distance outputs, but forward output lacks "
+                    "distance_m/distance_valid."
+                )
+            out_tensors.append(outputs["distance_m"])
+            out_tensors.append(outputs["distance_valid"])
+        if self.include_count_outputs:
+            if "count_probs" not in outputs:
+                raise RuntimeError(
+                    "Model is configured to export count outputs, but forward output lacks "
+                    "count_probs."
+                )
+            out_tensors.append(outputs["count_probs"])
         next_state = outputs["next_state"]
         for path in self.state_layout.paths:
             node: Any = next_state
@@ -255,16 +288,26 @@ def main() -> None:
         raise ValueError("frame_len must be > 0.")
 
     distance_aware = _is_distance_aware(model, params)
+    has_distance_head = _has_distance_head(model)
+    has_count_head = _has_count_head(model)
     supported_radii = sorted(DIS_EMBED_ONEHOT.keys()) if distance_aware else None
 
     print(f"[info] model source: {source}")
     print(f"[info] channels={model_num_ch}, chunk={chunk_size}, pad={pad_size}, frame_len={frame_len}")
     print(f"[info] distance_aware={distance_aware}"
           + (f" (supported_radii={supported_radii}, traced @ {DEFAULT_EXPORT_RADIUS}m)" if distance_aware else ""))
+    print(f"[info] distance_head_outputs={has_distance_head}")
+    print(f"[info] count_head_outputs={has_count_head}")
 
     template_state = model.init_buffers(args.batch_size, torch.device("cpu"))
     layout = StateLayout(template_state)
-    wrapper = StreamingONNXWrapper(model, layout, distance_aware=distance_aware).eval()
+    wrapper = StreamingONNXWrapper(
+        model,
+        layout,
+        distance_aware=distance_aware,
+        include_distance_outputs=has_distance_head,
+        include_count_outputs=has_count_head,
+    ).eval()
 
     dummy_mixture = torch.randn(args.batch_size, model_num_ch, frame_len, dtype=torch.float32)
     dummy_state = layout.flatten(template_state)
@@ -275,7 +318,12 @@ def main() -> None:
     else:
         dummy_inputs = (dummy_mixture, *dummy_state)
         input_names = ["mixture"] + [f"state_{i}" for i in range(layout.num_tensors)]
-    output_names = ["output"] + [f"next_state_{i}" for i in range(layout.num_tensors)]
+    output_names = ["output"]
+    if has_distance_head:
+        output_names.extend(["distance_m", "distance_valid"])
+    if has_count_head:
+        output_names.extend(["count_probs"])
+    output_names.extend([f"next_state_{i}" for i in range(layout.num_tensors)])
 
     # Opset>=11 + dynamic frame_len on a jit-traced streaming wrapper can hit
     # torch.onnx symbolic_cat AssertionError on some torch builds (especially
@@ -289,9 +337,19 @@ def main() -> None:
             "mixture": {0: "batch"},
             "output": {0: "batch"},
         }
+        if has_distance_head:
+            dynamic_axes["distance_m"] = {0: "batch"}
+            dynamic_axes["distance_valid"] = {0: "batch"}
+        if has_count_head:
+            dynamic_axes["count_probs"] = {0: "batch"}
         if allow_dynamic_frame:
             dynamic_axes["mixture"][2] = "frame_len"
             dynamic_axes["output"][2] = "out_len"
+            if has_distance_head:
+                dynamic_axes["distance_m"][1] = "tf_frames"
+                dynamic_axes["distance_valid"][1] = "tf_frames"
+            if has_count_head:
+                dynamic_axes["count_probs"][1] = "tf_frames"
         elif distance_aware and not args.fixed_frame_len:
             print(
                 "[warn] distance-aware export: omitting dynamic frame_len axes "
@@ -330,6 +388,7 @@ def main() -> None:
                 opset_version=opset_v,
                 input_names=input_names,
                 output_names=output_names,
+                dynamo=False,
                 **kwargs,
             )
         except Exception as exc:
@@ -346,6 +405,7 @@ def main() -> None:
                 opset_version=opset_v,
                 input_names=input_names,
                 output_names=output_names,
+                dynamo=False,
                 operator_export_type=torch.onnx.OperatorExportTypes.ONNX_ATEN_FALLBACK,
                 **kwargs,
             )
@@ -397,7 +457,18 @@ def main() -> None:
                 else:
                     torch_outs = wrapper(mixture_t, *torch_state)
                 torch_output = torch_outs[0].detach().cpu().numpy()
-                torch_next_state = [t.detach().cpu().numpy() for t in torch_outs[1:]]
+                head_offset = 1
+                torch_distance_m = None
+                torch_distance_valid = None
+                torch_count_probs = None
+                if has_distance_head:
+                    torch_distance_m = torch_outs[1].detach().cpu().numpy()
+                    torch_distance_valid = torch_outs[2].detach().cpu().numpy()
+                    head_offset = 3
+                if has_count_head:
+                    torch_count_probs = torch_outs[head_offset].detach().cpu().numpy()
+                    head_offset += 1
+                torch_next_state = [t.detach().cpu().numpy() for t in torch_outs[head_offset:]]
 
                 ort_inputs = {"mixture": mixture_np}
                 if distance_aware:
@@ -405,11 +476,35 @@ def main() -> None:
                 for i, state_array in enumerate(np_state):
                     ort_inputs[f"state_{i}"] = state_array
                 ort_outs = session.run(None, ort_inputs)
-                ort_output = ort_outs[0]
-                ort_next_state = ort_outs[1:]
+                ort_map = {name: value for name, value in zip(output_names, ort_outs)}
+                ort_output = ort_map["output"]
+                ort_next_state = [ort_map[f"next_state_{i}"] for i in range(layout.num_tensors)]
 
                 tag = f"{radius}m." if distance_aware else ""
                 _assert_allclose(f"{tag}frame{frame_idx}.output", torch_output, ort_output, args.atol, args.rtol)
+                if has_distance_head:
+                    _assert_allclose(
+                        f"{tag}frame{frame_idx}.distance_m",
+                        torch_distance_m,
+                        ort_map["distance_m"],
+                        args.atol,
+                        args.rtol,
+                    )
+                    _assert_allclose(
+                        f"{tag}frame{frame_idx}.distance_valid",
+                        torch_distance_valid,
+                        ort_map["distance_valid"],
+                        args.atol,
+                        args.rtol,
+                    )
+                if has_count_head:
+                    _assert_allclose(
+                        f"{tag}frame{frame_idx}.count_probs",
+                        torch_count_probs,
+                        ort_map["count_probs"],
+                        args.atol,
+                        args.rtol,
+                    )
                 # Some models (especially distance-aware ones with recurrent-ish blocks)
                 # can show small-but-nontrivial numeric drift in the internal state
                 # tensors under ONNX export paths (opset 9, ATen fallback, etc.) even

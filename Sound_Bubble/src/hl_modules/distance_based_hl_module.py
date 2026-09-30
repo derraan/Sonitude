@@ -2,8 +2,32 @@ import os
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-import wandb
+try:
+    import wandb
+except ModuleNotFoundError:
+    class _WandbStub:
+        class Audio:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+        class Table:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+        class plot:
+            @staticmethod
+            def histogram(*args, **kwargs):
+                return {"type": "histogram", "args": args, "kwargs": kwargs}
+
+        @staticmethod
+        def init(*args, **kwargs):
+            raise RuntimeError("wandb is not installed in this environment.")
+
+    wandb = _WandbStub()
 import torch
 from numpy import mean
 from src.metrics.metrics import Metrics
@@ -24,11 +48,44 @@ class PLModule(object):
                  scheduler=None, scheduler_params=None,
                  loss=None, loss_params=None, 
                  metrics=[], init_ckpt=None,
+                 init_head_ckpt=None,
                  grad_clip = None,
                  use_dp=True,
                  val_log_interval=10, # Unused, only kept for compatibility TODO: Remove
-                 samples_per_speaker_number=3):
-        
+                 samples_per_speaker_number=3,
+                 count_distance_head=None,
+                 distance_head=None,
+                 speaker_head=None,
+                 distance_sweep_val=None):
+
+        if distance_head is not None and distance_head.get("enabled", False):
+            raise ValueError(
+                "distance_head is removed. Use count_distance_head for combined speaker count + distance."
+            )
+        if speaker_head is not None and speaker_head.get("enabled", False):
+            raise ValueError(
+                "speaker_head is renamed to count_distance_head (combined speaker count + distance)."
+            )
+
+        self.count_distance_head_cfg = count_distance_head or {}
+        self.count_distance_head_enabled = bool(self.count_distance_head_cfg.get('enabled', False))
+        self.distance_head_enabled = False
+
+        self.freeze_backbone = bool(self.count_distance_head_cfg.get('freeze_backbone', False))
+        self.count_loss_weight = float(self.count_distance_head_cfg.get('w_count', 1.0))
+        self.spk_distance_loss_weight = float(self.count_distance_head_cfg.get('w_distance', 1.0))
+        self.spk_activity_loss_weight = float(self.count_distance_head_cfg.get('w_activity', 0.2))
+        self.spk_vad_threshold_db = float(self.count_distance_head_cfg.get('vad_threshold_db', -35.0))
+        self.has_aux_heads = bool(self.count_distance_head_enabled)
+
+        model_params = dict(model_params)
+        if self.count_distance_head_enabled:
+            model_cd_cfg = dict(model_params.get("count_distance_head") or {})
+            model_cd_cfg.setdefault("enabled", True)
+            model_params["count_distance_head"] = model_cd_cfg
+            model_params.pop("distance_head", None)
+            model_params.pop("speaker_head", None)
+
         self.model = utils.import_attr(model)(**model_params)
         self.use_dp = use_dp
         if use_dp:
@@ -82,18 +139,46 @@ class PLModule(object):
                     _model = self.model
                 
                 mdl = FakeModel(_model)
-                mdl.load_state_dict(state)
+                if self.count_distance_head_enabled:
+                    missing, unexpected = mdl.load_state_dict(state, strict=False)
+                    missing_backbone = [k for k in missing if not self._is_head_key(k)]
+                    unexpected_backbone = [k for k in unexpected if not self._is_head_key(k)]
+                    if missing_backbone or unexpected_backbone:
+                        raise RuntimeError(
+                            "Backbone strict-load failed for Lightning init_ckpt. "
+                            f"Missing backbone keys: {missing_backbone[:5]}, "
+                            f"Unexpected backbone keys: {unexpected_backbone[:5]}"
+                        )
+                else:
+                    mdl.load_state_dict(state)
                 self.model = nn.DataParallel(mdl.model)
             else:
                 state = torch.load(init_ckpt)['model']
-                
-                if self.use_dp:
-                    self.model.module.load_state_dict(state)
-                else:
-                    self.model.load_state_dict(state)
+                self._load_init_state(state)
+
+        # Overlay count/distance head weights from a second checkpoint (e.g. ep93
+        # backbone + later head-only or joint-head checkpoint).
+        if init_head_ckpt is not None:
+            if not self.count_distance_head_enabled:
+                raise ValueError("init_head_ckpt requires count_distance_head.enabled=true")
+            head_blob = torch.load(init_head_ckpt, map_location="cpu")
+            head_state = head_blob["model"] if isinstance(head_blob, dict) and "model" in head_blob else head_blob
+            self._load_head_state(head_state)
+            print(f"Loaded count/distance head weights from {init_head_ckpt}")
+
+        self.distance_sweep_val_cfg = distance_sweep_val or {}
+        self.distance_sweep_val_enabled = bool(self.distance_sweep_val_cfg.get("enabled", False))
+
+        if self.freeze_backbone:
+            self._freeze_backbone_for_heads()
 
          # Initialize optimizer
-        self.optimizer = utils.import_attr(optimizer)(self.model.parameters(), **optimizer_params)
+        optim_params = self.model.parameters()
+        if self.freeze_backbone:
+            optim_params = [p for p in self.model.parameters() if p.requires_grad]
+            if len(optim_params) == 0:
+                raise RuntimeError("freeze_backbone=True but no trainable head parameters were found.")
+        self.optimizer = utils.import_attr(optimizer)(optim_params, **optimizer_params)
         self.optim_name = optimizer
         self.opt_params = optimizer_params
 
@@ -111,17 +196,106 @@ class PLModule(object):
         self.scheduler_params = scheduler_params
         
         self.epoch = 0
+
+    @staticmethod
+    def _is_count_distance_head_key(key: str) -> bool:
+        # Accept legacy speaker_head.* keys from older checkpoints.
+        return ("count_distance_head" in key) or ("speaker_head" in key)
+
+    @classmethod
+    def _is_head_key(cls, key: str) -> bool:
+        return cls._is_count_distance_head_key(key)
+
+    @staticmethod
+    def _remap_legacy_head_keys(state_dict: dict) -> dict:
+        """Map old module name speaker_head -> count_distance_head."""
+        return {
+            key.replace("speaker_head", "count_distance_head"): value
+            for key, value in state_dict.items()
+        }
+
+    def _inner_model(self):
+        return self.model.module if self.use_dp else self.model
+
+    def _load_init_state(self, state_dict):
+        model = self._inner_model()
+        state_dict = self._remap_legacy_head_keys(state_dict)
+        if not self.count_distance_head_enabled:
+            model.load_state_dict(state_dict)
+            return
+
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        missing_backbone = [k for k in missing if not self._is_head_key(k)]
+        unexpected_backbone = [k for k in unexpected if not self._is_head_key(k)]
+        if missing_backbone or unexpected_backbone:
+            raise RuntimeError(
+                "Backbone strict-load failed for init_ckpt. "
+                f"Missing backbone keys: {missing_backbone[:5]}, "
+                f"Unexpected backbone keys: {unexpected_backbone[:5]}"
+            )
+
+    def _load_head_state(self, state_dict):
+        """Load only count_distance_head / legacy speaker_head keys into the model."""
+        model = self._inner_model()
+        state_dict = self._remap_legacy_head_keys(state_dict)
+        head_only = {k: v for k, v in state_dict.items() if self._is_head_key(k)}
+        if not head_only:
+            raise RuntimeError("init_head_ckpt contained no count_distance_head / speaker_head keys.")
+        missing, unexpected = model.load_state_dict(head_only, strict=False)
+        missing_heads = [k for k in missing if self._is_head_key(k)]
+        if missing_heads:
+            raise RuntimeError(
+                "Head load incomplete for init_head_ckpt. "
+                f"Missing head keys: {missing_heads[:8]}"
+            )
+        unexpected_heads = [k for k in unexpected if self._is_head_key(k)]
+        if unexpected_heads:
+            raise RuntimeError(
+                "Unexpected head keys while loading init_head_ckpt: "
+                f"{unexpected_heads[:8]}"
+            )
+
+    def _freeze_backbone_for_heads(self):
+        total = 0
+        trainable = 0
+        for name, param in self.model.named_parameters():
+            is_head = self._is_head_key(name)
+            param.requires_grad = is_head
+            total += param.numel()
+            if is_head:
+                trainable += param.numel()
+        print(f"[aux_head] backbone frozen. trainable params: {trainable}/{total}")
+
+    def _compute_slot_activity_mask(
+        self,
+        spk_ref: torch.Tensor,
+        spk_valid: torch.Tensor,
+        num_frames: int,
+    ) -> torch.Tensor:
+        # spk_ref: [B, S, T_audio] -> [B, T_frames, S]
+        bsz, num_slots, _ = spk_ref.shape
+        ratio = 10.0 ** (self.spk_vad_threshold_db / 10.0)
+        power = spk_ref.pow(2).reshape(bsz * num_slots, 1, -1)
+        pooled = F.adaptive_avg_pool1d(power, num_frames).reshape(bsz, num_slots, num_frames)
+        peak = pooled.max(dim=-1, keepdim=True).values.clamp_min(1e-8)
+        active = pooled > (peak * ratio)
+        active = active & (spk_valid.unsqueeze(-1) > 0.0)
+        return active.float().permute(0, 2, 1)
     
     def load_state(self, path, map_location=None):
         state = torch.load(path, map_location=map_location)
+        model_state = self._remap_legacy_head_keys(state['model'])
 
         if self.use_dp:
-            self.model.module.load_state_dict(state['model'])
+            self.model.module.load_state_dict(model_state)
         else:
-            self.model.load_state_dict(state['model'])
+            self.model.load_state_dict(model_state)
         
         # Re-initialize optimizer
-        self.optimizer = utils.import_attr(self.optim_name)(self.model.parameters(), **self.opt_params)
+        optim_params = self.model.parameters()
+        if self.freeze_backbone:
+            optim_params = [p for p in self.model.parameters() if p.requires_grad]
+        self.optimizer = utils.import_attr(self.optim_name)(optim_params, **self.opt_params)
         
         # Re-initialize scheduler (Order might be important?)
         if self.scheduler is not None:
@@ -135,7 +309,7 @@ class PLModule(object):
         self.epoch = state['current_epoch']
         self.metric_values = state['metric_values']
         
-        if 'statistics' in self.statistics:
+        if 'statistics' in state:
             self.statistics = state['statistics']
 
     def dump_state(self, path):
@@ -171,6 +345,59 @@ class PLModule(object):
         return self.metric_values[epoch][metric]['epoch'] / \
             self.metric_values[epoch][metric]['num_elements']
 
+    def _try_get_avg_metric_at_epoch(self, metric, epoch=None, default=float('nan')):
+        try:
+            return self.get_avg_metric_at_epoch(metric, epoch=epoch)
+        except Exception:
+            return default
+
+    def _run_and_log_distance_sweep_val(self, best_path):
+        """Epoch-end LibriSpeech distance→dBFS sweep (validation monitor)."""
+        from src.validation.distance_sweep_dbfs import run_distance_sweep, write_sweep_csv
+
+        cfg = self.distance_sweep_val_cfg
+        device = next(self._inner_model().parameters()).device
+        # DataParallel forward expects the wrapped module.
+        model = self.model
+        sweep = run_distance_sweep(
+            model,
+            device=str(device),
+            speech_path=cfg.get(
+                "speech_path",
+                r"C:\Users\darre\Sound_Bubble\datasets\_speech_cache\5694-64038-0000.flac",
+            ),
+            distances=cfg.get("distances"),
+            rt60_list=cfg.get("rt60_list"),
+            target_in_dbfs=float(cfg.get("target_in_dbfs", -25.0)),
+            sr=int(cfg.get("sr", self.sr)),
+            dur_s=float(cfg.get("dur_s", 2.0)),
+        )
+        summary = sweep["summary"]
+        bubble_m = float(cfg.get("bubble_m", 1.5))
+        print(
+            "[VAL distance-dBFS sweep] "
+            f"0.5m={summary['out_dbfs_0_5m']:.1f}  "
+            f"0.8m={summary['out_dbfs_0_8m']:.1f}  "
+            f"1.0m={summary['out_dbfs_1_0m']:.1f}  "
+            f"1.2m={summary['out_dbfs_1_2m']:.1f}  "
+            f"1.5m={summary['out_dbfs_1_5m']:.1f}  "
+            f"2.0m={summary['out_dbfs_2_0m']:.1f}  "
+            f"3.0m={summary['out_dbfs_3_0m']:.1f}  "
+            f"pass-far={summary['passband_minus_far_db']:.1f}dB  "
+            f"edge(1.5->2.0)={summary['edge_drop_1_5_to_2_0_db']:.1f}dB  "
+            f"(bubble={bubble_m}m)"
+        )
+        for key, value in summary.items():
+            self.log_metric(f"val/sweep_{key}", float(value), batch_size=1, on_step=False, on_epoch=True)
+
+        run_dir = os.path.dirname(os.path.dirname(os.path.abspath(best_path)))
+        sweep_dir = os.path.join(run_dir, "val_distance_sweep")
+        os.makedirs(sweep_dir, exist_ok=True)
+        csv_path = os.path.join(sweep_dir, f"epoch_{self.epoch:03d}.csv")
+        write_sweep_csv(csv_path, sweep)
+        # Keep a rolling "latest" copy for quick inspection.
+        write_sweep_csv(os.path.join(sweep_dir, "latest.csv"), sweep)
+
     def on_epoch_end(self, best_path, wandb_run):
         assert self.epoch + 1 == len(self.metric_values), \
             "Current epoch must be equal to length of metrics (0-indexed)"
@@ -200,14 +427,33 @@ class PLModule(object):
         if save:
             print("Current checkpoint is the best! Saving it...")
             self.dump_state(best_path)
-        
-        val_loss = self.get_avg_metric_at_epoch('val/loss')
-        val_snr_i = self.get_avg_metric_at_epoch('val/snr_i')
-        val_si_snr_i = self.get_avg_metric_at_epoch('val/si_snr_i')
 
-        print(f'Val loss: {val_loss:.02f}')
-        print(f'Val SNRi: {val_snr_i:.02f}dB')
-        print(f'Val SI-SDRi: {val_si_snr_i:.02f}dB')
+        if self.distance_sweep_val_enabled:
+            self._run_and_log_distance_sweep_val(best_path)
+        
+        val_loss = self._try_get_avg_metric_at_epoch('val/loss')
+        print(f'Val loss: {val_loss:.04f}')
+
+        if self.count_distance_head_enabled:
+            val_count_loss = self._try_get_avg_metric_at_epoch('val/count_loss')
+            val_count_acc = self._try_get_avg_metric_at_epoch('val/count_acc')
+            val_spk_distance_loss = self._try_get_avg_metric_at_epoch('val/spk_distance_loss')
+            val_spk_activity_loss = self._try_get_avg_metric_at_epoch('val/spk_activity_loss')
+            val_spk_distance_mae = self._try_get_avg_metric_at_epoch('val/spk_distance_mae')
+            print(f'Val count loss (CE): {val_count_loss:.04f}')
+            print(f'Val count acc: {val_count_acc:.04f}')
+            print(f'Val spk distance loss (SmoothL1): {val_spk_distance_loss:.04f}')
+            print(f'Val spk activity loss (BCE): {val_spk_activity_loss:.04f}')
+            print(f'Val spk distance MAE: {val_spk_distance_mae:.04f} m')
+
+        # Audio enhancement metrics are secondary for frozen-backbone aux-head runs.
+        if not (self.freeze_backbone and self.has_aux_heads):
+            val_snr_i = self._try_get_avg_metric_at_epoch('val/snr_i')
+            val_si_snr_i = self._try_get_avg_metric_at_epoch('val/si_snr_i')
+            print(f'Val SNRi: {val_snr_i:.02f}dB')
+            print(f'Val SI-SDRi: {val_si_snr_i:.02f}dB')
+        else:
+            print('(Frozen backbone: SNRi/SI-SDRi omitted; use audio parity eval if needed.)')
 
 
         def log_audio(run, key, samples, sr):
@@ -317,8 +563,97 @@ class PLModule(object):
         n_far_speakers = targets['num_interfering_speakers'].clone()
         num_noises = targets['num_noises'].clone()
 
-        # Compute loss
-        loss = self.loss_fn(est=est, gt=gt).mean()
+        # Compute base audio loss (always logged; only optimized when backbone is trainable).
+        audio_loss = self.loss_fn(est=est, gt=gt).mean()
+        loss = audio_loss
+        count_loss = est.new_tensor(0.0)
+        count_acc = est.new_tensor(0.0)
+        spk_distance_loss = est.new_tensor(0.0)
+        spk_distance_mae = est.new_tensor(0.0)
+        spk_activity_loss = est.new_tensor(0.0)
+
+        if self.count_distance_head_enabled:
+            required_keys = ("speaker_count_logits", "spk_distance_m")
+            for key in required_keys:
+                if key not in outputs:
+                    raise RuntimeError(f"Speaker head is enabled but model outputs miss {key}.")
+            for key in ("spk_distance_m", "spk_valid", "spk_ref"):
+                if key not in targets:
+                    raise RuntimeError(f"Speaker head is enabled but targets miss {key}.")
+
+            pred_count_logits = outputs["speaker_count_logits"]
+            pred_spk_distance = outputs["spk_distance_m"]
+            pred_spk_logit = outputs.get("spk_active_logit")
+            if pred_spk_logit is None:
+                pred_spk_valid = outputs.get("spk_active")
+                if pred_spk_valid is None:
+                    raise RuntimeError("Speaker head requires spk_active_logit or spk_active output.")
+                pred_spk_valid = pred_spk_valid.clamp(1e-6, 1.0 - 1e-6)
+                pred_spk_logit = torch.log(pred_spk_valid) - torch.log(1.0 - pred_spk_valid)
+
+            num_frames = pred_count_logits.shape[1]
+            num_slots = pred_spk_distance.shape[2]
+            gt_count = targets.get("num_target_speakers_clamped", torch.clamp(n_speakers, max=2)).long().to(pred_count_logits.device)
+            gt_count = gt_count.clamp_min(0).clamp_max(pred_count_logits.shape[-1] - 1)
+            gt_count_frames = gt_count.unsqueeze(1).expand(-1, num_frames)
+            count_loss = F.cross_entropy(
+                pred_count_logits.reshape(-1, pred_count_logits.shape[-1]),
+                gt_count_frames.reshape(-1),
+                reduction='mean',
+            )
+            pred_count = pred_count_logits.argmax(dim=-1)
+            count_acc = (pred_count == gt_count_frames).float().mean()
+
+            gt_spk_distance = targets["spk_distance_m"].float().to(pred_spk_distance.device)
+            gt_spk_valid = targets["spk_valid"].float().to(pred_spk_distance.device)
+            gt_spk_ref = targets["spk_ref"].float().to(pred_spk_distance.device)
+            if gt_spk_distance.shape[1] != num_slots:
+                raise RuntimeError(
+                    f"spk_distance_m slots ({gt_spk_distance.shape[1]}) != model slots ({num_slots})"
+                )
+            if gt_spk_valid.shape[1] != num_slots:
+                raise RuntimeError(
+                    f"spk_valid slots ({gt_spk_valid.shape[1]}) != model slots ({num_slots})"
+                )
+            if gt_spk_ref.shape[1] != num_slots:
+                raise RuntimeError(
+                    f"spk_ref slots ({gt_spk_ref.shape[1]}) != model slots ({num_slots})"
+                )
+
+            slot_activity = self._compute_slot_activity_mask(gt_spk_ref, gt_spk_valid, num_frames).to(pred_spk_distance.device)
+            distance_mask = slot_activity
+            gt_spk_distance_frames = gt_spk_distance.unsqueeze(1).expand(-1, num_frames, -1)
+            if distance_mask.sum() > 0:
+                # Optimisation loss (SmoothL1) — logged separately from MAE.
+                per_frame_dist = F.smooth_l1_loss(
+                    pred_spk_distance,
+                    gt_spk_distance_frames,
+                    reduction='none',
+                )
+                spk_distance_loss = (per_frame_dist * distance_mask).sum() / distance_mask.sum().clamp_min(1.0)
+                # Reporting metric vs GT slot distances (metres), same supervised frames.
+                per_frame_mae = (pred_spk_distance - gt_spk_distance_frames).abs()
+                spk_distance_mae = (per_frame_mae * distance_mask).sum() / distance_mask.sum().clamp_min(1.0)
+
+            spk_activity_loss = F.binary_cross_entropy_with_logits(
+                pred_spk_logit,
+                slot_activity,
+                reduction='mean',
+            )
+
+            if self.freeze_backbone:
+                loss = (
+                    self.count_loss_weight * count_loss
+                    + self.spk_distance_loss_weight * spk_distance_loss
+                    + self.spk_activity_loss_weight * spk_activity_loss
+                )
+            else:
+                loss = (
+                    audio_loss
+                    + self.count_loss_weight * count_loss
+                    + self.spk_distance_loss_weight * spk_distance_loss
+                    + self.spk_activity_loss_weight * spk_activity_loss
+                )
 
         est_detached = est.detach().clone()
         
@@ -326,6 +661,13 @@ class PLModule(object):
         with torch.no_grad():
             # Log loss
             self.log_metric(f'{step}/loss', loss.item(), batch_size=batch_size, on_step=(step == 'train'), on_epoch=True, prog_bar=True, sync_dist=True)
+            self.log_metric(f'{step}/audio_loss', audio_loss.item(), batch_size=batch_size, on_step=(step == 'train'), on_epoch=True, prog_bar=False, sync_dist=True)
+            if self.count_distance_head_enabled:
+                self.log_metric(f'{step}/count_loss', count_loss.item(), batch_size=batch_size, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+                self.log_metric(f'{step}/count_acc', count_acc.item(), batch_size=batch_size, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+                self.log_metric(f'{step}/spk_distance_loss', spk_distance_loss.item(), batch_size=batch_size, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+                self.log_metric(f'{step}/spk_distance_mae', spk_distance_mae.item(), batch_size=batch_size, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+                self.log_metric(f'{step}/spk_activity_loss', spk_activity_loss.item(), batch_size=batch_size, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
 
             # Log metrics
             for metric in self.metrics:

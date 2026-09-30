@@ -11,7 +11,6 @@ try:
     from espnet2.torch_utils.get_layer_from_string import get_layer
     from espnet2.enh.separator.abs_separator import AbsSeparator
 except ModuleNotFoundError:
-    # Fallback for environments where ESPnet is unavailable (e.g., Windows install issues).
     class AbsSeparator(nn.Module):
         pass
 
@@ -34,17 +33,13 @@ except ModuleNotFoundError:
             key = layer.lower()
             if key in _ACTIVATION_MAP:
                 return _ACTIVATION_MAP[key]
-
             if hasattr(nn, layer):
                 candidate = getattr(nn, layer)
                 if isinstance(candidate, type) and issubclass(candidate, nn.Module):
                     return candidate
-
             raise ValueError(f"Unsupported activation: {layer}")
-
         if isinstance(layer, type) and issubclass(layer, nn.Module):
             return layer
-
         raise TypeError(f"Activation must be string or nn.Module type, got {type(layer)}")
 
 from asteroid_filterbanks import make_enc_dec
@@ -86,15 +81,12 @@ def IPD_OMNX(real1, imag1, real2, imag2, norm, norm_ref, tol = 1e-6):
 
 
 def MC_features_OMNX(reals, imags, eps=1e-6):
-    r2 = reals[:, :1]
-    r1 = reals[:, 1:]
-    i2 = imags[:, :1]
-    i1 = imags[:, 1:]
+    r2, r1 = torch.split(reals, [1, reals.shape[1] - 1], dim=1)
+    i2, i1 = torch.split(imags, [1, reals.shape[1] - 1], dim=1)
     
     # Compute magnitude
     norm = torch.sqrt(torch.square(reals) + torch.square(imags))
-    norm_ref = norm[:, :1]
-    norm = norm[:, 1:]
+    norm_ref, norm = torch.split(norm, [1, norm.shape[1] - 1], dim=1)
 
     # Compute ILD
     ILD_m = torch.log10(torch.div(norm + eps, norm_ref + eps))
@@ -182,6 +174,91 @@ class LayerNormPermuted(nn.LayerNorm):
         x = x.permute(0, 3, 1, 2) # [B, C, T, F]
         return x
 
+
+class CountDistanceHead(nn.Module):
+    """Causal speaker set head with count logits and per-slot distance/activity."""
+
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int = 32,
+        num_slots: int = 2,
+        fast_tau_s: float = 0.35,
+        slow_tau_s: float = 1.2,
+        hop_samples: int = 192,
+        sample_rate: int = 24000,
+        min_distance_m: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        self.num_slots = int(num_slots)
+        self.hop_samples = int(hop_samples)
+        self.sample_rate = int(sample_rate)
+        self.fast_tau_s = float(max(1e-3, fast_tau_s))
+        self.slow_tau_s = float(max(1e-3, slow_tau_s))
+        self.min_distance_m = float(min_distance_m)
+
+        self.frame_proj = nn.Sequential(
+            nn.Linear(in_dim, self.hidden_dim),
+            nn.SiLU(),
+        )
+        self.count_proj = nn.Linear(self.hidden_dim, 3)  # 0 / 1 / 2+ speakers
+        self.distance_proj = nn.Linear(self.hidden_dim, self.num_slots)
+        self.activity_proj = nn.Linear(self.hidden_dim, self.num_slots)
+
+    def _ema_alpha(
+        self,
+        tau_s: float,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        # TFGridNet updates once per hop (192 samples ~= 8 ms at 24 kHz).
+        hop_sec = self.hop_samples / max(1.0, float(self.sample_rate))
+        alpha = math.exp(-hop_sec / tau_s)
+        return torch.tensor(alpha, device=device, dtype=dtype)
+
+    def forward(
+        self,
+        features: torch.Tensor,
+        prev_state: torch.Tensor,
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        # features: [B, C, T, F], prev_state: [B, 2 * hidden_dim]
+        pooled = features.mean(dim=3).transpose(1, 2)  # [B, T, C]
+        frame_latent = self.frame_proj(pooled)  # [B, T, hidden_dim]
+
+        fast_state, slow_state = torch.chunk(
+            prev_state.to(dtype=frame_latent.dtype), chunks=2, dim=1
+        )
+        fast_alpha = self._ema_alpha(self.fast_tau_s, frame_latent.device, frame_latent.dtype)
+        slow_alpha = self._ema_alpha(self.slow_tau_s, frame_latent.device, frame_latent.dtype)
+
+        fast_seq = []
+        slow_seq = []
+        for t in range(frame_latent.shape[1]):
+            frame_t = frame_latent[:, t]
+            fast_state = (fast_alpha * fast_state) + ((1.0 - fast_alpha) * frame_t)
+            slow_state = (slow_alpha * slow_state) + ((1.0 - slow_alpha) * frame_t)
+            fast_seq.append(fast_state)
+            slow_seq.append(slow_state)
+
+        fast_seq = torch.stack(fast_seq, dim=1)  # [B, T, H]
+        slow_seq = torch.stack(slow_seq, dim=1)  # [B, T, H]
+
+        count_logits = self.count_proj(fast_seq)  # [B, T, 3]
+        spk_active_logit = self.activity_proj(fast_seq)  # [B, T, S]
+        spk_distance_m = (
+            F.softplus(self.distance_proj(slow_seq)) + self.min_distance_m
+        )  # [B, T, S]
+
+        outputs = {
+            "speaker_count_logits": count_logits,
+            "spk_distance_m": spk_distance_m,
+            "spk_active_logit": spk_active_logit,
+            "spk_active": torch.sigmoid(spk_active_logit),
+        }
+        next_state = torch.cat([fast_state, slow_state], dim=1)
+        return outputs, next_state
+
 class TFGridNet(AbsSeparator):
     """Offline TFGridNet
 
@@ -248,7 +325,8 @@ class TFGridNet(AbsSeparator):
         merge_method = "None",
         directional = False,
         conv_lstm = True,
-        fb_type='stft'
+        fb_type='stft',
+        count_distance_head: Optional[dict] = None,
     ):
         super().__init__()
         self.n_srcs = n_srcs
@@ -269,6 +347,8 @@ class TFGridNet(AbsSeparator):
         self.lookback = look_back
         self.lookahead = self.istft_pad
         self.directional = directional
+        self.count_distance_head_enabled = bool(count_distance_head and count_distance_head.get("enabled", True))
+        self.count_distance_head_cfg = count_distance_head or {}
 
         # ISTFT overlap-add will affect this many chunks in the future
         self.istft_lookback = 1 + (self.istft_pad - 1) // self.istft_pad
@@ -332,6 +412,20 @@ class TFGridNet(AbsSeparator):
             )
 
         self.deconv = nn.ConvTranspose2d(emb_dim, n_srcs * 2, ks, padding=( self.t_ksize - 1, 1))
+        self.count_distance_head: Optional[CountDistanceHead]
+        if self.count_distance_head_enabled:
+            self.count_distance_head = CountDistanceHead(
+                in_dim=emb_dim,
+                hidden_dim=int(self.count_distance_head_cfg.get("hidden_dim", max(16, emb_dim))),
+                num_slots=int(self.count_distance_head_cfg.get("num_slots", 2)),
+                fast_tau_s=float(self.count_distance_head_cfg.get("fast_tau_s", 0.35)),
+                slow_tau_s=float(self.count_distance_head_cfg.get("slow_tau_s", 1.2)),
+                hop_samples=stride,
+                sample_rate=int(self.count_distance_head_cfg.get("sample_rate", 24000)),
+                min_distance_m=float(self.count_distance_head_cfg.get("min_distance_m", 0.0)),
+            )
+        else:
+            self.count_distance_head = None
     
     def init_buffers(self, batch_size, device):
         if self.merge_method == "None": 
@@ -350,8 +444,15 @@ class TFGridNet(AbsSeparator):
         for i in range(len(self.blocks)):
             gridnet_buffers[f'buf{i}'] = self.blocks[i].init_buffers(batch_size, device)
 
-        return dict(conv_buf=conv_buf, deconv_buf=deconv_buf,
-                    istft_buf=istft_buf, gridnet_bufs=gridnet_buffers)
+        state = dict(conv_buf=conv_buf, deconv_buf=deconv_buf,
+                     istft_buf=istft_buf, gridnet_bufs=gridnet_buffers)
+        if self.count_distance_head_enabled and self.count_distance_head is not None:
+            state["count_distance_head_buf"] = torch.zeros(
+                batch_size,
+                self.count_distance_head.hidden_dim * 2,
+                device=device,
+            )
+        return state
     
     def causal_decoder(self, batch):
         batch = batch.unfold(3, 1, 1).permute(0, 1, 3, 2, 4)
@@ -415,7 +516,6 @@ class TFGridNet(AbsSeparator):
         if self.merge_method == "None":
             batch = batch.transpose(2, 3) # [B, M, T, F]
             n_batch, _, n_frames, n_freqs = batch.shape # B, 2M, T, F
-            conv_buf = conv_buf.to(dtype=batch.dtype)
             batch = torch.cat(( conv_buf, batch), dim=2)
             conv_buf = batch[:, :,  -(self.t_ksize - 1):, :]
         
@@ -430,7 +530,6 @@ class TFGridNet(AbsSeparator):
             batch = batch.transpose(2, 3) # [B, M, T, F]
             n_batch, _, n_frames, n_freqs = batch.shape # B, 2M, T, F
             batch = batch
-            conv_buf = conv_buf.to(dtype=batch.dtype)
             batch = torch.cat(( conv_buf, batch), dim=2)
             conv_buf = batch[:, :,  -(self.t_ksize - 1):, :]
             
@@ -443,8 +542,19 @@ class TFGridNet(AbsSeparator):
             batch, gridnet_buf[f'buf{ii}'] = self.blocks[ii](batch, gridnet_buf[f'buf{ii}'])  # [B, -1, T, F]
         
         batch = batch.permute(0, 3, 1, 2) # [B, C, T, Q]
+        speaker_outputs = None
+        if self.count_distance_head_enabled and self.count_distance_head is not None:
+            count_distance_head_buf = input_state.get("count_distance_head_buf")
+            if count_distance_head_buf is None:
+                count_distance_head_buf = torch.zeros(
+                    batch.shape[0],
+                    self.count_distance_head.hidden_dim * 2,
+                    device=batch.device,
+                    dtype=batch.dtype,
+                )
+            speaker_outputs, count_distance_head_buf = self.count_distance_head(batch, count_distance_head_buf)
+            input_state["count_distance_head_buf"] = count_distance_head_buf
         
-        deconv_buf = deconv_buf.to(dtype=batch.dtype)
         batch = torch.cat(( deconv_buf, batch), dim=2)
         deconv_buf = batch[:, :,  -(self.t_ksize - 1):, :]
         
@@ -461,7 +571,6 @@ class TFGridNet(AbsSeparator):
             batch = batch * input_stft[:, :self.n_srcs] # First few channels only
         
         # Cat istft from previous chunks
-        istft_buf = istft_buf.to(dtype=batch.dtype)
         batch = torch.cat([istft_buf, batch], dim=3)
         istft_buf = batch[..., -self.istft_lookback:]
         
@@ -481,7 +590,9 @@ class TFGridNet(AbsSeparator):
         input_state['istft_buf'] = istft_buf
         input_state['gridnet_bufs'] = gridnet_buf
 
-        return batch, input_state
+        if speaker_outputs is None:
+            return batch, input_state
+        return batch, input_state, speaker_outputs
 
     @property
     def num_spk(self):
@@ -717,10 +828,9 @@ class GridNetBlock(nn.Module):
             out: [B, T, Q, C]
         """
         
-        if init_state is None:
-            init_state = self.init_buffers(batch.shape[0], Q.device)
-
         B, T, Q, C = x.shape
+        if init_state is None:
+            init_state = self.init_buffers(B, x.device)
         
         # intra RNN
         input_ = x
@@ -732,9 +842,7 @@ class GridNetBlock(nn.Module):
             intra_rnn = self.act(intra_rnn)
             intra_rnn = self.norm(intra_rnn.transpose(1, 2)) # [BT, K, C]
             
-            is_dynamo = hasattr(torch, "_dynamo") and torch._dynamo.is_compiling()
-            if not torch.onnx.is_in_onnx_export() and not is_dynamo:
-                self.intra_rnn.flatten_parameters()
+            self.intra_rnn.flatten_parameters()
             
             intra_rnn, _ = self.intra_rnn(intra_rnn)  # [BT, -1, H]
             
@@ -744,9 +852,7 @@ class GridNetBlock(nn.Module):
         else:
             intra_rnn = self.intra_norm(input_) # [B, T, Q, C]
             intra_rnn = intra_rnn.reshape(B * T, Q, C)  # [B * T, Q, C]
-            is_dynamo = hasattr(torch, "_dynamo") and torch._dynamo.is_compiling()
-            if not torch.onnx.is_in_onnx_export() and not is_dynamo:
-                self.intra_rnn.flatten_parameters()
+            self.intra_rnn.flatten_parameters()
         
             intra_rnn, _ = self.intra_rnn(intra_rnn)  # [BT, -1, H]
             intra_rnn = self.intra_linear(intra_rnn)  # [BT, Q, C]
@@ -760,12 +866,10 @@ class GridNetBlock(nn.Module):
         inter_rnn = self.inter_norm(intra_rnn)  # [B, T, Q, C]
         inter_rnn = inter_rnn.transpose(1, 2).reshape(B * Q, T, C)  # [BQ, T, C]
         
-        is_dynamo = hasattr(torch, "_dynamo") and torch._dynamo.is_compiling()
-        if not torch.onnx.is_in_onnx_export() and not is_dynamo:
-            self.inter_rnn.flatten_parameters()
+        self.inter_rnn.flatten_parameters()
         
-        h0 = init_state['h0'].to(dtype=inter_rnn.dtype)
-        c0 = init_state['c0'].to(dtype=inter_rnn.dtype)
+        h0 = init_state['h0']
+        c0 = init_state['c0']
 
         inter_rnn, (h0, c0) = self.inter_rnn(inter_rnn, (h0, c0))  # [BQ, -1, H]
        
@@ -791,8 +895,8 @@ class GridNetBlock(nn.Module):
             
             V = self["attn_conv_V"](batch) # [B', T, Q * C]
 
-            K_buf = init_state['K_buf'].to(dtype=K.dtype)
-            V_buf = init_state['V_buf'].to(dtype=V.dtype)
+            K_buf = init_state['K_buf']
+            V_buf = init_state['V_buf']
 
             K = torch.cat([K_buf, K], dim = 1)
             start = K.shape[1] - (self.local_atten_len-1)

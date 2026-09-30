@@ -10,8 +10,7 @@ class SNRLPLoss(nn.Module):
     def __init__(self, snr_loss_name = "snr", neg_weight = 1) -> None:
         super().__init__()
         self.snr_loss = SNRLosses(snr_loss_name)
-        #self.lp_loss = LogPowerLoss()
-        self.lp_loss = nn.L1Loss()#LogPowerLoss()
+        self.lp_loss = LogPowerLoss()
         self.neg_weight = neg_weight
     
     def forward(self, est: torch.Tensor, gt: torch.Tensor, **kwargs):

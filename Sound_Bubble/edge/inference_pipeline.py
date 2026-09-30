@@ -282,6 +282,36 @@ def main() -> None:
     print(f"channel_map={selected_channels}, monitor={args.monitor}")
 
     onnx_streamer = ONNXStreamer(args.model, args.intra_op_threads, args.inter_op_threads)
+    if onnx_streamer.has_distance_outputs:
+        contract_trained = bool(contract.distance_head_trained) if contract is not None and contract.distance_head_trained is not None else False
+        contract_valid_th = (
+            float(contract.distance_valid_threshold)
+            if contract is not None and contract.distance_valid_threshold is not None
+            else 0.5
+        )
+        onnx_streamer.set_distance_runtime_config(
+            trained=contract_trained,
+            valid_threshold=contract_valid_th,
+        )
+        print(
+            f"[model] distance head outputs enabled (trained={contract_trained}, "
+            f"valid_threshold={contract_valid_th:.2f})"
+        )
+    if onnx_streamer.has_count_outputs:
+        count_trained = bool(contract.count_head_trained) if contract is not None and contract.count_head_trained is not None else False
+        count_conf_th = (
+            float(contract.count_min_confidence)
+            if contract is not None and contract.count_min_confidence is not None
+            else 0.6
+        )
+        onnx_streamer.set_count_runtime_config(
+            trained=count_trained,
+            min_confidence=count_conf_th,
+        )
+        print(
+            f"[model] count head outputs enabled (trained={count_trained}, "
+            f"min_confidence={count_conf_th:.2f})"
+        )
     if onnx_streamer.accepts_dis_embed:
         # Distance-aware ONNX: radius must be known and fed every frame. If the
         # user passed --bubble-radius, honour it; otherwise fall back to
@@ -342,6 +372,11 @@ def main() -> None:
     profile_ema = ProfileStats()
     latest_levels = np.full(args.model_num_ch, -120.0, dtype=np.float32)
     latest_statuses = ["ok"] * args.model_num_ch
+    latest_distance_status = "unavailable"
+    latest_distance_m: float | None = None
+    latest_speaker_count: str | None = None
+    latest_count_status = "unavailable"
+    latest_speaker_distances: tuple[dict[str, object], ...] | None = None
     queue_policy = {
         "mode": "normal",
         "last_capture_idx": None,
@@ -584,6 +619,11 @@ def main() -> None:
 
                     run_res = onnx_streamer.run(current_frame)
                     infer_times.append(run_res.infer_ms)
+                    latest_distance_status = run_res.distance_status
+                    latest_distance_m = run_res.distance_m
+                    latest_speaker_count = run_res.speaker_count
+                    latest_count_status = run_res.count_status
+                    latest_speaker_distances = run_res.speaker_distances
                     y_chunk = run_res.output[0, 0, : args.model_chunk].astype(np.float32, copy=False)
                     steps += 1
 
@@ -704,7 +744,25 @@ def main() -> None:
                     perf["last_profile"] = now
 
                 if args.monitor and (now - perf["last_monitor"]) >= max(0.1, args.monitor_interval):
-                    print(render_monitor(latest_levels, latest_statuses))
+                    dist_msg = (
+                        f"distance={latest_distance_m:.2f}m ({latest_distance_status})"
+                        if latest_distance_m is not None
+                        else f"distance={latest_distance_status}"
+                    )
+                    count_msg = f"speaker_count={latest_speaker_count} ({latest_count_status})" if latest_speaker_count is not None else f"speaker_count={latest_count_status}"
+                    speaker_msg = ""
+                    if latest_speaker_distances:
+                        parts = []
+                        for row in latest_speaker_distances:
+                            sidx = row.get("speaker_index")
+                            sval = row.get("distance_m")
+                            sstatus = row.get("status")
+                            if sval is None:
+                                parts.append(f"S{sidx}: {sstatus}")
+                            else:
+                                parts.append(f"S{sidx}: {float(sval):.2f}m ({sstatus})")
+                        speaker_msg = "speakers=[" + ", ".join(parts) + "]"
+                    print(f"{render_monitor(latest_levels, latest_statuses)}\n{count_msg}\n{dist_msg}" + (f"\n{speaker_msg}" if speaker_msg else ""))
                     perf["last_monitor"] = now
         except Exception:
             runtime_flags["worker_exception"] = True

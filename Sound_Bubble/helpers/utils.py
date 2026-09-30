@@ -4,6 +4,7 @@ from random import sample
 import numpy as np
 import torch
 import torchaudio
+import soundfile as sf
 import os
 import json
 import librosa
@@ -98,7 +99,13 @@ def read_audio_file(file_path, sr):
     return librosa.core.load(file_path, mono=False, sr=sr)[0]
 
 def read_audio_file_torch(file_path, downsample=1):
-    waveform, sample_rate = torchaudio.load(file_path)
+    try:
+        waveform, sample_rate = torchaudio.load(file_path)
+    except Exception:
+        # TorchCodec/FFmpeg can be unavailable on some Windows setups; fall
+        # back to soundfile to keep training/eval functional.
+        data, sample_rate = sf.read(file_path, always_2d=True, dtype="float32")
+        waveform = torch.from_numpy(data.T)
     if downsample >1:
         waveform = torchaudio.functional.resample(waveform, sample_rate, sample_rate//downsample)
     return waveform

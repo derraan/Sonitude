@@ -7,45 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-try:
-    from espnet2.torch_utils.get_layer_from_string import get_layer
-    from espnet2.enh.separator.abs_separator import AbsSeparator
-except ModuleNotFoundError:
-    # Fallback for environments where ESPnet is unavailable (e.g., Windows install issues).
-    class AbsSeparator(nn.Module):
-        pass
-
-    _ACTIVATION_MAP = {
-        "relu": nn.ReLU,
-        "prelu": nn.PReLU,
-        "elu": nn.ELU,
-        "gelu": nn.GELU,
-        "leakyrelu": nn.LeakyReLU,
-        "selu": nn.SELU,
-        "sigmoid": nn.Sigmoid,
-        "tanh": nn.Tanh,
-        "silu": nn.SiLU,
-        "swish": nn.SiLU,
-        "identity": nn.Identity,
-    }
-
-    def get_layer(layer):
-        if isinstance(layer, str):
-            key = layer.lower()
-            if key in _ACTIVATION_MAP:
-                return _ACTIVATION_MAP[key]
-
-            if hasattr(nn, layer):
-                candidate = getattr(nn, layer)
-                if isinstance(candidate, type) and issubclass(candidate, nn.Module):
-                    return candidate
-
-            raise ValueError(f"Unsupported activation: {layer}")
-
-        if isinstance(layer, type) and issubclass(layer, nn.Module):
-            return layer
-
-        raise TypeError(f"Activation must be string or nn.Module type, got {type(layer)}")
+from espnet2.torch_utils.get_layer_from_string import get_layer
+from espnet2.enh.separator.abs_separator import AbsSeparator
 
 from asteroid_filterbanks import make_enc_dec
 

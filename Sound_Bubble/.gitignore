@@ -1,2 +1,16 @@
-__pycache__/
+﻿__pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+wandb/
+.DS_Store
+*.tar
+*.tar.gz
+datasets/LibriSpeech/
+datasets/syn_*/
+datasets/_speech_cache/
+.env
+.env.*
+*.egg-info/
+.venv/
+venv/
