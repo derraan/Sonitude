@@ -396,20 +396,19 @@ python tools/calibration/compile_array.py \
   --output-prefix build/array_profile_measured
 ```
 
-Near-field MVDR polar / beampattern check (no delay-and-sum; look ATF excluded from Γ by default):
+Near-field MVDR polar / beampattern check (host DSP only):
+
+Each probe is a 6-channel capture (measured array WAV, or a geometry-delay simulation). Polar does **not** solve MVDR in Python. It shells out to `sonitude_wav_replay`, which runs `dsp::MvdrBeamformer` with `spatial.mvdr`, `steering`, geometry, and calibration from the runtime YAML. Energy is the pre-suppression `--output-beamformed` tap (suppression and limiter off, width 0°).
 
 ```bash
 python -m tools.calibration.mvdr_polar --synthetic --look-az 0 --plot build/mvdr_polar.png
-python -m tools.calibration.mvdr_polar --manifest path/to/manifest.yaml --look-az 0
+python -m tools.calibration.mvdr_polar --manifest path/to/manifest.yaml --look-az 0 --plot build/mvdr_polar.png
 ```
 
 Notes:
 
-- Optional `calibration_yaml` applies `gain_linear` and `polarity` only.
-- `delay_samples` is ignored: synchronized IR phase already encodes delay.
-- Sample-rate mismatch and channel-count mismatch are hard errors.
-- For sweep mode, window policy and detected direct-arrival offsets are written into `.report.json`.
-- `exclude_look_from_noise` (default true) builds Capon Γ from non-look ATFs. Including the look direction in Γ was a common cause of flat IR-based MVDR polar plots.
+- Manifest `directions[].path` files are array **captures** fed to the host pipeline as-is (no Python deconvolution / Capon Γ).
+- Build `sonitude_wav_replay` first, or set `SONITUDE_BUILD_DIR` / `--binary`.
 - This artifact does not satisfy the M3 hardware-evidence gate by itself.
 
 Example manifest shape is in `config/array_ir_manifest.example.yaml`.

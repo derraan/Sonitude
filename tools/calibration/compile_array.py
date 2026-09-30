@@ -479,9 +479,8 @@ def compile_from_irs(
     w_all = np.zeros_like(d_all)
     gamma = np.zeros((n_bins, MICS, MICS), dtype=np.complex128)
     for di in range(n_dir):
-        # Capon noise model: average outer products of non-look ATFs.
-        # Including the look ATF in Γ (previous default) dilutes null depth and
-        # is a common reason IR-based MVDR polar plots look nearly omnidirectional.
+        # Capon noise model for the SMV3 compiler only (not host polar).
+        # Including the look ATF in Γ dilutes null depth in this offline solver.
         if exclude_look_from_noise and n_dir > 1:
             indices = [j for j in range(n_dir) if j != di]
         else:
