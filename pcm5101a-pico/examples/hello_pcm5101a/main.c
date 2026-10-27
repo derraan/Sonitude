@@ -15,17 +15,19 @@
 #define AUDIO_F_SYS_KHZ 192000u
 #endif
 
+// Carrier header (Pico GPIO). LRCK is the side-set pin next to BCK, so WS on
+// GP2 forces BCK onto GP1. FLT is strapped on the board, not driven here.
 #ifndef PIN_DAC_BCK
-#define PIN_DAC_BCK 10   // LRCK = 11
+#define PIN_DAC_BCK 1    // GP1; LRCK/WS = GP2
 #endif
 #ifndef PIN_DAC_DIN
-#define PIN_DAC_DIN 12
+#define PIN_DAC_DIN 6    // GP6, SD out -> DIN
 #endif
 #ifndef PIN_DAC_XSMT
-#define PIN_DAC_XSMT 13
+#define PIN_DAC_XSMT 7   // GP7, mute
 #endif
 #ifndef PIN_DAC_FLT
-#define PIN_DAC_FLT 14
+#define PIN_DAC_FLT PCM5101A_PIN_UNUSED
 #endif
 #ifndef SAMPLE_RATE
 #define SAMPLE_RATE 48000u

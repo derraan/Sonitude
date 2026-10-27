@@ -9,12 +9,12 @@ channels. Built for the Pico 2 W (RP2350) at the 192 MHz system clock used by
 
 | PCM5101A pin | Connect to | Why |
 | --- | --- | --- |
-| BCK (13) | GPIO `pin_bck` (example: 10) | Bit clock, 64 fs |
-| LRCK (15) | GPIO `pin_bck + 1` (example: 11) | Word clock, left = low |
-| DIN (14) | GPIO `pin_din` (example: 12) | Data, MSB first, I2S |
+| BCK (13) | Pico **GP1** (`pin_bck`) | Bit clock, 64 fs. Must be the GPIO immediately below LRCK |
+| LRCK (15) | Pico **GP2** (`pin_bck + 1`) | Word select. Left = low |
+| DIN (14) | Pico **GP6** (`pin_din`) | SD out from the Pico, MSB first, I2S |
+| XSMT (17) | Pico **GP7** (`pin_xsmt`) | Mute. Needs a fast edge (< 20 ns) |
 | SCK (12) | **GND** | Enables the BCK PLL (3-wire mode) |
-| XSMT (17) | GPIO `pin_xsmt` (example: 13), or 3.3 V | Soft mute control, needs fast edges (< 20 ns) |
-| FLT (11) | GPIO `pin_flt` driven high (example: 14), or 3.3 V | Low-latency filter, 3.5 samples of delay instead of 22 |
+| FLT (11) | 3.3 V on the board | Low-latency filter, 3.5 samples of delay instead of 22. The example does not drive this pin |
 | FMT (16) | GND | I2S format |
 | DEMP (10) | GND | De-emphasis off |
 | AVDD, CPVDD, DVDD | 3.3 V | Single supply, 3.3 V I/O matches the RP2350 |
@@ -35,8 +35,8 @@ except 44.1 kHz (error under 100 ppm, reported in `clk_error_ppb`).
 #include "pcm5101a_i2s.h"
 
 pcm5101a_config_t cfg = {
-    .pio = pio1, .pin_din = 12, .pin_bck = 10,
-    .pin_xsmt = 13, .pin_flt = 14, .sample_rate = 48000,
+    .pio = pio1, .pin_din = 6, .pin_bck = 1,
+    .pin_xsmt = 7, .pin_flt = PCM5101A_PIN_UNUSED, .sample_rate = 48000,
 };
 pcm5101a_init(&cfg);   // pins, PIO, DMA; clocks not running yet
 pcm5101a_start();      // clocks on with silence, ~10 ms PLL lock wait, unmute
@@ -87,9 +87,14 @@ cmake -S pcm5101a-pico -B build -DPICO_BOARD=pico2_w
 cmake --build build --target hello_pcm5101a
 ```
 
-`hello_pcm5101a` plays 1 kHz on the left and 500 Hz on the right. Every 10 s
-it starves the FIFO for 50 ms to exercise underrun handling, and every 30 s it
-runs stop/start. It prints stats over USB serial once a second.
+`hello_pcm5101a` plays 1 kHz on the left and 500 Hz on the right, on the
+carrier pins above (GP1 bit clock, GP2 word select, GP6 data, GP7 mute).
+Every 10 s it starves the FIFO for 50 ms to exercise underrun handling, and
+every 30 s it runs stop/start. It prints stats over USB serial once a second.
+
+The mic firmware's default I2S pins are GP0–GP4, so GP1 and GP2 are shared
+with that capture bus. The playback package does not change that firmware;
+the shared-clock integration still has to pick one PIO mapping for both.
 
 Host tests (FIFO, divider math, and a cycle model of the PIO program checked
 against a reference I2S receiver):
