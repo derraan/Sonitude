@@ -1,0 +1,26 @@
+; I2S transmitter for PCM5101A (3-wire, BCK PLL mode).
+;
+; 32-bit slots, BCK = 64 fs, MSB first, data changes on BCK falling edge and
+; is latched by the DAC on the rising edge. LRCK changes one BCK before the
+; MSB of each word (standard I2S one-bit delay). Left = LRCK low.
+;
+; 2 PIO cycles per bit -> PIO clock = 128 fs.
+; FIFO order: left word, right word (one 32-bit word per slot, autopull 32).
+
+.program pcm5101a_i2s
+.side_set 2
+                        ;       /--- LRCK
+                        ;       |/-- BCK
+.wrap_target
+left_loop:
+    out pins, 1         side 0b00
+    jmp x-- left_loop        side 0b01
+    out pins, 1         side 0b10   ; left LSB, LRCK goes high early
+    set x, 30           side 0b11
+right_loop:
+    out pins, 1         side 0b10
+    jmp x-- right_loop       side 0b11
+    out pins, 1         side 0b00   ; right LSB, LRCK goes low early
+public entry_point:
+    set x, 30           side 0b01
+.wrap
