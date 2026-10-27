@@ -32,12 +32,14 @@
 
 #define PCM5101A_PIN_UNUSED (-1)
 
+// Carrier defaults: pin_bck=1 (GP1), LRCK=GP2 (AUDIO_WS), pin_din=6 (GP6),
+// pin_xsmt=7 (GP7 / MUTE), pin_flt unused (strapped high). See docs/HARDWARE.md.
 typedef struct {
     PIO pio;               // PIO block; a free state machine is claimed
-    uint pin_din;          // -> DIN  (pin 14)
-    uint pin_bck;          // -> BCK  (pin 13); LRCK (pin 15) must be pin_bck + 1
-    int pin_xsmt;          // -> XSMT (pin 17), or PCM5101A_PIN_UNUSED if strapped high
-    int pin_flt;           // -> FLT  (pin 11), driven high (low latency), or PCM5101A_PIN_UNUSED
+    uint pin_din;          // -> DIN  (DAC pin 14); carrier GP6
+    uint pin_bck;          // -> BCK  (DAC pin 13); LRCK must be pin_bck + 1
+    int pin_xsmt;          // -> XSMT (DAC pin 17), or PCM5101A_PIN_UNUSED if strapped high
+    int pin_flt;           // -> FLT  (DAC pin 11), driven high (low latency), or unused
     uint32_t sample_rate;  // 16000, 24000, 32000, 44100, 48000 or 96000
 } pcm5101a_config_t;
 

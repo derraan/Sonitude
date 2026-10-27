@@ -5,23 +5,51 @@ Standalone Pico SDK library that streams stereo PCM to a TI PCM5101A DAC
 channels. Built for the Pico 2 W (RP2350) at the 192 MHz system clock used by
 `mic-array-pico2w-usb6ch`, but has no dependency on that firmware.
 
-## Wiring and pin straps (hardware mode, no I2C)
+## Hardware connections (carrier board)
 
-| PCM5101A pin | Connect to | Why |
+Verified against the Sonitude carrier board view (Pico 2 W header +
+PCM5101A DAC). The `hello_pcm5101a` example uses this mapping by default.
+
+### Pico header → DAC
+
+| Function | Pico GPIO | Pico physical pin | Board silk (if present) | PCM5101A pin | Driver field |
+| --- | --- | --- | --- | --- | --- |
+| Bit clock | **GP1** | 2 | — | BCK (13) | `pin_bck` |
+| Word select | **GP2** | 4 | `AUDIO_WS` | LRCK (15) | `pin_bck + 1` (fixed) |
+| Serial data | **GP6** | 9 | — | DIN (14) | `pin_din` |
+| Soft mute | **GP7** | 10 | `MUTE` | XSMT (17) | `pin_xsmt` |
+
+PIO side-set requires LRCK to be the GPIO immediately above BCK, so
+`AUDIO_WS` on GP2 forces BCK onto GP1. Do not move WS without also moving
+BCK to `WS - 1`.
+
+```
+Pico GP1 ──► PCM5101A BCK   (13)
+Pico GP2 ──► PCM5101A LRCK  (15)   silk: AUDIO_WS
+Pico GP6 ──► PCM5101A DIN   (14)   SD out
+Pico GP7 ──► PCM5101A XSMT  (17)   silk: MUTE
+```
+
+### PCM5101A straps (hardware mode, no I2C)
+
+| PCM5101A pin | Board connection | Why |
 | --- | --- | --- |
-| BCK (13) | Pico **GP1** (`pin_bck`) | Bit clock, 64 fs. Must be the GPIO immediately below LRCK |
-| LRCK (15) | Pico **GP2** (`pin_bck + 1`) | Word select. Left = low |
-| DIN (14) | Pico **GP6** (`pin_din`) | SD out from the Pico, MSB first, I2S |
-| XSMT (17) | Pico **GP7** (`pin_xsmt`) | Mute. Needs a fast edge (< 20 ns) |
-| SCK (12) | **GND** | Enables the BCK PLL (3-wire mode) |
-| FLT (11) | 3.3 V on the board | Low-latency filter, 3.5 samples of delay instead of 22. The example does not drive this pin |
-| FMT (16) | GND | I2S format |
+| SCK (12) | GND | 3-wire I2S; DAC PLL locks from BCK after 16 LRCK periods |
+| FLT (11) | 3.3 V | Low-latency filter (3.5 tS). Firmware leaves `pin_flt` unused |
+| FMT (16) | GND | I2S (not left-justified) |
 | DEMP (10) | GND | De-emphasis off |
-| AVDD, CPVDD, DVDD | 3.3 V | Single supply, 3.3 V I/O matches the RP2350 |
-| OUTL / OUTR | 470 Ω series + 2.2 nF to GND | Datasheet output filter; load must be at least 1 kΩ |
+| AVDD, CPVDD, DVDD | 3.3 V | Single supply; 3.3 V I/O matches RP2350 |
+| OUTL / OUTR | 470 Ω + 2.2 nF to GND | Datasheet RC; load ≥ 1 kΩ |
 
-The PCM5101A is a line-level driver. Low-impedance headphones (16 to 32 Ω)
-need a headphone amplifier after OUTL/OUTR.
+The DAC is line-level. Low-impedance headphones (16–32 Ω) need a headphone
+amp after OUTL/OUTR.
+
+### Mic-firmware pin overlap (future integration)
+
+Default mic capture in `mic-array-pico2w-usb6ch` uses GP0–GP4
+(`PIN_SCK=0`, `PIN_WS=1`, `PIN_SD0=2`, …). That overlaps GP1/GP2 with this
+DAC bus. This package does not change that firmware; shared-clock
+integration must adopt one PIO pin map for both.
 
 ## Supported sample rates
 
@@ -108,9 +136,11 @@ be updated with it.
 
 ## Hardware check
 
-With a scope on BCK and LRCK: 3.072 MHz and 48 kHz. The tone should be clean,
-with no click at start/stop, and `underruns` should only increase during the
-50 ms pauses.
+See [docs/HARDWARE.md](docs/HARDWARE.md) for the full carrier pin map.
+
+With a scope on GP1/GP2 (BCK/LRCK): 3.072 MHz and 48 kHz at 48 kHz sample
+rate. The tone should be clean, with no click at start/stop, and `underruns`
+should only increase during the 50 ms pauses.
 
 ## Using it from another firmware project
 
